@@ -151,19 +151,75 @@ def matches_format(text: str, fmt: PlateFormat) -> bool:
     return compiled.match(text) is not None
 
 
+# Слова, которые камеры рисуют поверх кадра (OSD) и которые OCR регулярно
+# принимает за номер. Список проверен на реальных кадрах OpenIPC: надписи
+# «Нет лицензии» и «domofon» в углу давали ложный номер COMOTO.
+OSD_WORDS = frozenset({
+    "domofon", "comot", "comoto", "licenziya", "openipc", "majestic",
+    "hikvision", "dahua", "vivotek", "camera", "channel", "record",
+    "netlicenzii", "nolicenzii", "date", "time",
+})
+
+# Служебные символы, которые Tesseract добавляет к тексту, но в номере
+# их быть не может.
+_OCR_NOISE = "-–—_.,:;'\"`|/\\()[]{}*#@!?+=<>%$&"
+
+
 def looks_like_word(text: str) -> bool:
-    """Похожа ли строка на слово естественного языка.
+    """Похожа ли строка на слово, а не на номер.
 
     OSD-меню камеры и надписи в кадре состоят из осмысленных слов
-    («COMOTO», «HIKVISION»). Для них характерно чередование согласных
-    и гласных без цифр — номер же почти всегда содержит цифры.
+    («COMOTO», «domofon»). Для них характерно чередование согласных
+    и гласных — номер же почти всегда содержит цифры.
 
-    Применяется как дополнительная защита, когда шаблон не задан.
+    Проверка идёт по трём признакам:
+
+    1. Строка есть в списке известных надписей камер.
+    2. В строке нет ни одной цифры, но есть гласные — это слово.
+    3. Гласные есть и лежат не подряд.
+
+    Кириллица в списке гласных учтена: камеры рисуют надписи и по-русски
+    («Нет лицензии»), а OCR возвращает их кириллицей.
     """
-    if not text or len(text) < 4:
+    if not text or len(text) < 3:
         return False
-    if any(c.isdigit() for c in text):
+
+    # Убираем служебные символы, которые OCR добавил к тексту.
+    cleaned = "".join(c for c in text.lower() if c not in _OCR_NOISE)
+    if not cleaned:
         return False
-    # Доля гласных: в словах их заметно, в случайном OCR-наборе — почти нет
-    vowels = sum(1 for c in text if c in "AEIOUY")
-    return vowels / len(text) >= 0.25
+    if cleaned in OSD_WORDS:
+        return True
+
+    if any(c.isdigit() for c in cleaned):
+        return False
+
+    # Гласные латиницы и кириллицы. В номерах гласные почти не встречаются:
+    # из разрешённых букв русского номера гласных нет вовсе. Строка выше
+    # приведена к нижнему регистру, поэтому и набор гласных в нижнем.
+    vowels = "aeiouyаеёиоуыэюя"
+    count = sum(1 for c in cleaned if c in vowels)
+    if count >= 2 and count / len(cleaned) >= 0.25:
+        return True
+
+    # Обрывок слова без гласных («MOTOM», «HMEHH») предыдущая проверка не
+    # ловит: гласных в нём нет вовсе. Отсекаем по длине цепочки согласных:
+    # в номерах такие цепочки короткие, в словах встречаются длинные.
+    longest_run = run = 0
+    for c in cleaned:
+        if c in vowels:
+            run = 0
+        else:
+            run += 1
+            longest_run = max(longest_run, run)
+    return longest_run >= 4
+
+
+def sanitize_ocr(text: str) -> str:
+    """Убирает из результата OCR служебные символы.
+
+    Tesseract нередко добавляет к номеру дефисы, точки и кавычки. В самом
+    номере таких символов быть не может, поэтому вычищаем их до проверки
+    формата — иначе верно прочитанный номер отклонялся бы из-за лишней точки.
+    """
+    return "".join(c for c in (text or "") if c not in _OCR_NOISE)

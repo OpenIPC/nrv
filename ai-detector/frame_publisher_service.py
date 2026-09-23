@@ -57,15 +57,37 @@ def build_rtsp_url(stream_url: str, username: str, password: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
-def grab_frame(url: str, width: int, timeout: float) -> bytes | None:
-    """Забирает один кадр из RTSP и возвращает JPEG-байты."""
-    vf = f"scale={width}:-2" if width else "null"
+def grab_frame(url: str, width: int, timeout: float,
+               crop: tuple[int, int, int, int] | None = None) -> bytes | None:
+    """Забирает один кадр из RTSP и возвращает JPEG-байты.
+
+    crop — прямоугольник в долях кадра (x1, y1, x2, y2 от 0 до 1).
+    Применяется для быстрого потока распознавания номеров: кадрируем зону
+    до масштабирования, чтобы ffmpeg не тратил время на лишние пиксели,
+    а номер занимал в кадре больше места.
+    """
+    filters = []
+    if crop is not None:
+        # crop=w:h:x:y — размеры и смещение в пикселях. Точные размеры кадра
+        # заранее неизвестны, поэтому задаём через выражения iw/ih.
+        x1, y1, x2, y2 = crop
+        w_expr = f"iw*{x2 - x1:.6f}"
+        h_expr = f"ih*{y2 - y1:.6f}"
+        x_expr = f"iw*{x1:.6f}"
+        y_expr = f"ih*{y1:.6f}"
+        filters.append(f"crop={w_expr}:{h_expr}:{x_expr}:{y_expr}")
+    if width:
+        filters.append(f"scale={width}:-2")
+
     cmd = [
         "ffmpeg",
         "-rtsp_transport", "tcp",
         "-i", url,
         "-frames:v", "1",
-        "-vf", vf,
+    ]
+    if filters:
+        cmd += ["-vf", ",".join(filters)]
+    cmd += [
         "-q:v", "4",
         "-f", "image2",
         "-vcodec", "mjpeg",
@@ -85,34 +107,71 @@ def grab_frame(url: str, width: int, timeout: float) -> bytes | None:
     return data
 
 
+def zone_box(zone: list[dict]) -> tuple[float, float, float, float] | None:
+    """Превращает полигон зоны в прямоугольник в долях кадра.
+
+    Для поиска номера достаточно прямоугольника: номер — вытянутая область,
+    а не сложная фигура. Возвращает (x1, y1, x2, y2) в долях кадра.
+    """
+    if not zone or len(zone) < 3:
+        return None
+    try:
+        xs = [float(p["x"]) for p in zone]
+        ys = [float(p["y"]) for p in zone]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    x1, x2 = max(0.0, min(xs)), min(1.0, max(xs))
+    y1, y2 = max(0.0, min(ys)), min(1.0, max(ys))
+    # Слишком маленькая зона — вероятно, ошибка разметки: не обрезаем вовсе.
+    if (x2 - x1) < 0.05 or (y2 - y1) < 0.03:
+        return None
+    return x1, y1, x2, y2
+
+
 def load_cameras(db_url: str) -> list[dict]:
-    """Читает камеры с заполненным субпотоком (для детекции берём именно его)."""
+    """Читает камеры с заполненным субпотоком (для детекции берём именно его).
+
+    Вместе с камерой забираем зону поиска номеров: для камер с включённым
+    распознаванием номеров кадры публикуются чаще и только по этой зоне.
+    """
     with psycopg2.connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id::text, name,
-                       COALESCE(NULLIF(sub_stream, ''), NULLIF(main_stream, ''), rtsp_url) AS stream,
-                       COALESCE(settings->>'username', '') AS username,
-                       COALESCE(settings->>'password', '') AS password
-                FROM cameras
-                WHERE COALESCE(NULLIF(sub_stream, ''), NULLIF(main_stream, ''), rtsp_url) IS NOT NULL
-                ORDER BY created_at
+                SELECT c.id::text, c.name,
+                       COALESCE(NULLIF(c.sub_stream, ''), NULLIF(c.main_stream, ''), c.rtsp_url) AS stream,
+                       COALESCE(c.settings->>'username', '') AS username,
+                       COALESCE(c.settings->>'password', '') AS password,
+                       -- Зона номеров нужна для быстрого потока кадров.
+                       COALESCE(d.plate_zone, '[]'::jsonb) AS plate_zone,
+                       COALESCE(d.plate_zone, '[]'::jsonb) <> '[]'::jsonb
+                           AND 'plate' = ANY(COALESCE(d.detect_types, ARRAY[]::text[]))
+                           AND COALESCE(d.enabled, false) AS wants_plates
+                FROM cameras c
+                LEFT JOIN detection_settings d ON d.camera_id = c.id
+                WHERE COALESCE(NULLIF(c.sub_stream, ''), NULLIF(c.main_stream, ''), c.rtsp_url) IS NOT NULL
+                ORDER BY c.created_at
             """)
             return [
-                {"id": r[0], "name": r[1], "stream": r[2], "username": r[3], "password": r[4]}
+                {"id": r[0], "name": r[1], "stream": r[2], "username": r[3],
+                 "password": r[4], "plate_zone": r[5], "wants_plates": r[6]}
                 for r in cur.fetchall()
             ]
 
 
 class FramePublisher:
     def __init__(self, db_url: str, nats_url: str, interval: float,
-                 width: int, reload_every: float, ffmpeg_timeout: float):
+                 width: int, reload_every: float, ffmpeg_timeout: float,
+                 plate_interval: float = 0.2, plate_width: int = 640):
         self.db_url = db_url
         self.nats_url = nats_url
         self.interval = interval
         self.width = width
         self.reload_every = reload_every
         self.ffmpeg_timeout = ffmpeg_timeout
+        # Быстрый поток для распознавания номеров: чаще и по зоне.
+        self.plate_interval = plate_interval
+        self.plate_width = plate_width
 
         self.nc: NATS | None = None
         self.cameras: list[dict] = []
@@ -159,8 +218,59 @@ class FramePublisher:
                 self.tasks[cam_id] = asyncio.create_task(self._camera_loop(cam))
                 logger.info(f"[{cam_id[:8]}] {cam['name']}: публикация запущена")
 
+        # Быстрый поток кадров для распознавания номеров.
+        #
+        # Машина проезжает зону за 2-3 секунды, а обычный поток идёт раз в
+        # секунду: шанс поймать её в кадре невелик. Для камер с включённым
+        # распознаванием номеров публикуем кадры чаще и только по зоне —
+        # номер занимает в таком кадре заметно больше места.
+        for cam_id, cam in wanted.items():
+            key = f"{cam_id}:plate"
+            if cam.get("wants_plates") and key not in self.tasks:
+                self.tasks[key] = asyncio.create_task(self._plate_loop(cam))
+                logger.info(
+                    f"[{cam_id[:8]}] {cam['name']}: быстрый поток номеров запущен "
+                    f"({self.plate_interval:.1f} с)"
+                )
+            elif not cam.get("wants_plates") and key in self.tasks:
+                self.tasks.pop(key).cancel()
+
         self.cameras = cameras
-        logger.info(f"камер в работе: {len(self.tasks)}")
+        logger.info(f"камер в работе: {len(wanted)}, потоков: {len(self.tasks)}")
+
+    async def _plate_loop(self, cam: dict):
+        """Быстрый цикл публикации кадров зоны номера.
+
+        Публикует в отдельную тему cameras.<id>.plate_frame — детектор
+        обрабатывает её распознаванием номеров, не запуская детекцию
+        объектов заново.
+        """
+        cam_id = cam["id"]
+        url = build_rtsp_url(cam["stream"], cam["username"], cam["password"])
+        crop = zone_box(cam.get("plate_zone") or [])
+        if crop is None:
+            logger.warning(
+                f"[{cam_id[:8]}] зона номеров не задана — быстрый поток не запущен"
+            )
+            return
+
+        while True:
+            t0 = time.monotonic()
+            jpeg = await asyncio.to_thread(
+                grab_frame, url, self.plate_width, self.ffmpeg_timeout, crop
+            )
+            if jpeg:
+                payload = cam_id.encode().ljust(36) + jpeg
+                try:
+                    await self.nc.publish(f"cameras.{cam_id}.plate_frame", payload)
+                    self.published[f"{cam_id}:plate"] = (
+                        self.published.get(f"{cam_id}:plate", 0) + 1
+                    )
+                except Exception as e:
+                    logger.warning(f"[{cam_id[:8]}] публикация кадра номера: {e}")
+
+            elapsed = time.monotonic() - t0
+            await asyncio.sleep(max(0.05, self.plate_interval - elapsed))
 
     async def _reload_loop(self):
         while True:
@@ -228,6 +338,9 @@ async def main():
         width=int(os.getenv("FRAME_WIDTH", "960")),
         reload_every=float(os.getenv("CAMERA_RELOAD", "60")),
         ffmpeg_timeout=float(os.getenv("FFMPEG_TIMEOUT", "10")),
+        # Быстрый поток номеров: 5 кадров в секунду по зоне поиска.
+        plate_interval=float(os.getenv("PLATE_FRAME_INTERVAL", "0.2")),
+        plate_width=int(os.getenv("PLATE_FRAME_WIDTH", "640")),
     )
 
     loop = asyncio.get_running_loop()

@@ -357,24 +357,63 @@ async def main():
                 logger.error(f"Worker error: {e}")
                 await asyncio.sleep(1)
 
-    async def worker():
+    worker_task = asyncio.create_task(worker())
+
+    # Быстрый поток кадров зоны номера.
+    #
+    # Публикуется отдельной темой: кадры идут 5 раз в секунду и содержат
+    # только зону поиска номера. Здесь запускается ТОЛЬКО распознавание
+    # номеров — детекция объектов для этих кадров не нужна, поэтому
+    # обработчик отдельный и дешёвый.
+    plate_sub = await nc.subscribe("cameras.*.plate_frame")
+    logger.info("Subscribed to cameras.*.plate_frame")
+
+    async def handle_plate_frame(msg):
+        payload = msg.data
+        if len(payload) < 40:
+            return
+        camera_id = payload[:36].decode("ascii", errors="ignore").strip()
+        cfg = config_store.get(camera_id) if config_store else None
+        if cfg is None or not cfg.wants_plates or plate_rec is None:
+            return
+
+        img = cv2.imdecode(np.frombuffer(payload[36:], np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            return
+
+        try:
+            fmt = build_plate_format(cfg)
+            # Зона уже вырезана публикатором, повторно не обрезаем.
+            probes = await asyncio.to_thread(plate_rec.detect, img, [], fmt)
+        except Exception as e:
+            logger.debug(f"[{camera_id[:8]}] сбой распознавания номера: {e}")
+            return
+
+        if not probes:
+            return
+
+        snapshot_b64 = None
+        if send_snapshot and cfg.save_snapshots:
+            jpeg = detector.encode_jpeg(img)
+            if jpeg:
+                snapshot_b64 = base64.b64encode(jpeg).decode("ascii")
+        await publish_recognition(nc, camera_id, "plate", probes, snapshot_b64)
+
+    async def plate_worker():
         while True:
             try:
-                msg = await sub.next_msg(timeout=1)
+                msg = await plate_sub.next_msg(timeout=1)
                 if msg:
-                    await handle_frame(msg)
+                    await handle_plate_frame(msg)
             except asyncio.TimeoutError:
-                # Пустой интервал ожидания кадров — это норма, а не ошибка
                 continue
             except Exception as e:
-                # ErrTimeout из nats-py не наследуется от asyncio.TimeoutError,
-                # поэтому отличаем его по имени типа
                 if type(e).__name__ in ("ErrTimeout", "TimeoutError"):
                     continue
-                logger.error(f"Worker error: {e}")
+                logger.error(f"Plate worker error: {e}")
                 await asyncio.sleep(1)
 
-    worker_task = asyncio.create_task(worker())
+    plate_worker_task = asyncio.create_task(plate_worker())
 
     # Конвейер детекции звука. Работает параллельно видео-аналитике:
     # у него свои настройки, своя частота и свои подписки на потоки.
@@ -396,6 +435,7 @@ async def main():
     except asyncio.CancelledError:
         pass
     finally:
+        plate_worker_task.cancel()
         if audio_task is not None:
             audio_task.cancel()
         await nc.close()

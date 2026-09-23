@@ -314,7 +314,10 @@ class PlateRecognizer:
                 continue
 
         raw = "".join(words).upper()
-        text = plate_format.normalize(raw)
+        # Служебные символы убираем ДО нормализации: Tesseract часто
+        # добавляет к номеру дефисы и точки, из-за которых верно
+        # прочитанный номер не проходил проверку формата.
+        text = plate_format.normalize(plate_format.sanitize_ocr(raw))
         if not text:
             return "", 0.0
 

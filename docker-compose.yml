@@ -192,6 +192,11 @@ services:
       FRAME_WIDTH: "${FRAME_WIDTH:-960}"
       CAMERA_RELOAD: "60"
       FFMPEG_TIMEOUT: "10"
+      # Быстрый поток кадров зоны номера: 5 кадров в секунду.
+      # Нужен потому, что машина проезжает зону за 2-3 секунды, а обычный
+      # поток идёт раз в секунду — поймать её в кадре иначе не удаётся.
+      PLATE_FRAME_INTERVAL: "${PLATE_FRAME_INTERVAL:-0.2}"
+      PLATE_FRAME_WIDTH: "${PLATE_FRAME_WIDTH:-640}"
     depends_on:
       postgres:
         condition: service_healthy

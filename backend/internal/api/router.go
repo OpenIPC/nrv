@@ -135,6 +135,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 		// Снимок события детекции — тоже вне JWT-группы: показывается
 		// в теге <img> без возможности передать заголовок.
+		//
+		// Маршрутов два, и оба нужны:
+		//   /events/{id}/snapshot     — события детекции (объекты, лица, номера)
+		//   /acs/events/{id}/snapshot — события СКУД (проходы, двери)
+		r.Get("/events/{id}/snapshot", snapH.Get)
 		r.Get("/acs/events/{id}/snapshot", snapH.GetACS)
 		// Файл записи с локального диска: воспроизводится в теге <video>,
 		// который не передаёт заголовок Authorization — токен идёт в query.
