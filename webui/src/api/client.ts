@@ -170,6 +170,12 @@ export interface DiscoveredCamera {
   mac?: string
   firmware?: string
   model?: string
+  /**
+   * Производитель, определённый сканером: openipc, hikvision, dahua,
+   * onvif, uniview, axis и другие, либо generic, если опознать не удалось.
+   * Используется для выбора правильных RTSP-адресов потоков.
+   */
+  vendor?: string
   main_stream: string
   sub_stream: string
   snapshot?: string
@@ -535,10 +541,17 @@ export const ptzAPI = {
 }
 
 export const scannerAPI = {
+  // Сканирование подсети — длительная операция: сервер проверяет каждый
+  // адрес и опрашивает протоколы камер. Общий таймаут клиента (15 с)
+  // срабатывает раньше, чем скан завершается, и пользователь видит
+  // ошибку при том, что сканирование ещё идёт. Даём ему отдельный,
+  // большой лимит.
   scan: (subnet: string, username?: string, password?: string) =>
-    api.post<ScanResult>('/scanner/scan', { subnet, username, password }),
+    api.post<ScanResult>('/scanner/scan', { subnet, username, password }, { timeout: 300000 }),
+  // Опрос одной камеры быстрый, но перебор учётных данных может занять
+  // несколько секунд — общего лимита здесь мало.
   probe: (ip: string, username?: string, password?: string) =>
-    api.post<DiscoveredCamera>('/scanner/probe', { ip, username, password }),
+    api.post<DiscoveredCamera>('/scanner/probe', { ip, username, password }, { timeout: 60000 }),
 }
 export const eventsAPI = {
   list: (params?: { camera_id?: string; object_class?: string; page?: number; page_size?: number }) =>

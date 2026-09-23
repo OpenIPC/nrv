@@ -9,6 +9,9 @@ export default function ScannerPage() {
   const [username, setUsername] = useState('root')
   const [password, setPassword] = useState('')
   const [scanning, setScanning] = useState(false)
+  // Сколько секунд идёт текущий скан. Операция длится десятки секунд, и без
+  // счётчика кажется, что страница зависла.
+  const [scanSeconds, setScanSeconds] = useState(0)
   const [result, setResult] = useState<ScanResult | null>(null)
   const [adding, setAdding] = useState<Set<string>>(new Set())
   const [added, setAdded] = useState<Set<string>>(new Set())
@@ -18,14 +21,37 @@ export default function ScannerPage() {
 
   const handleScan = async () => {
     setScanning(true)
+    setScanSeconds(0)
     setResult(null)
+
+    // Секундомер для отображения прогресса.
+    const started = Date.now()
+    const ticker = setInterval(
+      () => setScanSeconds(Math.floor((Date.now() - started) / 1000)),
+      1000,
+    )
+
     try {
       const res = await scannerAPI.scan(subnet, username, password)
       setResult(res.data)
-      toast.success(`Найдено камер: ${res.data.found}`)
+      if (res.data.found === 0) {
+        // Отдельное сообщение для пустого результата: это не ошибка, и
+        // стоит подсказать, что делать дальше.
+        toast.info('Устройства не найдены — проверьте подсеть и учётные данные')
+      } else {
+        toast.success(`Найдено устройств: ${res.data.found}`)
+      }
     } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Ошибка сканирования')
+      // axios не возвращает response, если запрос отменён или истёк таймаут —
+      // без этой ветки пользователь увидит пустое сообщение.
+      const message =
+        err.response?.data?.error ||
+        (err.code === 'ECONNABORTED'
+          ? 'Сканирование не завершилось за отведённое время. Сузьте подсеть, например 192.168.1.0/28'
+          : 'Ошибка сканирования')
+      toast.error(message)
     } finally {
+      clearInterval(ticker)
       setScanning(false)
     }
   }
@@ -92,7 +118,7 @@ export default function ScannerPage() {
       <div className="page-header">
         <div>
           <h1>Сканер камер</h1>
-          <p>Поиск OpenIPC-камер в локальной сети</p>
+          <p>Поиск камер в локальной сети — OpenIPC, Hikvision, Dahua, ONVIF</p>
         </div>
       </div>
 
@@ -140,7 +166,14 @@ export default function ScannerPage() {
       {scanning && (
         <div className="card" style={{ textAlign: 'center', padding: 40 }}>
           <Loader2 size={32} style={{ animation: 'spin 0.8s linear infinite', color: 'var(--accent)', marginBottom: 12 }} />
-          <p style={{ color: 'var(--text-secondary)' }}>Сканирование сети {subnet}...</p>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: 8 }}>
+            Сканирование сети {subnet} — {scanSeconds} с
+          </p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13, maxWidth: 480, margin: '0 auto' }}>
+            Сначала проверяются все адреса подсети, затем у отвечающих
+            опрашиваются OpenIPC, Hikvision, Dahua и ONVIF. Это занимает
+            до минуты. Не закрывайте страницу.
+          </p>
         </div>
       )}
 
@@ -155,8 +188,11 @@ export default function ScannerPage() {
           {(!result.cameras || result.cameras.length === 0) ? (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
               <Wifi size={48} style={{ marginBottom: 16, opacity: 0.3 }} />
-              <p>Камеры OpenIPC не найдены в подсети {subnet}</p>
-              <p style={{ fontSize: 13, marginTop: 8 }}>Проверьте подсеть и учётные данные</p>
+              <p>Устройства не найдены в подсети {subnet}</p>
+              <p style={{ fontSize: 13, marginTop: 8 }}>
+                Проверьте подсеть и учётные данные. Если камеры в другой
+                подсети, укажите её — поддерживается любая маска, включая /16.
+              </p>
             </div>
           ) : (
             <div className="table-wrap">
@@ -164,6 +200,7 @@ export default function ScannerPage() {
                 <thead>
                   <tr>
                     <th>IP</th>
+                    <th>Производитель</th>
                     <th>Модель</th>
                     <th>Прошивка</th>
                     <th>MAC</th>
@@ -180,6 +217,14 @@ export default function ScannerPage() {
                         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span className="badge-dot badge-dot-online" style={{ width: 8, height: 8 }} />
                           {cam.ip}
+                        </span>
+                      </td>
+                      <td>
+                        {/* Производитель определён по фирменному API, ONVIF
+                            или заголовкам веб-интерфейса. Цвет помогает
+                            отличить опознанные устройства от «generic». */}
+                        <span className={`badge ${vendorBadgeClass(cam.vendor)}`}>
+                          {vendorLabel(cam.vendor)}
                         </span>
                       </td>
                       <td>{cam.model || '—'}</td>
@@ -247,4 +292,74 @@ export default function ScannerPage() {
       )}
     </div>
   )
+}
+
+/**
+ * Человекочитаемое название производителя.
+ *
+ * Сервер отдаёт короткий идентификатор, а оператору нужно название:
+ * одна и та же камера может попасть в список как «dahua», и по этой
+ * строке непонятно, что это за устройство.
+ */
+function vendorLabel(vendor?: string): string {
+  switch (vendor) {
+    case 'openipc':
+      return 'OpenIPC'
+    case 'hikvision':
+      return 'Hikvision'
+    case 'dahua':
+      return 'Dahua'
+    case 'uniview':
+      return 'Uniview'
+    case 'axis':
+      return 'Axis'
+    case 'reolink':
+      return 'Reolink'
+    case 'tvt':
+      return 'TVT'
+    case 'xiongmai':
+      return 'Xiongmai'
+    case 'bosch':
+      return 'Bosch'
+    case 'samsung':
+      return 'Samsung'
+    case 'vivotek':
+      return 'Vivotek'
+    case 'panasonic':
+      return 'Panasonic'
+    case 'sony':
+      return 'Sony'
+    case 'onvif':
+      return 'ONVIF'
+    case 'generic':
+      return 'Неизвестный'
+    default:
+      return vendor || '—'
+  }
+}
+
+/**
+ * Класс бейджа для производителя.
+ *
+ * Известные вендоры помечаются как «онлайн» (зелёный), ONVIF — нейтрально,
+ * «generic» — приглушённо: по одному взгляду на список видно, какие
+ * устройства опознаны точно, а какие добавлены наугад.
+ */
+function vendorBadgeClass(vendor?: string): string {
+  switch (vendor) {
+    case 'openipc':
+    case 'hikvision':
+    case 'dahua':
+    case 'uniview':
+    case 'axis':
+    case 'reolink':
+      return 'badge-online'
+    case 'onvif':
+      // Жёлтый — «вендор выяснен не до конца». Класс берём из уже
+      // существующего набора: отдельный стиль ради одного состояния
+      // не нужен.
+      return 'badge-recording'
+    default:
+      return 'badge-offline'
+  }
 }
