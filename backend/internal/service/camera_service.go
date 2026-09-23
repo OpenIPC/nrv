@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,19 +30,28 @@ type CameraService struct {
 	// externalRTSP публикует потоки под внешними адресами для сторонних
 	// систем. Может быть nil, если внешний доступ не настроен.
 	externalRTSP *ExternalRTSPService
+	// warnedNoCreds хранит камеры, о missing-кредах которых уже сообщили.
+	// Монитор статуса вызывает восстановление путей каждые 15 секунд, и без
+	// этой отметки одно и то же предупреждение повторялось бы бесконечно.
+	warnedNoCreds struct {
+		sync.Mutex
+		seen map[string]bool
+	}
 }
 
 func NewCameraService(repo *postgres.CameraRepo, mediamtxAPI string) *CameraService {
 	if mediamtxAPI == "" {
 		mediamtxAPI = "http://localhost:9997"
 	}
-	return &CameraService{
+	svc := &CameraService{
 		repo:        repo,
 		mediamtxAPI: mediamtxAPI,
 		client:      &http.Client{Timeout: 5 * time.Second},
 		ssh:         NewCameraSSH(),
 		ptz:         NewPTZServiceClient(),
 	}
+	svc.warnedNoCreds.seen = make(map[string]bool)
+	return svc
 }
 
 // WithExternalRTSP подключает публикацию потоков для внешних систем.
@@ -358,12 +368,19 @@ func (s *CameraService) registerStreams(cam *domain.Camera, username, password s
 	}
 	if mainRTSP != "" {
 		embedded := EmbedCredentials(mainRTSP, username, password)
-		// Логируем подстановку учётных данных: без этого не видно, почему
-		// MediaMTX получает 401 — камера жива, а поток не поднимается.
+		// Предупреждаем один раз на камеру, а не на каждую попытку
+		// восстановления: монитор статуса вызывает этот метод каждые
+		// 15 секунд, и повторяющееся сообщение забивает лог.
 		if embedded == mainRTSP && !strings.Contains(mainRTSP, "@") {
-			log.Warn().Str("camera_id", cam.ID.String()[:8]).
-				Str("source", mainRTSP).
-				Msg("в потоке камеры нет учётных данных, а в настройках они не найдены")
+			s.warnedNoCreds.Lock()
+			if !s.warnedNoCreds.seen[cam.ID.String()] {
+				s.warnedNoCreds.seen[cam.ID.String()] = true
+				log.Warn().Str("camera_id", cam.ID.String()[:8]).
+					Str("name", cam.Name).
+					Str("source", mainRTSP).
+					Msg("в потоке камеры нет учётных данных, а в настройках они не найдены")
+			}
+			s.warnedNoCreds.Unlock()
 		}
 		go s.addMediaMTXPath(cam.ID.String(), embedded)
 	}

@@ -163,12 +163,19 @@ func (r *CameraRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status stri
 }
 
 // ListForStatusCheck возвращает минимальный набор полей для проверки доступности.
+// ListForStatusCheck возвращает камеры для монитора статуса.
+//
+// Поле settings читается обязательно: монитор не только выставляет статус,
+// но и восстанавливает пропавшие пути MediaMTX. Для этого ему нужны учётные
+// данные камеры — без них RTSP-ссылка уходит без логина и пароля, камера
+// отвечает 401, и путь остаётся нерабочим. Симптом: камеры с учётными
+// данными внутри URL работают, а с данными в отдельных полях — нет.
 func (r *CameraRepo) ListForStatusCheck(ctx context.Context) ([]domain.Camera, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, name, COALESCE(ip, '') as ip,
-			COALESCE(main_stream, '') as main_stream,
-			COALESCE(sub_stream, '') as sub_stream,
-			status
+		       COALESCE(main_stream, '') as main_stream,
+		       COALESCE(sub_stream, '') as sub_stream,
+		       status, settings
 		FROM cameras
 	`)
 	if err != nil {
@@ -179,8 +186,13 @@ func (r *CameraRepo) ListForStatusCheck(ctx context.Context) ([]domain.Camera, e
 	cameras := make([]domain.Camera, 0)
 	for rows.Next() {
 		var c domain.Camera
-		if err := rows.Scan(&c.ID, &c.Name, &c.IP, &c.MainStream, &c.SubStream, &c.Status); err != nil {
+		var settings []byte
+		if err := rows.Scan(&c.ID, &c.Name, &c.IP, &c.MainStream, &c.SubStream,
+			&c.Status, &settings); err != nil {
 			return nil, err
+		}
+		if settings != nil {
+			json.Unmarshal(settings, &c.Settings)
 		}
 		cameras = append(cameras, c)
 	}
