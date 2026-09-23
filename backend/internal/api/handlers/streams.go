@@ -28,22 +28,27 @@ const upstreamTimeout = 8 * time.Second
 type StreamHandler struct {
 	cameraSvc    *service.CameraService
 	mediamtxHost string // "localhost:8888" или "mediamtx:8888" в Docker
-	tokenAuth    *jwtauth.JWTAuth
-	httpClient   *http.Client            // для простых запросов без cookie
-	jarClients   map[string]*http.Client // по одному на camera path (cookiejar)
-	jarMu        sync.Mutex
-	baseURL      string // "http://localhost:8888"
-	ffmpegOnce   sync.Once
-	ffmpegOK     bool // доступен ли ffmpeg (для снапшота из HLS)
+	// Адрес, по которому MediaMTX доступен браузеру оператора. Нужен для
+	// ссылок на WebRTC: внутренний адрес из docker-сети в браузере не
+	// работает. Пустое значение означает «использовать mediamtxHost».
+	publicHost string
+	tokenAuth  *jwtauth.JWTAuth
+	httpClient *http.Client            // для простых запросов без cookie
+	jarClients map[string]*http.Client // по одному на camera path (cookiejar)
+	jarMu      sync.Mutex
+	baseURL    string // "http://localhost:8888"
+	ffmpegOnce sync.Once
+	ffmpegOK   bool // доступен ли ffmpeg (для снапшота из HLS)
 }
 
-func NewStreamHandler(cameraSvc *service.CameraService, mediamtxHost string, tokenAuth *jwtauth.JWTAuth) *StreamHandler {
+func NewStreamHandler(cameraSvc *service.CameraService, mediamtxHost, publicHost string, tokenAuth *jwtauth.JWTAuth) *StreamHandler {
 	if mediamtxHost == "" {
 		mediamtxHost = "localhost:8888"
 	}
 	return &StreamHandler{
 		cameraSvc:    cameraSvc,
 		mediamtxHost: mediamtxHost,
+		publicHost:   publicHost,
 		tokenAuth:    tokenAuth,
 		baseURL:      "http://" + mediamtxHost,
 		jarClients:   make(map[string]*http.Client),
@@ -121,9 +126,18 @@ func (h *StreamHandler) GetStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	info := StreamInfo{
-		RTSP:     fmt.Sprintf("rtsp://%s/%s", h.rtspHost(), streamPath),
-		HLS:      fmt.Sprintf("/api/v1/cameras/%s/hls/index.m3u8", streamPath),
-		WebRTC:   fmt.Sprintf("http://%s/%s", h.webrtcHost(), streamPath),
+		RTSP: fmt.Sprintf("rtsp://%s/%s", h.rtspHost(), streamPath),
+		HLS:  fmt.Sprintf("/api/v1/cameras/%s/hls/index.m3u8", streamPath),
+		// WebRTC-ссылка ведёт через тот же origin, что и интерфейс.
+		//
+		// Прямое обращение к порту 8889 из браузера ломается по двум
+		// причинам: со страницы по HTTPS браузер блокирует незашифрованный
+		// запрос, а при открытии интерфейса с другого компьютера localhost
+		// указывает на машину оператора, а не на сервер. Прокси решает обе:
+		// запрос уходит на тот же домен и тот же порт, что и страница.
+		//
+		// Путь /whep — эндпоинт MediaMTX для обмена SDP-описаниями.
+		WebRTC:   fmt.Sprintf("/webrtc/%s/whep", streamPath),
 		Status:   cam.Status,
 		MainHLS:  fmt.Sprintf("/api/v1/cameras/%s/hls/index.m3u8", streamPath),
 		SubHLS:   fmt.Sprintf("/api/v1/cameras/%s/hls/sub/index.m3u8", streamPath),
@@ -388,8 +402,18 @@ func (h *StreamHandler) rtspHost() string {
 	return host + ":8554"
 }
 
+// webrtcHost возвращает адрес для подключения браузера к WebRTC.
+//
+// Берётся отдельная настройка MEDIAMTX_PUBLIC_HOST, а не адрес веб-API:
+// веб-API доступен бэкенду внутри docker-сети по localhost, но браузер
+// оператора по этому адресу до сервера не дойдёт — он попадёт на свою
+// же машину. Если публичный адрес не задан, остаётся старое поведение
+// (подходит для запуска без Docker, когда всё на одной машине).
 func (h *StreamHandler) webrtcHost() string {
-	host := h.mediamtxHost
+	host := h.publicHost
+	if host == "" {
+		host = h.mediamtxHost
+	}
 	if idx := strings.LastIndex(host, ":"); idx >= 0 {
 		host = host[:idx]
 	}

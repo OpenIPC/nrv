@@ -24,6 +24,7 @@ interface LivePlayerProps {
 
 export default function LivePlayer({
   hlsUrl,
+  webrtcUrl,
   poster,
   muted = true,
   autoPlay = true,
@@ -37,6 +38,12 @@ export default function LivePlayer({
   const audioElRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
   const audioHlsRef = useRef<Hls | null>(null)
+  // WebRTC-соединение: закрывается при размонтировании и смене потока,
+  // иначе браузер держит открытым неиспользуемый канал.
+  const webrtcRef = useRef<RTCPeerConnection | null>(null)
+  // Какой транспорт сейчас в работе. Показывается оператору: это
+  // объясняет разницу в задержке между камерами.
+  const [transport, setTransport] = useState<'webrtc' | 'hls' | null>(null)
   const [status, setStatus] = useState<'connecting' | 'playing' | 'error' | 'idle'>('idle')
   const [retryCount, setRetryCount] = useState(0)
   // Звук выключен по умолчанию: оператор включает его сам. Это ожидаемое
@@ -68,10 +75,99 @@ export default function LivePlayer({
     }
   }, [])
 
+  /**
+   * Подключает поток по WebRTC (WHEP) через прямое соединение с MediaMTX.
+   *
+   * Возвращает true, если плеер принял поток. Вызывающий код в этом случае
+   * не запускает HLS.
+   *
+   * Зачем WebRTC, если есть HLS. HLS — это файловая доставка: плеер ждёт,
+   * пока сервер соберёт сегмент целиком, потом скачивает его и только тогда
+   * показывает. Даже при секундном сегменте к задержке добавляются буфер
+   * MediaMTX, буфер плеера и задержка самой камеры — на практике 6-8 секунд,
+   * а на камерах с неравномерным потоком доходило до 20.
+   *
+   * WebRTC передаёт поток пакетами сразу, без сегментов, поэтому задержка
+   * определяется только сетью. Плата за это — более сложное соединение:
+   * нужно обменяться SDP-описаниями и установить ICE-кандидатов.
+   */
+  const initWebRTC = useCallback(async (video: HTMLVideoElement): Promise<boolean> => {
+    if (!webrtcUrl || typeof RTCPeerConnection === 'undefined') return false
+
+    try {
+      // Соединение без STUN/TURN: сервер обычно в той же локальной сети,
+      // что и браузер, и внешние посредники только замедлят установку.
+      const pc = new RTCPeerConnection({ iceServers: [] })
+      webrtcRef.current = pc
+
+      // Поток принимаем как «только приём»: мы ничего не отправляем.
+      pc.addTransceiver('video', { direction: 'recvonly' })
+
+      // Звук принимаем, только если он нужен: лишняя дорожка расходует
+      // канал и в некоторых браузерах мешает запуску видео.
+      if (audioUrl) {
+        pc.addTransceiver('audio', { direction: 'recvonly' })
+      }
+
+      const stream = new MediaStream()
+      pc.ontrack = (ev) => {
+        ev.streams[0]?.getTracks().forEach((t) => stream.addTrack(t))
+        if (video.srcObject !== stream) {
+          video.srcObject = stream
+        }
+      }
+
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+
+      // Ждём сбора ICE-кандидатов: без них в SDP не будет адресов, по
+      // которым сервер сможет отправить поток.
+      await new Promise<void>((resolve) => {
+        if (pc.iceGatheringState === 'complete') return resolve()
+        const timer = setTimeout(resolve, 2000)
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === 'complete') {
+            clearTimeout(timer)
+            resolve()
+          }
+        }
+      })
+
+      const res = await fetch(webrtcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sdp' },
+        body: pc.localDescription?.sdp ?? '',
+      })
+      if (!res.ok) throw new Error(`WHEP ${res.status}`)
+
+      await pc.setRemoteDescription({
+        type: 'answer',
+        sdp: await res.text(),
+      })
+
+      if (autoPlay) {
+        video.play().catch(() => {
+          video.muted = true
+          video.play().catch(() => {})
+        })
+      }
+      setStatus('playing')
+      setRetryCount(0)
+      return true
+    } catch {
+      // Не получилось — вернёмся к HLS. Он медленнее, но работает
+      // практически везде, поэтому отказ WebRTC не должен ломать просмотр.
+      if (webrtcRef.current) {
+        webrtcRef.current.close()
+        webrtcRef.current = null
+      }
+      return false
+    }
+  }, [webrtcUrl, audioUrl, autoPlay])
+
   const initHls = useCallback(() => {
     const video = videoRef.current
     if (!video || !hlsUrl) return
-
     const authedUrl = withToken(hlsUrl)
 
     if (hlsRef.current) {
@@ -85,9 +181,30 @@ export default function LivePlayer({
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: true,
-        backBufferLength: 90,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
+
+        // Буферы рассчитаны на живой просмотр, а не на кино.
+        //
+        // Здесь стояли maxBufferLength 30 и maxMaxBufferLength 60: плеер
+        // накапливал до минуты видео вперёд. Вместе с прежним окном
+        // сегментов в MediaMTX (24 секунды) задержка доходила до 40
+        // секунд — на экране было то, что случилось минуту назад.
+        //
+        // maxBufferLength определяет, сколько секунд вперёд плеер
+        // старается держать в запасе. Для живого потока пяли секунд
+        // достаточно, чтобы пережить рывок сети, и мало, чтобы копить
+        // задержку.
+        maxBufferLength: 5,
+        maxMaxBufferLength: 8,
+
+        // Запас позади точки воспроизведения нужен только для перемотки
+        // назад. В живом потоке перематывать некуда, а 90 секунд назад
+        // — это лишняя память на каждый открытый плеер.
+        backBufferLength: 5,
+
+        // Плеер догоняет поток, немного ускоряя воспроизведение, если
+        // отстал. Без этого он либо копит отставание, либо прыгает
+        // рывком; небольшое ускорение незаметно и держит задержку.
+        maxLiveSyncPlaybackRate: 1.5,
       })
 
       hls.loadSource(authedUrl)
@@ -143,15 +260,58 @@ export default function LivePlayer({
     }
   }, [hlsUrl, autoPlay, retryCount, withToken])
 
+  /**
+   * Выбирает транспорт для просмотра: сначала WebRTC, потом HLS.
+   *
+   * Пробуем WebRTC первым, потому что его задержка в разы меньше. HLS
+   * остаётся запасным: он работает в любом браузере и переживает сети,
+   * где WebRTC не проходит (симметричный NAT без ретранслятора).
+   *
+   * Если WebRTC не удался, HLS запускается здесь же — обычный эффект
+   * initHls для этого не годится, иначе оба транспорта пошли бы
+   * одновременно и мешали друг другу, записывая в один <video>.
+   */
   useEffect(() => {
-    initHls()
+    let cancelled = false
+
+    const start = async () => {
+      const video = videoRef.current
+      if (!video) return
+
+      setStatus('connecting')
+      setTransport(null)
+
+      if (webrtcUrl) {
+        const ok = await initWebRTC(video)
+        if (cancelled) return
+        if (ok) {
+          setTransport('webrtc')
+          return
+        }
+      }
+
+      if (cancelled) return
+      setTransport('hls')
+      initHls()
+    }
+
+    start()
+
     return () => {
+      cancelled = true
+      if (webrtcRef.current) {
+        webrtcRef.current.close()
+        webrtcRef.current = null
+      }
       if (hlsRef.current) {
         hlsRef.current.destroy()
         hlsRef.current = null
       }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null
+      }
     }
-  }, [initHls])
+  }, [webrtcUrl, initWebRTC, initHls])
 
   /**
    * Подключает отдельный аудиопоток.
@@ -178,8 +338,17 @@ export default function LivePlayer({
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: true,
-        backBufferLength: 30,
-        maxBufferLength: 15,
+
+        // Звук идёт отдельным потоком и синхронизируется с видео вручную,
+        // поэтому буфер ему нужен чуть больше видео: если звук «убежит»
+        // вперёд, догнать его плееру будет нечем.
+        //
+        // Значения уменьшены с 15/30: прежние копили звук вперёд и
+        // добавляли к общей задержке ещё десяток секунд.
+        maxBufferLength: 4,
+        maxMaxBufferLength: 6,
+        backBufferLength: 5,
+        maxLiveSyncPlaybackRate: 1.5,
       })
 
       hls.loadSource(authedUrl)
@@ -299,6 +468,28 @@ export default function LivePlayer({
 
   return (
     <div className={`video-player-wrapper ${className}`} style={{ position: 'relative', overflow: 'hidden' }}>
+      {/* Метка транспорта.
+          Оператору полезно видеть, каким каналом идёт поток: WebRTC даёт
+          задержку меньше секунды, HLS — несколько секунд, и по одному
+          виду картинки отличить их нельзя. */}
+      {status === 'playing' && transport && (
+        <span
+          title={
+            transport === 'webrtc'
+              ? 'WebRTC — задержка меньше секунды'
+              : 'HLS — WebRTC не удалось, задержка больше'
+          }
+          style={{
+            position: 'absolute', top: 8, right: 8, zIndex: 5,
+            padding: '2px 8px', borderRadius: 4, fontSize: 11,
+            fontWeight: 600, letterSpacing: 0.5,
+            background: transport === 'webrtc' ? 'rgba(52,199,89,0.85)' : 'rgba(255,159,10,0.85)',
+            color: '#fff',
+          }}
+        >
+          {transport === 'webrtc' ? 'WEBRTC' : 'HLS'}
+        </span>
+      )}
       <video
         ref={videoRef}
         className="video-player"

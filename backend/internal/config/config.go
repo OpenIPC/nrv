@@ -9,15 +9,17 @@ import (
 )
 
 type Config struct {
-	Port          int
-	DatabaseURL   string
-	JWTSecret     string
-	LogLevel      string
-	LogFormat     string
-	WGInterface   string
-	NatsURL       string
-	MediamtxHost  string
-	MinioEndpoint string
+	Port         int
+	DatabaseURL  string
+	JWTSecret    string
+	LogLevel     string
+	LogFormat    string
+	WGInterface  string
+	NatsURL      string
+	MediamtxHost string
+	// Адрес MediaMTX для браузера оператора (см. envStr ниже)
+	MediamtxPublicHost string
+	MinioEndpoint      string
 	// MinioPublicEndpoint — адрес MinIO, доступный браузеру. Нужен для
 	// presigned-ссылок: внутри Docker это `minio:9000`, а клиенту нужен
 	// внешний адрес. Если пуст, берётся MinioEndpoint.
@@ -37,14 +39,21 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		Port:                envInt("PORT", 8080),
-		DatabaseURL:         envStr("DATABASE_URL", "postgres://nvr:nvr@localhost:5432/nvr?sslmode=disable"),
-		JWTSecret:           envStr("JWT_SECRET", "change-me-in-production"),
-		LogLevel:            envStr("LOG_LEVEL", "info"),
-		LogFormat:           envStr("LOG_FORMAT", "console"),
-		WGInterface:         envStr("WG_INTERFACE", ""),
-		NatsURL:             envStr("NATS_URL", "nats://localhost:4222"),
-		MediamtxHost:        envStr("MEDIAMTX_HOST", "localhost:8888"),
+		Port:         envInt("PORT", 8080),
+		DatabaseURL:  envStr("DATABASE_URL", "postgres://nvr:nvr@localhost:5432/nvr?sslmode=disable"),
+		JWTSecret:    envStr("JWT_SECRET", "change-me-in-production"),
+		LogLevel:     envStr("LOG_LEVEL", "info"),
+		LogFormat:    envStr("LOG_FORMAT", "console"),
+		WGInterface:  envStr("WG_INTERFACE", ""),
+		NatsURL:      envStr("NATS_URL", "nats://localhost:4222"),
+		MediamtxHost: envStr("MEDIAMTX_HOST", "localhost:8888"),
+		// Адрес MediaMTX, по которому до него дойдёт браузер оператора.
+		//
+		// Отличается от MediamtxHost: тот используется бэкендом внутри
+		// docker-сети (localhost или имя контейнера). Если подставить его
+		// в ссылку для браузера, браузер будет стучаться в свой собственный
+		// localhost и соединение не установится.
+		MediamtxPublicHost:  envStr("MEDIAMTX_PUBLIC_HOST", ""),
 		MinioEndpoint:       envStr("MINIO_ENDPOINT", "localhost:9000"),
 		MinioPublicEndpoint: envStr("MINIO_PUBLIC_ENDPOINT", ""),
 		MinioUseSSL:         envBool("MINIO_USE_SSL", false),

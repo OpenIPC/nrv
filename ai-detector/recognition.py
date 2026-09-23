@@ -258,6 +258,21 @@ class PlateRecognizer:
     MIN_PLATE_HEIGHT = 10
     MIN_PLATE_WIDTH = 30
 
+    # Целевая высота изображения номера перед подачей в OCR, в пикселях.
+    #
+    # Tesseract обучен на тексте с высотой символов около 30-40 пикселей.
+    # Номер на кадре занимает 15-25 пикселей по высоте, и без увеличения
+    # OCR читает его частично: «Е217НУ147» превращается в «2147».
+    # Увеличение до 200 пикселей по высоте даёт несколько десятков точек
+    # на символ и делает строку читаемой.
+    OCR_TARGET_HEIGHT = 200
+
+    # Верхняя граница увеличения.
+    #
+    # Крупный номер (например, машина вплотную к камере) не нужно
+    # растягивать: это тратит память и время, а точность не растёт.
+    OCR_MAX_SCALE = 10.0
+
     def _find_plate_areas(self, img: np.ndarray) -> list[tuple[int, int, int, int]]:
         """Ищет прямоугольные области, похожие на номерной знак.
 
@@ -321,6 +336,13 @@ class PlateRecognizer:
             if bh < self.MIN_PLATE_HEIGHT or bw < self.MIN_PLATE_WIDTH:
                 continue
 
+            # Рамку оставляем как есть.
+            #
+            # Попытка добавить запас по краям «чтобы не срезать символы»
+            # на практике ухудшила результат: лишний фон сбивает Tesseract,
+            # и он читает одну букву вместо строки. Проверено на реальном
+            # кадре — точный кроп 79×12 давал «E2147», тот же кроп с
+            # запасом 12 пикселей по краям уже только «B».
             out.append((x, y, bw, bh))
 
         # Берём самые крупные области: мелкие с большой вероятностью шум.
@@ -340,18 +362,84 @@ class PlateRecognizer:
             return "", 0.0
 
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        # Увеличение помогает Tesseract: символы на кадре обычно мелкие
-        scale = max(1.0, 300 / max(1, gray.shape[1]))
-        if scale > 1.0:
-            gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-        # Порог по Otsu делает символы чёрными на белом — как ожидает OCR
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
+        # Увеличение — самый важный шаг подготовки кадра.
+        #
+        # Tesseract плохо читает мелкие символы: на реальном кадре номер
+        # занимал 83×18 пикселей, и OCR возвращал обрывки вроде «2147»
+        # вместо «Е217НУ147». При увеличении в 8 раз тот же кадр читается
+        # верно.
+        #
+        # Масштаб считается по высоте символов, а не по ширине кадра:
+        # важно, сколько точек приходится на знак. Прежняя формула
+        # (300 / ширина) на широких кропах давала ровно 1.0 — то есть
+        # увеличения не было вовсе, и номер оставался нечитаемым.
+        target_height = self.OCR_TARGET_HEIGHT
+        scale = target_height / max(1, gray.shape[0])
+        # Ограничиваем сверху: при большом кропе увеличение съедает память,
+        # не улучшая распознавание.
+        scale = min(scale, self.OCR_MAX_SCALE)
+        if scale > 1.0:
+            gray = cv2.resize(gray, None, fx=scale, fy=scale,
+                              interpolation=cv2.INTER_CUBIC)
+            # Сглаживание убирает ступеньки от увеличения: для OCR важен
+            # ровный штрих, а не резкие пиксельные границы.
+            gray = cv2.GaussianBlur(gray, (3, 3), 0)
+
+        # Порог по Otsu делает символы чёрными на белом — как ожидает OCR,
+        # но на реальных кадрах с блеском и пересветом он съедает часть
+        # символов: номер «Е217НУ147» превращался в «2147», а иногда и
+        # вовсе в пустую строку.
+        #
+        # Поэтому пробуем несколько вариантов подготовки и берём тот, где
+        # распознался наиболее правдоподобный номер. Распознавание одного
+        # кадра занимает десятки миллисекунд, и перебор двух-трёх вариантов
+        # дешевле, чем потеря события.
+        variants: list[tuple[str, np.ndarray]] = [
+            # Наиболее удачный вариант на реальных кадрах: небольшое
+            # размытие сглаживает шум, не уничтожая штрихи символов.
+            ("blur", cv2.GaussianBlur(gray, (3, 3), 0)),
+            ("raw", gray),
+        ]
+        _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        variants.append(("otsu", otsu))
+
+        best_text = ""
+        best_conf = 0.0
+
+        # Собираем уверенность по каждому варианту: Tesseract возвращает её
+        # отдельно от текста, поэтому обход вариантов идёт в одном цикле.
+        for variant_name, image in variants:
+            text, conf = self._run_ocr(image, fmt)
+            if not text:
+                continue
+
+            # Предпочитаем строку, которая совпала с шаблоном формата:
+            # из нескольких прочтений одного кадра верное почти всегда
+            # то, которое похоже на номер.
+            if fmt is not None and plate_format.matches_format(text, fmt):
+                return text, max(conf, 0.5)
+
+            if len(text) > len(best_text) or (
+                    len(text) == len(best_text) and conf > best_conf):
+                best_text, best_conf = text, conf
+
+        if best_text:
+            logger.debug(f"OCR номер (вариант без совпадения): {best_text!r}")
+        return best_text, best_conf
+
+    def _run_ocr(self, image: np.ndarray,
+                 fmt: PlateFormat | None) -> tuple[str, float]:
+        """Запускает Tesseract на подготовленном изображении.
+
+        Возвращает нормализованную строку и уверенность. Выделено отдельно,
+        потому что вызывается несколько раз с разной подготовкой кадра.
+        """
         config = "--psm 7 -c tessedit_char_whitelist=ABCEHKMOPTXY0123456789"
         with self._lock:
             try:
                 data = self._pytesseract.image_to_data(
-                    binary, config=config, output_type=self._pytesseract.Output.DICT)
+                    image, config=config, output_type=self._pytesseract.Output.DICT)
             except Exception as e:
                 logger.debug(f"сбой OCR номера: {e}")
                 return "", 0.0

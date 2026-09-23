@@ -170,6 +170,14 @@ export default function CameraDetailPage() {
                     ? (streamInfo?.sub_hls_url || streamInfo?.hls_url || '')
                     : (streamInfo?.main_hls_url || streamInfo?.hls_url || '')
                 }
+                // WebRTC — основной транспорт живого просмотра: его задержка
+                // в разы меньше, чем у HLS, который ждёт сборки сегментов.
+                // Плеер сам откатывается на HLS, если WebRTC не прошёл.
+                webrtcUrl={
+                  activeStream === 'main'
+                    ? (streamInfo?.webrtc_url || '')
+                    : undefined
+                }
                 // Звук идёт отдельным потоком: камеры отдают G.711, который
                 // браузер в HLS не играет. Бэкенд перекодирует в AAC.
                 audioUrl={`/api/v1/cameras/${camera.id}/hls/audio/index.m3u8`}

@@ -28,10 +28,12 @@ type RouterConfig struct {
 	WGManager    *tunnel.WireGuardManager
 	DB           *pgxpool.Pool
 	MediamtxHost string
-	Scanner      *service.CameraScanner
-	VideoRepo    *miniorepo.VideoRepo
-	StorageSvc   *service.StorageService
-	RetentionSvc *service.RetentionService
+	// Адрес MediaMTX для ссылок, отдаваемых браузеру (WebRTC)
+	MediamtxPublicHost string
+	Scanner            *service.CameraScanner
+	VideoRepo          *miniorepo.VideoRepo
+	StorageSvc         *service.StorageService
+	RetentionSvc       *service.RetentionService
 	// AudioSvc обеспечивает звук с камер (транскодирование G.711 → AAC)
 	AudioSvc *service.AudioService
 	// HealthSvc собирает показатели здоровья камер OpenIPC (Majestic)
@@ -67,7 +69,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// Handlers
 	authH := handlers.NewAuthHandler(cfg.UserRepo, tokenAuth)
 	cameraH := handlers.NewCameraHandler(cfg.CameraSvc)
-	streamH := handlers.NewStreamHandler(cfg.CameraSvc, cfg.MediamtxHost, tokenAuth)
+	streamH := handlers.NewStreamHandler(cfg.CameraSvc, cfg.MediamtxHost, cfg.MediamtxPublicHost, tokenAuth)
 	scannerH := handlers.NewScannerHandler(cfg.Scanner)
 	camHealthH := handlers.NewCameraHealthHandler(cfg.HealthSvc)
 	camSettingsH := handlers.NewCameraSettingsHandler(cfg.SettingsSvc)
