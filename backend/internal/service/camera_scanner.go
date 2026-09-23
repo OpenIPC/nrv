@@ -182,6 +182,17 @@ func (s *CameraScanner) Scan(ctx context.Context, req domain.ScanRequest) (*doma
 	// данных, и сотня одновременных серий запросов перегружает сеть.
 	sem := make(chan struct{}, 24)
 
+	// Общий бюджет времени на опрос одной камеры.
+	//
+	// Без него время скана непредсказуемо: на камере, которая принимает
+	// соединение, но не отвечает на запросы, перебор шести пар учётных
+	// данных по четырём протоколам и двум портам растягивается на минуты.
+	// Из-за этого один и тот же скан занимал то 26, то 150 секунд.
+	//
+	// Бюджет делает оценку сверху честной: даже если часть камер
+	// «подвиснет», общее время остаётся предсказуемым.
+	const perCameraBudget = 25 * time.Second
+
 	for _, ip := range alive {
 		wg.Add(1)
 		go func(ip net.IP) {
@@ -189,7 +200,12 @@ func (s *CameraScanner) Scan(ctx context.Context, req domain.ScanRequest) (*doma
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			cam := s.probeCamera(ctx, ip.String(), req.Username, req.Password)
+			// Дочерний контекст с бюджетом: по его истечении все запросы
+			// к камере прерываются, а уже найденные данные не теряются.
+			camCtx, cancel := context.WithTimeout(ctx, perCameraBudget)
+			defer cancel()
+
+			cam := s.probeCamera(camCtx, ip.String(), req.Username, req.Password)
 			if cam != nil {
 				if mac := s.getMAC(ip.String()); mac != "" {
 					cam.MAC = mac
@@ -278,6 +294,34 @@ func (s *CameraScanner) checkTCPFast(ip string, port int) bool {
 	return true
 }
 
+// genericCamera формирует запись для камеры, которую не удалось опознать
+// полностью, но которая точно отвечает.
+//
+// RTSP-путь по умолчанию — /stream=0: он совпадает с OpenIPC, а для
+// остальных производителей оператор поправит путь вручную. Важнее не
+// потерять камеру из списка: показать её в результатах с пометкой
+// «неизвестный» полезнее, чем скрыть.
+func genericCamera(ip, vendor string) *domain.DiscoveredCamera {
+	cam := &domain.DiscoveredCamera{
+		IP:         ip,
+		Vendor:     vendor,
+		Online:     true,
+		MainStream: fmt.Sprintf("rtsp://%s:554/stream=0", ip),
+		SubStream:  fmt.Sprintf("rtsp://%s:554/stream=1", ip),
+	}
+
+	switch vendor {
+	case "dahua":
+		cam.MainStream = fmt.Sprintf("rtsp://%s:554/cam/realmonitor?channel=1&subtype=0", ip)
+		cam.SubStream = fmt.Sprintf("rtsp://%s:554/cam/realmonitor?channel=1&subtype=1", ip)
+	case "hikvision":
+		cam.MainStream = fmt.Sprintf("rtsp://%s:554/Streaming/Channels/101", ip)
+		cam.SubStream = fmt.Sprintf("rtsp://%s:554/Streaming/Channels/102", ip)
+	}
+
+	return cam
+}
+
 // probeCamera пробует все доступные протоколы с перебором учётных данных.
 func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint string) *domain.DiscoveredCamera {
 	// --- Быстрая проверка: открыт ли RTSP-порт 554 ---
@@ -330,33 +374,32 @@ func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint 
 		if cam := s.probeONVIF(ctx, ip, cred.Username, cred.Password); cam != nil {
 			return cam
 		}
+
+		// Бюджет времени на камеру исчерпан — дальше перебирать учётные
+		// данные бессмысленно, запросы всё равно будут прерваны.
+		if ctx.Err() != nil {
+			log.Debug().Str("ip", ip).
+				Msg("бюджет времени на опрос камеры исчерпан")
+			break
+		}
 	}
 
-	// 5. Fallback: если ни один HTTP-API не ответил, но RTSP открыт —
-	//    создаём generic-запись с RTSP URL.
+	// 5. Fallback: камера отвечает, но опознать её не удалось.
 	//
-	//    Перед этим пробуем определить производителя по заголовкам
-	//    веб-интерфейса: даже без авторизации многие камеры отдают
-	//    характерные Server/Realm, по которым вендор узнаётся.
+	//    Здесь оказываются устройства, которые принимают соединение, но
+	//    молчат на запросы, а также те, у кого исчерпан бюджет времени.
+	//    Показываем их как «generic»: оператор увидит камеру в списке и
+	//    поправит путь потока вручную, а не будет считать, что её нет.
 	if s.checkTCP(ip, 554) {
-		vendor := s.detectVendorByHeaders(ctx, ip)
-		cam := &domain.DiscoveredCamera{
-			IP:         ip,
-			Vendor:     vendor,
-			Online:     true,
-			MainStream: fmt.Sprintf("rtsp://%s:554/stream=0", ip),
-			SubStream:  fmt.Sprintf("rtsp://%s:554/stream=1", ip),
-		}
-		if vendor == "dahua" {
-			cam.MainStream = fmt.Sprintf("rtsp://%s:554/cam/realmonitor?channel=1&subtype=0", ip)
-			cam.SubStream = fmt.Sprintf("rtsp://%s:554/cam/realmonitor?channel=1&subtype=1", ip)
-		} else if vendor == "hikvision" {
-			cam.MainStream = fmt.Sprintf("rtsp://%s:554/Streaming/Channels/101", ip)
-			cam.SubStream = fmt.Sprintf("rtsp://%s:554/Streaming/Channels/102", ip)
-		}
+		// Бюджет мог истечь, поэтому определение вендора по заголовкам
+		// даём отдельный короткий контекст — иначе оно не выполнится.
+		detectCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
+		defer cancel()
+
+		vendor := s.detectVendorByHeaders(detectCtx, ip)
 		log.Debug().Str("ip", ip).Str("vendor", vendor).
 			Msg("камера не опознана по API — определена по заголовкам")
-		return cam
+		return genericCamera(ip, vendor)
 	}
 
 	return nil
