@@ -235,13 +235,32 @@ class PlateRecognizer:
             return None
         return x1, y1, x2, y2
 
+    # Доля высоты кадра снизу, где искать номер не нужно.
+    #
+    # Камеры рисуют поверх картинки служебные надписи: дату, имя модели,
+    # сообщения прошивки («Нет лицензии», «domofon»). На кадрах OpenIPC они
+    # занимают нижние 10-15% высоты, и OCR читает их как номер.
+    #
+    # Отсекаем полосу целиком: номер физически не может быть вровень с
+    # подписью, потому что подпись рисуется поверх изображения в самом низу.
+    OSD_BOTTOM_FRACTION = 0.18
+
     def _find_plate_areas(self, img: np.ndarray) -> list[tuple[int, int, int, int]]:
         """Ищет прямоугольные области, похожие на номерной знак.
 
         Номер — это вытянутый прямоугольник с высоким контрастом символов,
         поэтому смотрим на контуры после морфологической обработки.
         """
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # Нижнюю полосу с OSD-надписями исключаем до поиска контуров:
+        # иначе подпись камеры становится кандидатом в номера.
+        h_full = img.shape[0]
+        search_h = int(h_full * (1.0 - self.OSD_BOTTOM_FRACTION))
+        if search_h < 40:
+            # Кадр слишком низкий: отсечение съело бы всё изображение.
+            search_h = h_full
+        work = img[:search_h]
+
+        gray = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
         # Сглаживание убирает шум, сохраняя края символов
         blur = cv2.bilateralFilter(gray, 11, 17, 17)
         # Градиент Собеля подчёркивает вертикальные границы символов
@@ -257,11 +276,13 @@ class PlateRecognizer:
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         out: list[tuple[int, int, int, int]] = []
-        img_area = img.shape[0] * img.shape[1]
+        img_area = work.shape[0] * work.shape[1]
         for c in contours:
             x, y, bw, bh = cv2.boundingRect(c)
             area = bw * bh
-            if area < img_area * 0.0005 or area > img_area * 0.5:
+            # Нижняя граница площади снижена: номер вдали занимает немного
+            # места, и прежний порог 0.05% отсекал его вместе с шумом.
+            if area < img_area * 0.0002 or area > img_area * 0.5:
                 continue
             # Номерной знак — вытянутый: соотношение сторон примерно 2:1..6:1
             ratio = bw / max(1, bh)
@@ -269,9 +290,11 @@ class PlateRecognizer:
                 continue
             out.append((x, y, bw, bh))
 
-        # Берём самые крупные области: мелкие с большой вероятностью шум
+        # Берём самые крупные области: мелкие с большой вероятностью шум.
+        # Пять вместо трёх: машина может стоять рядом с другой, и настоящий
+        # номер не должен теряться из-за ограничения.
         out.sort(key=lambda r: r[2] * r[3], reverse=True)
-        return out[:3]
+        return out[:5]
 
     def _read_text(self, crop: np.ndarray) -> tuple[str, float]:
         """Распознаёт текст в вырезанной области номера.

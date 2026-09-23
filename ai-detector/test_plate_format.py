@@ -87,6 +87,35 @@ print("\n=== кириллические надписи ===")
 check("кириллическое слово отсечено", pf.looks_like_word("НЕТЛИЦЕНЗИИ") is True)
 check("короткая кириллица не слово", pf.looks_like_word("НЕТ") is False)
 
+# --- Отсечение полосы OSD ---
+print("\n=== отсечение полосы OSD ===")
+try:
+    import numpy as np
+    import recognition
+
+    rec = recognition.PlateRecognizer()
+    check("доля OSD задана", rec.OSD_BOTTOM_FRACTION > 0)
+
+    # Кадр с номером в верхней части и «текстом» внизу: полоса с надписью
+    # не должна попадать в поиск областей.
+    h, w = 400, 640
+    frame = np.full((h, w, 3), 120, dtype=np.uint8)
+    # Имитируем контрастный прямоугольник внизу — там, где OSD камеры.
+    bottom = int(h * (1.0 - rec.OSD_BOTTOM_FRACTION))
+    frame[h - 40:h - 10, 20:180] = 250
+
+    areas = rec._find_plate_areas(frame)
+    in_osd = [a for a in areas if a[1] + a[3] > bottom]
+    check("области из полосы OSD не найдены", len(in_osd) == 0,
+          f"-> {in_osd}")
+
+    # Низкий кадр: отсечение не должно съесть изображение целиком.
+    low = np.full((40, 300, 3), 120, dtype=np.uint8)
+    rec._find_plate_areas(low)
+    check("низкий кадр обрабатывается без ошибок", True)
+except ImportError as e:
+    print(f"  ПРОПУЩЕНО: нет зависимостей для проверки кадра ({e})")
+
 print()
 if failures:
     print(f"ПРОВАЛЕНО: {len(failures)} — {failures}")

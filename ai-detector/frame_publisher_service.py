@@ -20,6 +20,7 @@ import asyncio
 import logging
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
@@ -107,6 +108,148 @@ def grab_frame(url: str, width: int, timeout: float,
     return data
 
 
+class FFmpegStream:
+    """Непрерывный поток кадров из RTSP одной командой ffmpeg.
+
+    Зачем не grab_frame: каждое подключение к RTSP занимает около 1,5 секунды
+    (рукопожатие, выбор профиля, буферизация). При частых кадрах это
+    становится узким местом — замер на живой камере показал 0,7 кадра в
+    секунду вместо ожидаемых пяти.
+
+    Здесь ffmpeg подключается ОДИН раз и пишет кадры подряд в трубу, а мы
+    читаем их потоком. Замер на той же камере: 4,4 кадра в секунду, то есть
+    в шесть раз быстрее.
+    """
+
+    # Размер JPEG не превышает долей мегабайта; ограничение защищает от
+    # накопления памяти, если ffmpeg отдаст мусор вместо картинки.
+    MAX_FRAME_BYTES = 4 << 20
+
+    def __init__(self, url: str, width: int,
+                 crop: tuple[float, float, float, float] | None,
+                 fps: float, reconnect_delay: float = 2.0):
+        self.url = url
+        self.width = width
+        self.crop = crop
+        self.fps = fps
+        self.reconnect_delay = reconnect_delay
+        self._proc: subprocess.Popen | None = None
+        self._buffer = bytearray()
+        self._restarts = 0
+
+    def _build_cmd(self) -> list[str]:
+        filters = []
+        # Частоту задаём первым фильтром: ffmpeg сам отбрасывает лишние кадры,
+        # поэтому нагрузка не зависит от частоты потока камеры.
+        filters.append(f"fps={self.fps}")
+        if self.crop is not None:
+            x1, y1, x2, y2 = self.crop
+            filters.append(
+                f"crop=iw*{x2 - x1:.6f}:ih*{y2 - y1:.6f}:iw*{x1:.6f}:ih*{y1:.6f}"
+            )
+        if self.width:
+            filters.append(f"scale={self.width}:-2")
+        return [
+            "ffmpeg",
+            "-rtsp_transport", "tcp",
+            # Не буферизовать: кадры нужны сразу, а не пачкой на выходе.
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-i", self.url,
+            "-vf", ",".join(filters),
+            "-q:v", "4",
+            "-f", "image2pipe",
+            "-vcodec", "mjpeg",
+            "-an",
+            "-loglevel", "error",
+            "pipe:1",
+        ]
+
+    def start(self):
+        """Запускает ffmpeg, если он ещё не работает."""
+        if self._proc is not None and self._proc.poll() is None:
+            return
+        self._buffer.clear()
+        # bufsize=-1 (буферизация по умолчанию) нужен, чтобы stdout был
+        # BufferedReader с методом read1. При bufsize=0 Python отдаёт
+        # FileIO без read1, и чтение кадра падает с AttributeError.
+        self._proc = subprocess.Popen(
+            self._build_cmd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def restart(self):
+        """Перезапускает ffmpeg: поток мог оборваться на стороне камеры."""
+        self.stop()
+        self._restarts += 1
+        time.sleep(self.reconnect_delay)
+        self.start()
+
+    def stop(self):
+        """Останавливает ffmpeg. Безопасно вызывать повторно."""
+        if self._proc is None:
+            return
+        try:
+            self._proc.kill()
+            self._proc.wait(timeout=3)
+        except Exception:
+            pass
+        self._proc = None
+
+    def read_frame(self, timeout: float = 10.0) -> bytes | None:
+        """Читает один JPEG-кадр из потока.
+
+        Возвращает None, если ffmpeg завершился или не отдал кадр за отведённое
+        время — вызывающий код перезапускает поток.
+        """
+        if self._proc is None or self._proc.poll() is not None:
+            return None
+        stdout = self._proc.stdout
+        if stdout is None:
+            return None
+
+        deadline = time.monotonic() + timeout
+        while True:
+            if len(self._buffer) > self.MAX_FRAME_BYTES:
+                # Мусор вместо JPEG: сбрасываем буфер и начинаем заново.
+                self._buffer.clear()
+                return None
+
+            # Ищем маркер конца JPEG (FFD9) и отдаём всё до него включительно.
+            end = self._buffer.find(b"\xff\xd9")
+            if end >= 0:
+                frame = bytes(self._buffer[: end + 2])
+                del self._buffer[: end + 2]
+                # Кадр должен начинаться с FFD8: иначе потеряли синхронизацию
+                # и отдали бы обрезанную картинку.
+                start = frame.find(b"\xff\xd8")
+                if start < 0:
+                    continue
+                return frame[start:]
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+
+            # Ждём данные небольшими порциями, чтобы не задерживать
+            # обработку остальных камер.
+            try:
+                ready, _, _ = select.select([stdout], [], [], min(remaining, 0.5))
+            except (OSError, ValueError):
+                return None
+            if not ready:
+                continue
+            chunk = stdout.read1(65536)
+            if not chunk:
+                return None
+            self._buffer.extend(chunk)
+
+    @property
+    def restarts(self) -> int:
+        return self._restarts
+
+
 def zone_box(zone: list[dict]) -> tuple[float, float, float, float] | None:
     """Превращает полигон зоны в прямоугольник в долях кадра.
 
@@ -172,6 +315,13 @@ class FramePublisher:
         # Быстрый поток для распознавания номеров: чаще и по зоне.
         self.plate_interval = plate_interval
         self.plate_width = plate_width
+        # Частота кадров зоны. Отдельно от интервала: интервал задаёт
+        # таймаут чтения, а fps — частоту съёма внутри ffmpeg.
+        self.plate_fps = max(1.0, 1.0 / plate_interval if plate_interval > 0 else 5.0)
+        # Таймаут чтения одного кадра зоны. Первому кадру нужно время на
+        # подключение к камере (около 1,5 с), а последующим — не больше
+        # интервала; берём с запасом, чтобы поток не перезапускался зря.
+        self.plate_read_timeout = max(5.0, plate_interval * 5)
 
         self.nc: NATS | None = None
         self.cameras: list[dict] = []
@@ -230,7 +380,7 @@ class FramePublisher:
                 self.tasks[key] = asyncio.create_task(self._plate_loop(cam))
                 logger.info(
                     f"[{cam_id[:8]}] {cam['name']}: быстрый поток номеров запущен "
-                    f"({self.plate_interval:.1f} с)"
+                    f"({self.plate_fps:.0f} кадров/с)"
                 )
             elif not cam.get("wants_plates") and key in self.tasks:
                 self.tasks.pop(key).cancel()
@@ -244,6 +394,10 @@ class FramePublisher:
         Публикует в отдельную тему cameras.<id>.plate_frame — детектор
         обрабатывает её распознаванием номеров, не запуская детекцию
         объектов заново.
+
+        Использует непрерывный поток ffmpeg, а не одиночные кадры: каждое
+        подключение к RTSP занимает около 1,5 секунды, и при частых кадрах
+        это давало 0,7 кадра в секунду вместо нужных пяти.
         """
         cam_id = cam["id"]
         url = build_rtsp_url(cam["stream"], cam["username"], cam["password"])
@@ -254,12 +408,37 @@ class FramePublisher:
             )
             return
 
-        while True:
-            t0 = time.monotonic()
-            jpeg = await asyncio.to_thread(
-                grab_frame, url, self.plate_width, self.ffmpeg_timeout, crop
-            )
-            if jpeg:
+        stream = FFmpegStream(url, self.plate_width, crop, fps=self.plate_fps)
+        stream.start()
+        logger.info(
+            f"[{cam_id[:8]}] {cam['name']}: поток номеров запущен "
+            f"({self.plate_fps:.0f} кадров/с, зона "
+            f"{crop[0]:.2f},{crop[1]:.2f}..{crop[2]:.2f},{crop[3]:.2f})"
+        )
+
+        fails = 0
+        try:
+            while True:
+                # Таймаут чтения заметно больше интервала кадров: первому
+                # кадру нужно время на подключение к камере (около 1,5 с),
+                # и при коротком таймауте поток перезапускался бы по кругу.
+                jpeg = await asyncio.to_thread(
+                    stream.read_frame, self.plate_read_timeout
+                )
+                if jpeg is None:
+                    fails += 1
+                    if fails == 1 or fails % FAILURE_LOG_EVERY == 0:
+                        logger.warning(
+                            f"[{cam_id[:8]}] {cam['name']}: кадр зоны не получен "
+                            f"({fails} раз подряд, перезапусков {stream.restarts})"
+                        )
+                    await asyncio.to_thread(stream.restart)
+                    continue
+
+                if fails:
+                    logger.info(f"[{cam_id[:8]}] {cam['name']}: поток номеров восстановлен")
+                fails = 0
+
                 payload = cam_id.encode().ljust(36) + jpeg
                 try:
                     await self.nc.publish(f"cameras.{cam_id}.plate_frame", payload)
@@ -268,9 +447,8 @@ class FramePublisher:
                     )
                 except Exception as e:
                     logger.warning(f"[{cam_id[:8]}] публикация кадра номера: {e}")
-
-            elapsed = time.monotonic() - t0
-            await asyncio.sleep(max(0.05, self.plate_interval - elapsed))
+        finally:
+            stream.stop()
 
     async def _reload_loop(self):
         while True:
