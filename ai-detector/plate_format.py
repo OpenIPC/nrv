@@ -34,6 +34,14 @@ CYRILLIC_TO_LATIN = {
     "І": "I", "Ѕ": "S",
 }
 
+# Кириллические буквы, похожие на цифры.
+#
+# Их нужно заменять на цифры, а не отбрасывать: на реальных кадрах OCR
+# читал цифру «3» как кириллическую «З», и символ пропадал из номера.
+# Номер становился на символ короче и не проходил проверку формата.
+# Начертание «З» и «3» почти совпадает, поэтому замена однозначна.
+CYRILLIC_TO_DIGIT = {"З": "3", "Б": "6", "Э": "3"}
+
 
 @dataclass
 class PlateFormat:
@@ -96,6 +104,8 @@ def normalize(raw: str) -> str:
     for ch in raw.upper():
         if ch in CYRILLIC_TO_LATIN:
             out.append(CYRILLIC_TO_LATIN[ch])
+        elif ch in CYRILLIC_TO_DIGIT:
+            out.append(CYRILLIC_TO_DIGIT[ch])
         elif ch.isascii() and (ch.isalnum()):
             out.append(ch)
         # Остальные символы (пробелы, дефисы, знаки) отбрасываем
@@ -223,3 +233,182 @@ def sanitize_ocr(text: str) -> str:
     формата — иначе верно прочитанный номер отклонялся бы из-за лишней точки.
     """
     return "".join(c for c in (text or "") if c not in _OCR_NOISE)
+
+
+def apply_confusions(text: str, fmt: PlateFormat) -> str:
+    """Исправляет символы, которые OCR путает, по позициям в номере.
+
+    Tesseract читает «0» как «O», «8» как «B», «1» как «I», и наоборот.
+    Без этой замены номер «О824ОО724» остаётся с латинскими буквами и не
+    совпадает с шаблоном, хотя все символы прочитаны верно.
+
+    Замена делается только там, где этого требует шаблон: в позиции цифры
+    буква «O» превращается в «0», в позиции буквы цифра «0» — в «O».
+    Если шаблона нет, замену не делаем вовсе: без него неизвестно, какая
+    позиция чем должна быть, и любая правка только испортит номер.
+    """
+    if not text:
+        return text
+
+    if fmt.compiled() is None:
+        return text
+
+    expected = _pattern_slots(fmt.pattern, len(text))
+    if expected is None:
+        # Шаблон не разобран — лучше не трогать строку, чем испортить её.
+        return text
+
+    return "".join(
+        _fix_char(ch, kind == "digit") for ch, kind in zip(text, expected)
+    ) + text[len(expected):]
+
+
+def _pattern_slots(pattern: str, length: int) -> list[str] | None:
+    """Разворачивает шаблон в список ожидаемых типов по позициям.
+
+    Возвращает список из «digit» и «letter» длиной ровно length, либо None,
+    если шаблон не удалось разобрать.
+
+    Разбор нужен, потому что квантификаторы меняют число позиций: в
+    шаблоне `[ABE]\d{3}[ABE]{2}\d{2,3}` один класс с `{3}` занимает три
+    позиции. Без учёта повторов замены сдвигаются и портят номер.
+    """
+    slots: list[str] = []
+    i = 0
+
+    while i < len(pattern):
+        ch = pattern[i]
+
+        if ch == "^":
+            i += 1
+            continue
+        if ch == "$":
+            break
+
+        # Класс символов: [ABEKMHOPCTYX] или [0-9]
+        if ch == "[":
+            end = pattern.find("]", i)
+            if end == -1:
+                return None
+            body = pattern[i + 1:end]
+            # Класс может содержать и буквы, и цифры — тогда тип позиции
+            # неоднозначен, и замену делать нельзя.
+            has_digit = any(c.isdigit() or c == "\\" for c in body)
+            has_letter = any(c.isalpha() for c in body)
+            if has_digit and has_letter:
+                kind = "any"
+            elif has_digit:
+                kind = "digit"
+            else:
+                kind = "letter"
+
+            rep_min, rep_max, i = _read_quantifier(pattern, end + 1)
+            if rep_min is None:
+                return None
+            slots.extend([kind] * rep_min)
+            if rep_max != rep_min:
+                # Необязательный хвост: сколько повторов ожидать — зависит
+                # от длины строки. Считаем такие позиции «любыми»: они
+                # встречаются только в конце шаблона (регион 2 или 3 цифры).
+                remaining = length - len(slots)
+                extra = max(0, min(remaining, rep_max - rep_min))
+                slots.extend(["any"] * extra)
+            continue
+
+        # Экранированный класс: \d или \w
+        if ch == "\\" and i + 1 < len(pattern):
+            kind = {"d": "digit", "w": "any"}.get(pattern[i + 1], "any")
+            rep_min, rep_max, i = _read_quantifier(pattern, i + 2)
+            if rep_min is None:
+                return None
+            slots.extend([kind] * rep_min)
+            if rep_max != rep_min:
+                remaining = length - len(slots)
+                extra = max(0, min(remaining, rep_max - rep_min))
+                slots.extend(["any"] * extra)
+            continue
+
+        # Точка — любой символ.
+        if ch == ".":
+            rep_min, rep_max, i = _read_quantifier(pattern, i + 1)
+            if rep_min is None:
+                return None
+            slots.extend(["any"] * rep_min)
+            if rep_max != rep_min:
+                remaining = length - len(slots)
+                extra = max(0, min(remaining, rep_max - rep_min))
+                slots.extend(["any"] * extra)
+            continue
+
+        # Одиночный ожидаемый символ.
+        if ch.isdigit():
+            slots.append("digit")
+            i += 1
+            continue
+        if ch.isalpha():
+            slots.append("letter")
+            i += 1
+            continue
+
+        # Скобочная группа или что-то ещё неподдерживаемое.
+        return None
+
+    if len(slots) != length:
+        # Шаблон описывает не то число символов, что пришло от OCR.
+        # Скорее всего, номер прочитан неверно — не трогаем его.
+        return None
+    return slots
+
+
+def _read_quantifier(pattern: str, i: int) -> tuple[int | None, int, int]:
+    """Читает квантификатор после элемента шаблона.
+
+    Возвращает (минимум, максимум, новая позиция). Минимум None означает
+    ошибку разбора.
+    """
+    if i >= len(pattern):
+        return 1, 1, i
+
+    if pattern[i] == "*":
+        return 0, 8, i + 1
+    if pattern[i] == "+":
+        return 1, 8, i + 1
+    if pattern[i] == "?":
+        return 0, 1, i + 1
+
+    if pattern[i] == "{":
+        end = pattern.find("}", i)
+        if end == -1:
+            return None, 0, i
+        body = pattern[i + 1:end].strip()
+        try:
+            if "," in body:
+                lo, hi = body.split(",", 1)
+                rep_min = int(lo) if lo.strip() else 0
+                rep_max = int(hi) if hi.strip() else 8
+            else:
+                rep_min = rep_max = int(body)
+        except ValueError:
+            return None, 0, i
+        if rep_min < 0 or rep_max < rep_min:
+            return None, 0, i
+        return rep_min, rep_max, end + 1
+
+    return 1, 1, i
+
+
+def _fix_char(ch: str, expect_digit: bool) -> str:
+    """Приводит один символ к тому типу, который ожидает шаблон.
+
+    Замена выполняется, только если символ однозначно восстанавливается:
+    «O» в цифровой позиции — это «0», «0» в буквенной — это «O». Иначе
+    символ оставляем как есть, чтобы не выдумывать данные.
+    """
+    if expect_digit:
+        if ch.isdigit():
+            return ch
+        return LETTER_TO_DIGIT.get(ch, ch)
+
+    if ch.isalpha():
+        return ch
+    return DIGIT_TO_LETTER.get(ch, ch)

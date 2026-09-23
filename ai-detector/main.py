@@ -399,7 +399,7 @@ async def main():
                 snapshot_b64 = base64.b64encode(jpeg).decode("ascii")
         await publish_recognition(nc, camera_id, "plate", probes, snapshot_b64)
 
-    async def plate_worker():
+    async def plate_worker(worker_id: int):
         while True:
             try:
                 msg = await plate_sub.next_msg(timeout=1)
@@ -410,10 +410,23 @@ async def main():
             except Exception as e:
                 if type(e).__name__ in ("ErrTimeout", "TimeoutError"):
                     continue
-                logger.error(f"Plate worker error: {e}")
+                logger.error(f"Plate worker {worker_id} error: {e}")
                 await asyncio.sleep(1)
 
-    plate_worker_task = asyncio.create_task(plate_worker())
+    # Кадры зоны номера обрабатывают несколько воркеров параллельно.
+    #
+    # Один воркер не справляется: распознавание номера занимает около
+    # секунды, а публикатор присылает по 5 кадров в секунду с каждой
+    # камеры. Очередь росла, и NATS начинал выбрасывать кадры с ошибкой
+    # slow consumer — номера перестали распознаваться вовсе.
+    #
+    # Один воркер на камеру даёт запас: пока распознаётся текущий кадр,
+    # следующие уже ждут в очереди, а не отбрасываются.
+    plate_workers = int(os.getenv("PLATE_WORKERS", "3"))
+    plate_tasks = [
+        asyncio.create_task(plate_worker(i)) for i in range(plate_workers)
+    ]
+    logger.info(f"Запущено воркеров распознавания номеров: {plate_workers}")
 
     # Конвейер детекции звука. Работает параллельно видео-аналитике:
     # у него свои настройки, своя частота и свои подписки на потоки.
@@ -435,7 +448,8 @@ async def main():
     except asyncio.CancelledError:
         pass
     finally:
-        plate_worker_task.cancel()
+        for task in plate_tasks:
+            task.cancel()
         if audio_task is not None:
             audio_task.cancel()
         await nc.close()
