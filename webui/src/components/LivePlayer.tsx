@@ -42,6 +42,58 @@ interface LivePlayerProps {
   preferHls?: boolean
 }
 
+/**
+ * Сколько ждать первых кадров при подключении по WebRTC.
+ *
+ * Обмен описаниями проходит быстро, а вот установка медиаканала зависит
+ * от сети: при неудачном ICE ждать приходится до срабатывания таймаута
+ * на стороне сервера. Три секунды — компромисс: при закрытом UDP мы
+ * успеваем переключиться на HLS, а при рабочем соединении кадры
+ * приходят заметно раньше.
+ */
+const WEBRTC_VIDEO_TIMEOUT_MS = 3000
+
+/**
+ * Ждёт, пока в элементе появится настоящее видео.
+ *
+ * Проверяет не события соединения (они могут сообщить об успехе, даже
+ * когда кадры не идут), а фактический размер кадра: пока браузер не
+ * получил данные, videoWidth остаётся нулевым.
+ *
+ * Возвращает false, если видео так и не пошло.
+ */
+function waitForVideo(video: HTMLVideoElement): Promise<boolean> {
+  if (video.videoWidth > 0) {
+    return Promise.resolve(true)
+  }
+
+  return new Promise((resolve) => {
+    let done = false
+
+    const finish = (ok: boolean) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      video.removeEventListener('loadedmetadata', onMeta)
+      video.removeEventListener('resize', onMeta)
+      resolve(ok)
+    }
+
+    // Событие появляется, когда браузер получил первый кадр и знает
+    // его размеры.
+    const onMeta = () => {
+      if (video.videoWidth > 0) {
+        finish(true)
+      }
+    }
+
+    const timer = setTimeout(() => finish(false), WEBRTC_VIDEO_TIMEOUT_MS)
+
+    video.addEventListener('loadedmetadata', onMeta)
+    video.addEventListener('resize', onMeta)
+  })
+}
+
 export default function LivePlayer({
   hlsUrl,
   webrtcUrl,
@@ -136,6 +188,13 @@ export default function LivePlayer({
         ev.streams[0]?.getTracks().forEach((t) => stream.addTrack(t))
         if (video.srcObject !== stream) {
           video.srcObject = stream
+          // Воспроизведение запускаем сразу при появлении потока:
+          // без этого браузер не начнёт декодировать кадры, и ожидание
+          // ниже не сработает даже при рабочем соединении.
+          video.play().catch(() => {
+            video.muted = true
+            video.play().catch(() => {})
+          })
         }
       }
 
@@ -166,6 +225,29 @@ export default function LivePlayer({
         type: 'answer',
         sdp: await res.text(),
       })
+
+      // Ждём, пока пойдёт само видео, а не только обмен описаниями.
+      //
+      // Это ключевой момент. Обмен SDP проходит через обычный HTTP и
+      // всегда удаётся, а медиапоток идёт отдельно, по UDP. Если UDP
+      // закрыт (типичная ситуация при доступе через интернет или при
+      // работе через прокси), соединение устанавливается «успешно»,
+      // дорожки создаются — но кадры не приходят, и на экране остаётся
+      // чёрный прямоугольник.
+      //
+      // Раньше плеер в этом случае считал WebRTC рабочим и HLS не
+      // запускал, поэтому просмотр не работал вовсе. Теперь ждём
+      // реального сигнала и при неудаче откатываемся на HLS.
+      const videoStarted = await waitForVideo(video)
+
+      if (!videoStarted) {
+        pc.close()
+        if (webrtcRef.current === pc) {
+          webrtcRef.current = null
+        }
+        video.srcObject = null
+        return false
+      }
 
       if (autoPlay) {
         video.play().catch(() => {
