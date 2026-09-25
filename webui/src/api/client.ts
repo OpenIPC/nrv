@@ -564,6 +564,54 @@ export const recordingsAPI = {
     api.get<PaginatedResponse<Recording> & { recordings: Recording[] }>('/recordings', { params }),
   get: (id: string) => api.get<Recording>(`/recordings/${id}`),
   delete: (id: string) => api.delete(`/recordings/${id}`),
+
+  /**
+   * Дни месяца, в которые есть записи.
+   *
+   * Отдельный запрос, а не разбор списка записей: календарю нужна
+   * сводка за месяц, и получать ради неё все записи было бы расточительно.
+   */
+  calendar: (params: { year: number; month: number; camera_id?: string }) =>
+    api.get<CalendarData>('/recordings/calendar', { params }),
+
+  /** Раскладка записей одного дня по времени суток. */
+  timeline: (params: { date: string; camera_id?: string }) =>
+    api.get<TimelineData>('/recordings/timeline', { params }),
+}
+
+/** Один день с записями — для календаря. */
+export interface CalendarDay {
+  date: string
+  count: number
+  /** Суммарная длительность записей за день, в секундах. */
+  duration: number
+  triggers: string[]
+}
+
+export interface CalendarData {
+  year: number
+  month: number
+  days: CalendarDay[]
+}
+
+/** Запись в раскладке дня. */
+export interface TimelineItem {
+  id: string
+  camera_id: string
+  camera_name: string
+  start_time: string
+  end_time: string
+  trigger_type: string
+  /** Путь к файлу в хранилище (minio:... или local:...). Нужен для ссылки на плеер. */
+  file_path?: string
+  /** Положение на сутках в долях от 0 (полночь) до 1 (следующая полночь). */
+  start_ratio: number
+  end_ratio: number
+}
+
+export interface TimelineData {
+  date: string
+  items: TimelineItem[]
 }
 
 export const acsAPI = {

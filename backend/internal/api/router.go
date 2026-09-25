@@ -252,6 +252,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/recordings/{id}", recH.Get)
 			r.Delete("/recordings/{id}", recH.Delete)
 
+			// Календарь архива: дни с записями за месяц и раскладка
+			// конкретного дня по времени. Отдельные эндпоинты, потому
+			// что интерфейсу нужны сводки, а не списки записей.
+			r.Get("/recordings/calendar", recH.Calendar)
+			r.Get("/recordings/timeline", recH.DayTimeline)
+
 			// СКУД
 			r.Get("/acs/controllers", acsH.ListControllers)
 			r.Post("/acs/controllers", acsH.CreateController)
