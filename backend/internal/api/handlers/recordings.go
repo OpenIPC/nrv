@@ -61,6 +61,13 @@ func (h *RecordingHandler) File(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Скачивание отдаём с именем файла: браузер иначе сохранит объект
+	// как «file» без расширения, и открыть его будет нечем.
+	if r.URL.Query().Get("download") != "" {
+		name := recordingFileName(r.URL.Query().Get("name"))
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	}
+
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Accept-Ranges", "bytes")
 
@@ -114,6 +121,42 @@ func (h *RecordingHandler) File(w http.ResponseWriter, r *http.Request) {
 	}
 	// Стримим без буферизации в память: клипы бывают по 20+ МБ.
 	io.CopyN(w, obj, length)
+}
+
+// recordingFileName готовит безопасное имя файла для скачивания.
+//
+// Имя приходит из интерфейса (камера + время), поэтому в нём нельзя
+// доверять ничему: кавычки и перевод строки сломали бы заголовок
+// Content-Disposition, а разделители пути — позволили бы записать
+// файл вне папки загрузок.
+func recordingFileName(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "recording.mp4"
+	}
+
+	// Оставляем буквы, цифры и безопасную пунктуацию. Кириллицу сохраняем:
+	// имена камер у нас русские, и вырезать их было бы неудобно.
+	var b strings.Builder
+	for _, r := range raw {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r >= 'а' && r <= 'я', r >= 'А' && r <= 'Я', r == 'ё', r == 'Ё':
+			b.WriteRune(r)
+		case r == ' ' || r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		}
+	}
+
+	name := strings.TrimSpace(b.String())
+	if name == "" {
+		return "recording.mp4"
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".mp4") {
+		name += ".mp4"
+	}
+	return name
 }
 
 // parseRange разбирает заголовок Range вида "bytes=0-1023".

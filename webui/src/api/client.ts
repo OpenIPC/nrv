@@ -577,6 +577,38 @@ export const recordingsAPI = {
   /** Раскладка записей одного дня по времени суток. */
   timeline: (params: { date: string; camera_id?: string }) =>
     api.get<TimelineData>('/recordings/timeline', { params }),
+
+  /**
+   * Прямая ссылка на файл записи.
+   *
+   * Отдаётся браузеру как есть, без запроса через axios: по ней
+   * работает воспроизведение в теге video и скачивание.
+   * Токен идёт в query, потому что video не передаёт заголовок Authorization.
+   */
+  fileUrl: (filePath: string, opts?: { download?: boolean; name?: string }) => {
+    const params = new URLSearchParams({ path: filePath })
+    const token = localStorage.getItem('token')
+    if (token) params.set('token', token)
+    if (opts?.download) params.set('download', '1')
+    if (opts?.name) params.set('name', opts.name)
+    return `/api/v1/recordings/file?${params.toString()}`
+  },
+
+  /**
+   * Скачивание записи.
+   *
+   * Ссылка открывается в отдельном окне: так браузер получает
+   * заголовок Content-Disposition и сохраняет файл сам, не загружая
+   * клип в память страницы (записи бывают по несколько гигабайт).
+   */
+  download: (filePath: string, name: string) => {
+    const a = document.createElement('a')
+    a.href = recordingsAPI.fileUrl(filePath, { download: true, name })
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  },
 }
 
 /** Один день с записями — для календаря. */
