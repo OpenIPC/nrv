@@ -12,6 +12,7 @@ import {
   ChannelEventRules, TestBar, EVENT_OPTIONS,
   labelStyle, hintStyle, checkStyle,
 } from '../components/NotificationChannel'
+import { parseProxyInput, type ParsedProxy } from '../utils/proxyLink'
 
 const EMPTY_TELEGRAM: TelegramConfig = {
   enabled: false,
@@ -74,6 +75,10 @@ export default function NotificationsPage() {
 
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null)
 
+  // Подсказка о разобранной ссылке прокси: показывается, пока оператор
+  // не изменит поле вручную.
+  const [proxyHint, setProxyHint] = useState<ParsedProxy | null>(null)
+
   const [log, setLog] = useState<NotificationLogRecord[]>([])
   const [logFilter, setLogFilter] = useState('')
   const [loadingLog, setLoadingLog] = useState(false)
@@ -125,6 +130,9 @@ export default function NotificationsPage() {
     setTelegram((prev) => ({ ...prev, [key]: value }))
     setDirty(true)
     setTestResult(null)
+    // Подсказка о разобранной ссылке относится к вставленному адресу
+    // и к правке поля уже не подходит.
+    if (key === 'proxy_url') setProxyHint(null)
   }, [])
 
   const patchMax = useCallback(<K extends keyof MaxConfig>(key: K, value: MaxConfig[K]) => {
@@ -401,15 +409,37 @@ export default function NotificationsPage() {
                 <input
                   className="input"
                   value={telegram.proxy_url}
-                  placeholder="socks5://127.0.0.1:1080"
+                  placeholder="socks5://127.0.0.1:1080 или ссылка tg://proxy?..."
                   onChange={(e) => patchTelegram('proxy_url', e.target.value)}
+                  onPaste={(e) => {
+                    // Ссылку из Telegram вставляют целиком — разбираем её
+                    // сразу, чтобы оператору не пришлось переносить
+                    // параметры вручную и ошибиться в них.
+                    const text = e.clipboardData.getData('text')
+                    const parsed = parseProxyInput(text)
+                    if (!parsed) return
+                    e.preventDefault()
+                    patchTelegram('proxy_url', parsed.url)
+                    setProxyHint(parsed)
+                  }}
                   style={{ width: '100%', maxWidth: 460 }}
                 />
-                <div style={hintStyle}>
-                  Подойдёт SOCKS5, в том числе MTProto-прокси (например, <b>mtg</b>) —
-                  укажите его адрес с портом: <b>socks5://хост:порт</b>.
-                  Логин и пароль при необходимости: <b>socks5://логин:пароль@хост:порт</b>.
-                </div>
+                {proxyHint ? (
+                  // Предупреждение о непригодном прокси выделяем цветом:
+                  // иначе оператор будет искать причину в настройках бота.
+                  <div style={{
+                    ...hintStyle,
+                    color: proxyHint.usable ? 'var(--text-secondary)' : '#ff9f0a',
+                  }}>
+                    {proxyHint.message}
+                  </div>
+                ) : (
+                  <div style={hintStyle}>
+                    Подойдёт SOCKS5 — укажите <b>socks5://хост:порт</b>,
+                    логин и пароль при необходимости: <b>socks5://логин:пароль@хост:порт</b>.
+                    Ссылку <b>tg://proxy?...</b> можно вставить как есть — она разберётся сама.
+                  </div>
+                )}
               </div>
             )}
           </>
