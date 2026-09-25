@@ -254,6 +254,10 @@ func (r *DetectionSettingsRepo) GetServerSettings(ctx context.Context) (*domain.
 			if err := json.Unmarshal(raw, &out.Snapshots); err != nil {
 				return nil, fmt.Errorf("decode snapshots settings: %w", err)
 			}
+		case "notifications":
+			if err := json.Unmarshal(raw, &out.Notifications); err != nil {
+				return nil, fmt.Errorf("decode notifications settings: %w", err)
+			}
 		}
 	}
 	return out, rows.Err()
@@ -281,6 +285,11 @@ func (r *DetectionSettingsRepo) UpdateServerSettings(ctx context.Context, req do
 	if req.Snapshots != nil {
 		if err := save("snapshots", req.Snapshots); err != nil {
 			return nil, fmt.Errorf("save snapshots settings: %w", err)
+		}
+	}
+	if req.Notifications != nil {
+		if err := save("notifications", req.Notifications); err != nil {
+			return nil, fmt.Errorf("save notifications settings: %w", err)
 		}
 	}
 	return r.GetServerSettings(ctx)

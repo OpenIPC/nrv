@@ -265,9 +265,97 @@ type StorageConfig struct {
 
 // ServerSettings — глобальные настройки сервера.
 type ServerSettings struct {
-	Storage   StorageConfig `json:"storage"`
-	Snapshots StorageConfig `json:"snapshots"`
+	Storage       StorageConfig `json:"storage"`
+	Snapshots     StorageConfig `json:"snapshots"`
+	Notifications NotificationSettings `json:"notifications"`
 }
+
+// --- Уведомления ---
+
+// TransportDirect отправляет запросы к Telegram напрямую.
+// TransportProxy пускает тот же запрос через SOCKS5 (MTProto-прокси).
+const (
+	TransportDirect = "direct"
+	TransportProxy  = "proxy"
+)
+
+// NotificationSettings — куда и о чём сообщать.
+//
+// Настройки хранятся одним объектом, потому что оператор заполняет их
+// на одной странице и сохраняет разом; раздельные PATCH по каналам здесь
+// только запутали бы.
+type NotificationSettings struct {
+	Telegram TelegramConfig `json:"telegram"`
+}
+
+// TelegramConfig — канал уведомлений в Telegram.
+type TelegramConfig struct {
+	Enabled bool `json:"enabled"`
+	// Transport — как соединяться с api.telegram.org: direct или proxy.
+	// В России прямой доступ не работает, поэтому через прокси.
+	// MTProto-прокси умеет принимать SOCKS5, и этого достаточно для Bot API.
+	Transport string `json:"transport"`
+	// BotToken — токен бота от @BotFather. Секрет: наружу уходит маской.
+	BotToken string `json:"bot_token"`
+	// ChatID — куда отправлять: id канала, группы или личный чат.
+	// Может быть отрицательным (каналы и группы).
+	ChatID string `json:"chat_id"`
+	// ProxyURL — адрес прокси в формате socks5://user:pass@host:port.
+	ProxyURL string `json:"proxy_url"`
+	// SendSnapshot — прикладывать снимок события.
+	SendSnapshot bool `json:"send_snapshot"`
+	// SendClip — прикладывать видео клипа.
+	SendClip bool `json:"send_clip"`
+	// ClipMaxMB — предел размера клипа. У Telegram жёсткий лимит на
+	// отправку ботом, и превышение даёт не «отправлено без видео»,
+	// а полный отказ, поэтому большие клипы пропускаем осознанно.
+	ClipMaxMB int `json:"clip_max_mb"`
+	// Events — типы событий для отправки: object, line, face, plate, acs, audio.
+	// Пустой список означает «ничего не отправлять»: молчаливое включение
+	// всего подряд завалило бы оператора сообщениями.
+	Events []string `json:"events"`
+	// Cameras — камеры-источники. Пустой список означает «все камеры»:
+	// чаще всего включают наблюдение целиком, а не по одной.
+	Cameras []uuid.UUID `json:"cameras"`
+	// MinConfidence отсекает слабые срабатывания детектора.
+	MinConfidence float64 `json:"min_confidence"`
+	// QuietHours — период молчания. Ночные тревоги без нужды будят,
+	// но отключить их совсем нельзя — поэтому окно, а не выключатель.
+	QuietHoursEnabled bool   `json:"quiet_hours_enabled"`
+	QuietHoursFrom    string `json:"quiet_hours_from"`
+	QuietHoursTo      string `json:"quiet_hours_to"`
+	// RepeatMinutes — пауза между сообщениями об одном и том же
+	// (та же камера, тот же класс). Ноль означает без ограничений.
+	RepeatMinutes int `json:"repeat_minutes"`
+	// DailyReport — ежедневная сводка о событиях за сутки.
+	DailyReport     bool   `json:"daily_report"`
+	DailyReportTime string `json:"daily_report_time"`
+	// UpdatedAt заполняется при чтении из БД.
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+// NotificationLogRecord — одна запись журнала отправок.
+type NotificationLogRecord struct {
+	ID         uuid.UUID  `json:"id"`
+	Channel    string     `json:"channel"`
+	EventType  string     `json:"event_type"`
+	CameraID   *uuid.UUID `json:"camera_id,omitempty"`
+	CameraName string     `json:"camera_name"`
+	// DedupKey — ключ отсечения повторов. В ответах API не показываем:
+	// оператору он ничего не говорит, а журнал с ним разрастается.
+	DedupKey  string    `json:"-"`
+	Status    string    `json:"status"`
+	Error     string    `json:"error,omitempty"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Статусы отправки в журнале.
+const (
+	NotifyStatusSent   = "sent"
+	NotifyStatusFailed = "failed"
+	NotifyStatusSkip   = "skipped"
+)
 
 // --- Звук с камер ---
 
@@ -537,8 +625,9 @@ const (
 
 // UpdateServerSettingsRequest — частичное обновление настроек сервера.
 type UpdateServerSettingsRequest struct {
-	Storage   *StorageConfig `json:"storage,omitempty"`
-	Snapshots *StorageConfig `json:"snapshots,omitempty"`
+	Storage       *StorageConfig       `json:"storage,omitempty"`
+	Snapshots     *StorageConfig       `json:"snapshots,omitempty"`
+	Notifications *NotificationSettings `json:"notifications,omitempty"`
 }
 
 // CreateCameraRequest — запрос на создание камеры

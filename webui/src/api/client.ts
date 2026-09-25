@@ -857,6 +857,89 @@ export const settingsAPI = {
   update: (data: Partial<ServerSettings>) => api.patch<ServerSettings>('/settings', data),
 }
 
+// --- Уведомления ---
+
+/** TelegramConfig — канал уведомлений в Telegram. */
+export interface TelegramConfig {
+  enabled: boolean
+  /**
+   * Как соединяться с Telegram: direct или proxy.
+   * В России прямой доступ к api.telegram.org закрыт, поэтому proxy.
+   */
+  transport: 'direct' | 'proxy'
+  /** Токен бота от @BotFather. Сервер отдаёт его маской. */
+  bot_token: string
+  /** Куда отправлять: id канала, группы или личного чата. */
+  chat_id: string
+  /** Адрес прокси: socks5://хост:порт или mtproto://хост:порт. */
+  proxy_url: string
+  send_snapshot: boolean
+  send_clip: boolean
+  /** Предел размера клипа: Telegram отказывает целиком при превышении. */
+  clip_max_mb: number
+  /** Типы событий для отправки. Пустой список — ничего не отправлять. */
+  events: string[]
+  /** Камеры-источники. Пустой список — все камеры. */
+  cameras: string[]
+  min_confidence: number
+  quiet_hours_enabled: boolean
+  quiet_hours_from: string
+  quiet_hours_to: string
+  /** Пауза между сообщениями об одном и том же событии, минуты. */
+  repeat_minutes: number
+  daily_report: boolean
+  daily_report_time: string
+}
+
+export interface NotificationSettings {
+  telegram: TelegramConfig
+}
+
+/** Результат проверки связи с Telegram. */
+export interface NotificationTestResult {
+  ok: boolean
+  chat_name?: string
+  error?: string
+}
+
+/** Одна запись журнала отправок. */
+export interface NotificationLogRecord {
+  id: string
+  channel: string
+  event_type: string
+  camera_id?: string
+  camera_name: string
+  /** sent — отправлено, failed — ошибка, skipped — отфильтровано. */
+  status: 'sent' | 'failed' | 'skipped'
+  error?: string
+  message: string
+  created_at: string
+}
+
+export const notificationsAPI = {
+  get: () => api.get<TelegramConfig>('/settings/notifications'),
+  update: (telegram: TelegramConfig) =>
+    api.patch<TelegramConfig>('/settings/notifications', { telegram }),
+
+  /**
+   * Проверка связи с отправкой пробного сообщения.
+   *
+   * Настройки передаются прямо из формы: так оператор проверяет токен
+   * до сохранения и не записывает в базу заведомо нерабочие значения.
+   */
+  test: (telegram: TelegramConfig, withSnapshot = true) =>
+    api.post<NotificationTestResult>('/settings/notifications/test', {
+      telegram,
+      with_snapshot: withSnapshot,
+    }, { timeout: 60000 }),
+
+  log: (params?: { status?: string; limit?: number }) =>
+    api.get<{ records: NotificationLogRecord[] }>('/settings/notifications/log', { params }),
+
+  cleanupLog: (days = 30) =>
+    api.delete<{ removed: number }>('/settings/notifications/log', { params: { days } }),
+}
+
 // --- Распознавание лиц и автомобильных номеров ---
 
 // Причина, по которой создана запись архива.

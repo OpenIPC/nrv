@@ -13,6 +13,7 @@ import RecordingsPage from './pages/RecordingsPage'
 import RecognitionPage from './pages/RecognitionPage'
 import ACSPage from './pages/ACSPage'
 import SettingsPage from './pages/SettingsPage'
+import NotificationsPage from './pages/NotificationsPage'
 import ExternalAccessPage from './pages/ExternalAccessPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -47,6 +48,7 @@ export default function App() {
                 <Route path="/acs" element={<ACSPage />} />
                 <Route path="/external-access" element={<ExternalAccessPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/notifications" element={<NotificationsPage />} />
               </Routes>
             </Layout>
           </ProtectedRoute>

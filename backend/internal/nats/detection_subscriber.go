@@ -60,6 +60,17 @@ type DetectionSubscriber struct {
 	storage   SnapshotSaver
 	recorder  EventRecorder
 	recognize RecognitionMatcher
+	notifier  Notifier
+}
+
+// Notifier отправляет уведомления о событиях во внешние каналы.
+//
+// Интерфейс, а не конкретный сервис: подписчик не должен зависеть от
+// пакета уведомлений и от способа доставки (Telegram, MAX).
+type Notifier interface {
+	// NotifyEvent отправляет уведомление. Вызов не блокирующий:
+	// отправка в Telegram не должна задерживать сохранение событий.
+	NotifyEvent(ctx context.Context, ev NotificationEvent)
 }
 
 // SnapshotSaver сохраняет снимок события и возвращает путь к нему.
@@ -102,6 +113,12 @@ func (s *DetectionSubscriber) WithRecording(rec EventRecorder) *DetectionSubscri
 // Без него события сохраняются без результата распознавания.
 func (s *DetectionSubscriber) WithRecognition(m RecognitionMatcher) *DetectionSubscriber {
 	s.recognize = m
+	return s
+}
+
+// WithNotifier подключает уведомления о событиях.
+func (s *DetectionSubscriber) WithNotifier(n Notifier) *DetectionSubscriber {
+	s.notifier = n
 	return s
 }
 
@@ -192,6 +209,20 @@ func (s *DetectionSubscriber) saveAudioEvent(ctx context.Context, ev *AudioEvent
 
 	log.Info().Str("camera_id", ev.CameraID[:8]).Str("class", ev.EventClass).
 		Float32("confidence", ev.Confidence).Msg("audio event saved")
+
+	// Звуковые события тоже уведомляют: крик или выстрел ночью оператор
+	// должен узнать сразу, а не при разборе архива.
+	if s.notifier != nil {
+		s.notifier.NotifyEvent(ctx, NotificationEvent{
+			Type:       "audio",
+			CameraID:   cameraID,
+			CameraName: s.cameraName(ctx, cameraID),
+			Detail:     ev.EventClass,
+			Class:      ev.EventClass,
+			Confidence: float64(ev.Confidence),
+			Time:       eventTime,
+		})
+	}
 	return nil
 }
 
@@ -263,7 +294,55 @@ func (s *DetectionSubscriber) saveEvent(ctx context.Context, ev *DetectionEvent)
 		go s.recorder.HandleEvent(context.Background(), cameraID, eventTime, trigger, detail)
 	}
 
+	// Уведомление о событии. Снимок передаём уже декодированным: для
+	// уведомления нужны байты JPEG, а не путь в хранилище.
+	if s.notifier != nil {
+		s.notifier.NotifyEvent(context.Background(), NotificationEvent{
+			Type:       string(trigger),
+			CameraID:   cameraID,
+			CameraName: s.cameraName(ctx, cameraID),
+			Detail:     detail,
+			Class:      ev.ObjectClass,
+			Confidence: ev.Confidence,
+			Time:       eventTime,
+			Snapshot:   SnapshotFromBase64(ev.SnapshotJPEG),
+		})
+	}
+
 	return nil
+}
+
+// cameraName возвращает имя камеры для текста уведомления.
+//
+// Ошибку запроса только логируем: имя нужно лишь для читаемости
+// сообщения, и сбой запроса не должен отменять само уведомление.
+func (s *DetectionSubscriber) cameraName(ctx context.Context, cameraID uuid.UUID) string {
+	var name string
+	if err := s.db.QueryRow(ctx,
+		`SELECT COALESCE(name, '') FROM cameras WHERE id = $1`, cameraID,
+	).Scan(&name); err != nil {
+		return "камера " + cameraID.String()[:8]
+	}
+	if name == "" {
+		return "камера " + cameraID.String()[:8]
+	}
+	return name
+}
+
+// SnapshotFromBase64 декодирует снимок, пришедший от детектора.
+//
+// Детектор присылает JPEG в base64. Ошибка декодирования не должна
+// ломать событие — в этом случае уведомление уйдёт без картинки.
+func SnapshotFromBase64(raw string) []byte {
+	if raw == "" {
+		return nil
+	}
+	data, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		log.Debug().Err(err).Msg("снимок события не декодирован — уведомление уйдёт без него")
+		return nil
+	}
+	return data
 }
 
 // matchEvent сопоставляет событие со справочниками лиц и номеров.

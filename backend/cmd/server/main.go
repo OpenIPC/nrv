@@ -15,6 +15,7 @@ import (
 	"github.com/nvr/backend/internal/config"
 	"github.com/nvr/backend/internal/domain"
 	natspkg "github.com/nvr/backend/internal/nats"
+	"github.com/nvr/backend/internal/notify"
 	miniorepo "github.com/nvr/backend/internal/repository/minio"
 	"github.com/nvr/backend/internal/repository/postgres"
 	"github.com/nvr/backend/internal/service"
@@ -139,6 +140,12 @@ func main() {
 	// Запись видео: ffmpeg пишет сегменты, менеджер собирает клипы по событиям.
 	recorderSvc := service.NewRecorderService(cfg.RecordBufferDir, storageSvc)
 	recordingMgr := service.NewRecordingManager(detectionSettingsRepo, recorderSvc, storageSvc, cameraSvc)
+
+	// Уведомления о событиях (Telegram). Журнал отправок ведёт свой репозиторий:
+	// по нему видно, дошло ли сообщение, и по нему же отсекаются повторы.
+	notificationRepo := postgres.NewNotificationRepo(db)
+	notifier := notify.NewService(detectionSettingsRepo, storageSvc, notificationRepo)
+
 	recordingMgr.OnSaved(func(clip service.SavedClip) {
 		half := time.Duration(clip.DurationSec) * time.Second / 2
 		recordingID := uuid.New()
@@ -159,9 +166,12 @@ func main() {
 		if clip.TriggerType == domain.TriggerACS {
 			acsSvc.AttachClipToEvent(clip.CameraID, clip.Path, clip.EventTime, recordingID)
 		}
+		// Клип готов — если его ждало уведомление, отправляем вместе с видео.
+		notifier.AttachClip(clip.CameraID, clip.EventTime, clip.Path)
 	})
 	if detSubscriber != nil {
 		detSubscriber.WithRecording(recordingMgr)
+		detSubscriber.WithNotifier(notifierAdapter{svc: notifier})
 	}
 
 	// Съёмка по событиям доступа: подключаем камеры, хранилище и запись.
@@ -274,6 +284,9 @@ func main() {
 		SettingsSvc:        settingsSvc,
 		PreviewSvc:         previewSvc,
 		ExternalRTSPSvc:    externalRTSPSvc,
+		// Сервис создан выше — по нему работает страница уведомлений:
+		// проверка связи и журнал отправок.
+		Notifier: notifier,
 	})
 
 	// HTTP-сервер

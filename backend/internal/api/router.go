@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nvr/backend/internal/api/handlers"
 	mw "github.com/nvr/backend/internal/api/middleware"
+	"github.com/nvr/backend/internal/notify"
 	miniorepo "github.com/nvr/backend/internal/repository/minio"
 	"github.com/nvr/backend/internal/repository/postgres"
 	"github.com/nvr/backend/internal/service"
@@ -44,6 +45,8 @@ type RouterConfig struct {
 	PreviewSvc *service.CameraPreviewService
 	// ExternalRTSPSvc публикует потоки для внешних систем
 	ExternalRTSPSvc *service.ExternalRTSPService
+	// Notifier отправляет уведомления о событиях (Telegram)
+	Notifier *notify.Service
 }
 
 func NewRouter(cfg RouterConfig) *chi.Mux {
@@ -92,8 +95,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		recogH.WithStorage(cfg.StorageSvc)
 	}
 
-	audioH := handlers.NewAudioHandler(postgres.NewAudioRepo(cfg.DB), cfg.AudioSvc)
-	// Адрес камеры нужен, чтобы определить аудиокодек через ffprobe.
+	settingsRepo := postgres.NewDetectionSettingsRepo(cfg.DB)
+	notifyH := handlers.NewNotificationHandler(
+		settingsRepo,
+		postgres.NewNotificationRepo(cfg.DB),
+		cfg.Notifier,
+	)
+
+	audioH := handlers.NewAudioHandler(postgres.NewAudioRepo(cfg.DB), cfg.AudioSvc)	// Адрес камеры нужен, чтобы определить аудиокодек через ffprobe.
 	audioH.WithCameraSource(func(cameraID uuid.UUID) string {
 		url, err := cfg.CameraSvc.StreamURLForRecord(context.Background(), cameraID)
 		if err != nil {
@@ -215,6 +224,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/settings/recognition", recogH.GetSettings)
 			r.Patch("/settings/recognition", recogH.UpdateSettings)
 
+			// Уведомления о событиях (Telegram).
+			// Отдельно от /settings: на этой странице есть проверка связи
+			// и журнал отправок, которые не входят в общие настройки сервера.
+			r.Get("/settings/notifications", notifyH.Get)
+			r.Patch("/settings/notifications", notifyH.Update)
+			r.Post("/settings/notifications/test", notifyH.Test)
+			r.Get("/settings/notifications/log", notifyH.Log)
+			r.Delete("/settings/notifications/log", notifyH.Cleanup)
 			// Справочник известных лиц
 			r.Get("/faces", recogH.ListFaces)
 			r.Post("/faces", recogH.CreateFace)
