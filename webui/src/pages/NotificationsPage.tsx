@@ -23,7 +23,7 @@ const EMPTY_TELEGRAM: TelegramConfig = {
   send_snapshot: true,
   send_clip: true,
   clip_max_mb: 45,
-  events: ['plate', 'face'],
+  events: ['plate', 'face', 'object'],
   cameras: [],
   min_confidence: 0,
   quiet_hours_enabled: false,
@@ -41,7 +41,7 @@ const EMPTY_MAX: MaxConfig = {
   send_snapshot: true,
   send_clip: true,
   clip_max_mb: 45,
-  events: ['plate', 'face'],
+  events: ['plate', 'face', 'object'],
   cameras: [],
   min_confidence: 0,
   quiet_hours_enabled: false,
@@ -180,19 +180,24 @@ export default function NotificationsPage() {
     setTestResult(null)
   }, [tab])
 
+  /** Записывает настройки открытого канала в базу. */
+  const persist = async (): Promise<void> => {
+    // Сохраняем только открытый канал: во втором могут быть
+    // незавершённые правки, и записывать их оператор не просил.
+    if (tab === 'telegram') {
+      const res = await notificationsAPI.update(telegram)
+      setTelegram((prev) => ({ ...prev, ...res.data }))
+    } else {
+      const res = await notificationsAPI.updateMax(max)
+      setMax((prev) => ({ ...prev, ...res.data }))
+    }
+    setDirty(false)
+  }
+
   const save = async () => {
     setSaving(true)
     try {
-      // Сохраняем только открытый канал: во втором могут быть
-      // незавершённые правки, и записывать их оператор не просил.
-      if (tab === 'telegram') {
-        const res = await notificationsAPI.update(telegram)
-        setTelegram((prev) => ({ ...prev, ...res.data }))
-      } else {
-        const res = await notificationsAPI.updateMax(max)
-        setMax((prev) => ({ ...prev, ...res.data }))
-      }
-      setDirty(false)
+      await persist()
       toast.success(`Настройки ${CHANNEL_LABELS[tab]} сохранены`)
     } catch (err: any) {
       toast.error(err?.response?.data?.error || 'Не удалось сохранить настройки')
@@ -201,10 +206,29 @@ export default function NotificationsPage() {
     }
   }
 
+  /**
+   * Проверка связи с сохранением настроек.
+   *
+   * Сохранение идёт первым: если связь подтвердилась, настройки обязаны
+   * попасть в базу. Иначе получается обманчивый результат — сообщение
+   * пришло, оператор считает канал рабочим, а события не отправляются,
+   * потому что в базе остались пустые токен и chat_id.
+   */
   const runTest = async () => {
     setTesting(true)
     setTestResult(null)
     try {
+      // Ошибку сохранения показываем сразу: без него проверка бессмысленна.
+      try {
+        await persist()
+      } catch (err: any) {
+        setTestResult({
+          ok: false,
+          text: err?.response?.data?.error || 'Не удалось сохранить настройки',
+        })
+        return
+      }
+
       const res = tab === 'telegram'
         ? await notificationsAPI.test(telegram, telegram.send_snapshot)
         : await notificationsAPI.testMax(max, max.send_snapshot)
@@ -215,11 +239,16 @@ export default function NotificationsPage() {
           // Сервер может сообщить о частичном успехе: связь есть,
           // но вложение не прошло. Показываем это как предупреждение.
           text: res.data.error
-            ? `Связь есть, чат «${res.data.chat_name}». ${res.data.error}`
-            : `Сообщение отправлено в «${res.data.chat_name}»`,
+            ? `Настройки сохранены. Связь есть, чат «${res.data.chat_name}». ${res.data.error}`
+            : `Настройки сохранены. Сообщение отправлено в «${res.data.chat_name}»`,
         })
       } else {
-        setTestResult({ ok: false, text: res.data.error || 'Не удалось отправить сообщение' })
+        // Настройки уже записаны, но связь не подтвердилась — говорим об этом
+        // прямо, чтобы оператор не ждал уведомлений напрасно.
+        setTestResult({
+          ok: false,
+          text: `${res.data.error || 'Не удалось отправить сообщение'} (настройки сохранены, но уведомления работать не будут)`,
+        })
       }
     } catch (err: any) {
       setTestResult({
@@ -481,9 +510,9 @@ export default function NotificationsPage() {
       <TestBar
         testing={testing}
         onClick={runTest}
-        label={`Отправить пробное сообщение в ${CHANNEL_LABELS[tab]}`}
+        label={`Сохранить и проверить ${CHANNEL_LABELS[tab]}`}
         result={testResult}
-        hint="Проверяются введённые значения, даже если они ещё не сохранены."
+        hint="Настройки сохраняются, затем отправляется пробное сообщение."
       />
 
       {/* Журнал отправок: общий для обоих каналов */}
