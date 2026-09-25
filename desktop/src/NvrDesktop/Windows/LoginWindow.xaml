@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="NVR Control — вход"
-        Height="480" Width="420"
+        Height="600" Width="440"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         Background="#0f1419"
@@ -66,17 +66,31 @@
             <TextBlock Text="Адрес сервера"/>
             <TextBox x:Name="ServerBox"
                      ToolTip="Например: 192.168.1.111:8080"/>
-            <TextBlock Text="Можно без http:// — подставится автоматически"
+            <TextBlock Text="Адрес API. Можно без http:// — подставится автоматически"
                        FontSize="11"
                        Margin="0,4,0,0"/>
         </StackPanel>
 
         <StackPanel Grid.Row="3" Margin="0,0,0,14">
+            <TextBlock Text="Адрес веб-интерфейса (необязательно)"/>
+            <TextBox x:Name="UiBox"
+                     ToolTip="Например: 192.168.1.111:3001"/>
+            <!--
+              Поле оставлено пустым по умолчанию: в большинстве случаев
+              адрес подбирается автоматически при входе. Оно нужно, когда
+              интерфейс стоит на нестандартном порту и подбор не сработал.
+            -->
+            <TextBlock Text="Оставьте пустым — подберётся автоматически"
+                       FontSize="11"
+                       Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="4" Margin="0,0,0,14">
             <TextBlock Text="Логин"/>
             <TextBox x:Name="UserBox"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="4" Margin="0,0,0,14">
+        <StackPanel Grid.Row="5" Margin="0,0,0,14">
             <TextBlock Text="Пароль"/>
             <PasswordBox x:Name="PassBox"/>
         </StackPanel>

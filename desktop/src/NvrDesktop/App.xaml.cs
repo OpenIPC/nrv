@@ -71,6 +71,13 @@ public partial class App : Application
             _api.SetServer(appSettings.ServerUrl);
         }
 
+        // Адрес интерфейса тоже восстанавливаем: без него окно просмотра
+        // открывало бы страницу по адресу API и показывало «404».
+        if (!string.IsNullOrWhiteSpace(appSettings.UiUrl))
+        {
+            _api.SetUiUrl(appSettings.UiUrl);
+        }
+
         // Пробуем войти по сохранённому токену: это избавляет оператора
         // от ввода пароля при каждом запуске.
         var saved = tokens.Load();

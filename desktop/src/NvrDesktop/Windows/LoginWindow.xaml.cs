@@ -30,6 +30,7 @@ public partial class LoginWindow : Window
         // Подставляем то, что уже известно: оператору не нужно вводить
         // адрес и логин заново при каждом запуске.
         ServerBox.Text = current.ServerUrl;
+        UiBox.Text = current.UiUrl;
         UserBox.Text = string.IsNullOrWhiteSpace(current.LastUserName)
             ? "admin"
             : current.LastUserName;
@@ -51,6 +52,7 @@ public partial class LoginWindow : Window
     private async void OnLoginClick(object sender, RoutedEventArgs e)
     {
         var server = ServerBox.Text.Trim();
+        var uiAddress = UiBox.Text.Trim();
         var user = UserBox.Text.Trim();
         var password = PassBox.Password;
 
@@ -92,7 +94,23 @@ public partial class LoginWindow : Window
                 return;
             }
 
-            // Вход удался — запоминаем адрес и логин, чтобы не вводить
+            // Подбираем адрес веб-интерфейса. Он может отличаться от
+            // адреса API: страницы интерфейса отдаёт отдельный веб-сервер,
+            // и по адресу API окно просмотра показало бы «404 page not found».
+            //
+            // Если оператор указал адрес вручную, берём его и подбор не
+            // делаем — человек знает свою сеть лучше, чем автопоиск.
+            if (uiAddress.Length > 0)
+            {
+                _api.SetUiUrl(uiAddress);
+                _current.UiUrl = _api.UiUrl;
+            }
+            else if (await _api.DetectUiUrlAsync() is { } detected)
+            {
+                _current.UiUrl = detected;
+            }
+
+            // Вход удался — запоминаем адреса и логин, чтобы не вводить
             // их снова. Пароль не сохраняем ни в каком виде.
             _current.ServerUrl = _api.BaseUrl;
             _current.LastUserName = user;

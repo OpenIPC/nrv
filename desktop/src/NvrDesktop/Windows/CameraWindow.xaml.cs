@@ -181,6 +181,49 @@ public partial class CameraWindow : Window
         // Токен отправляем и сразу после загрузки страницы: она может
         // запросить его сама, но если не успеет — получит без запроса.
         View.CoreWebView2.NavigationCompleted += (_, _) => SendToken();
+
+        // Отдельный обработчик для проверки ответа сервера: он должен
+        // сработать и когда страница не загрузилась.
+        View.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+    }
+
+    /// <summary>
+    /// Проверяет ответ сервера на запрошенную страницу.
+    ///
+    /// Нужно, чтобы отличить «страница не найдена» от других сбоев и
+    /// объяснить причину человеческими словами. Голая страница
+    /// «404 page not found» ничего не говорит оператору: непонятно,
+    /// что именно настроено неверно и как это исправить.
+    /// </summary>
+    private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+    {
+        // 404 означает, что запрошенный путь сервер не знает. Типичная
+        // причина — страница открыта по адресу API вместо адреса
+        // веб-интерфейса: страницы интерфейса живут только внутри
+        // приложения на React, и сервер про них не знает.
+        var notFound = e.HttpStatusCode == 404;
+
+        if (!e.IsSuccess && notFound)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                View.Visibility = Visibility.Collapsed;
+                MessageBox.Show(
+                    this,
+                    "Страница камеры не найдена по адресу:\n" +
+                    $"{_api.StreamPageUrl(CameraId)}\n\n" +
+                    "Обычно это значит, что указан адрес API вместо адреса " +
+                    "веб-интерфейса. Страницы интерфейса отдаёт отдельный " +
+                    "веб-сервер, чаще всего на другом порту.\n\n" +
+                    "Закройте окно и войдите заново — при входе адрес " +
+                    "интерфейса подбирается автоматически. Если подобрать " +
+                    "не удалось, укажите его вручную в файле настроек:\n" +
+                    "%APPDATA%\\NvrDesktop\\settings.json, поле UiUrl.",
+                    "Страница не найдена",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            });
+        }
     }
 
     private void SendToken()

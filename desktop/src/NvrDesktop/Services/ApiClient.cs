@@ -43,17 +43,34 @@ internal sealed class LoginResponse
 /// <summary>
 /// Клиент API сервера NVR.
 ///
-/// Работает напрямую с сервером, а не через прокси веб-интерфейса.
-/// Так удобнее для десктопа: оператор вводит адрес сервера один раз, а
-/// не открывает страницу по конкретному адресу. Заодно исчезает
-/// зависимость от того, какой порт проброшен наружу.
+/// Работает с двумя адресами одного сервера:
+///
+/// — адрес API, куда уходят запросы авторизации и списка камер;
+/// — адрес интерфейса, который открывается в окне просмотра.
+///
+/// Разделение появилось не сразу, а после того как окно камеры показало
+/// «404 page not found». Причина: интерфейс — это приложение на React,
+/// и его страницы существуют только внутри него самого. Запрос к серверу
+/// по адресу /cameras/<id> сервер не понимает и отвечает 404.
+/// В браузере это работает потому, что страницы отдаёт веб-сервер
+/// интерфейса, перенаправляя все пути на единственный index.html.
+///
+/// Чаще всего эти адреса различаются только портом: API на 8080,
+/// интерфейс на 3001 или 80. Поэтому порт интерфейса подбирается
+/// автоматически, а оператор вводит один адрес.
 /// </summary>
 public sealed class ApiClient : IDisposable
 {
     private readonly HttpClient _http;
 
-    /// <summary>Адрес сервера без завершающей косой черты.</summary>
+    /// <summary>Адрес API без завершающей косой черты.</summary>
     public string BaseUrl { get; private set; } = "";
+
+    /// <summary>
+    /// Адрес веб-интерфейса. Отличается от адреса API, если интерфейс
+    /// отдаётся другим портом или отдельным сервером.
+    /// </summary>
+    public string UiUrl { get; private set; } = "";
 
     /// <summary>Текущий токен доступа. Меняется при входе и выходе.</summary>
     public string? Token { get; private set; }
@@ -75,6 +92,10 @@ public sealed class ApiClient : IDisposable
     /// Принимает адрес в любом виде, какой введёт оператор: с указанием
     /// схемы или без неё, с портом или без. Приводим к каноническому
     /// виду, чтобы не заставлять человека помнить про http://.
+    ///
+    /// Адрес интерфейса по умолчанию совпадает с адресом API. Если
+    /// интерфейс отдаётся другим портом, он подбирается отдельно —
+    /// см. <see cref="DetectUiUrlAsync"/>.
     /// </summary>
     public void SetServer(string address)
     {
@@ -82,6 +103,7 @@ public sealed class ApiClient : IDisposable
         if (value.Length == 0)
         {
             BaseUrl = "";
+            UiUrl = "";
             return;
         }
 
@@ -94,7 +116,99 @@ public sealed class ApiClient : IDisposable
         }
 
         BaseUrl = value;
+        UiUrl = value;
         _http.BaseAddress = new Uri(value + "/");
+    }
+
+    /// <summary>
+    /// Указывает адрес интерфейса вручную.
+    /// Используется, когда автоподбор не сработал или адрес нестандартный.
+    /// </summary>
+    public void SetUiUrl(string address)
+    {
+        var value = (address ?? "").Trim().TrimEnd('/');
+        if (value.Length == 0)
+        {
+            UiUrl = BaseUrl;
+            return;
+        }
+
+        if (!value.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            value = "http://" + value;
+        }
+
+        UiUrl = value;
+    }
+
+    /// <summary>
+    /// Подбирает адрес веб-интерфейса, если он отличается от адреса API.
+    ///
+    /// Проверяются типовые порты. Признак найденного интерфейса — ответ
+    /// на корневой путь: API на том же пути отвечает 404, потому что
+    /// страниц не отдаёт.
+    ///
+    /// Возвращает адрес интерфейса или null, если подобрать не удалось.
+    /// </summary>
+    public async Task<string?> DetectUiUrlAsync()
+    {
+        if (string.IsNullOrEmpty(BaseUrl))
+        {
+            return null;
+        }
+
+        // Если по адресу API уже отдаётся интерфейс, искать нечего.
+        if (await LooksLikeUiAsync(BaseUrl))
+        {
+            UiUrl = BaseUrl;
+            return BaseUrl;
+        }
+
+        var uri = new Uri(BaseUrl);
+        var host = uri.Host;
+
+        // Порты, на которых обычно стоит интерфейс. 3001 — значение по
+        // умолчанию в этом проекте, 80 и 443 — обычные для веб-сервера.
+        var candidates = new[]
+        {
+            $"{uri.Scheme}://{host}:3001",
+            $"{uri.Scheme}://{host}",
+            $"{uri.Scheme}://{host}:80",
+            $"{uri.Scheme}://{host}:8081",
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (await LooksLikeUiAsync(candidate))
+            {
+                UiUrl = candidate;
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Проверяет, отдаёт ли адрес веб-интерфейс.
+    ///
+    /// Смотрим на корневой путь: у интерфейса там страница входа, у API —
+    /// ответ «не найдено». Успешный ответ и означает, что это интерфейс.
+    /// </summary>
+    private async Task<bool> LooksLikeUiAsync(string baseUrl)
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            var response = await client.GetAsync(baseUrl.TrimEnd('/') + "/");
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            // Адрес недоступен — значит, интерфейса там нет.
+            return false;
+        }
     }
 
     /// <summary>
@@ -201,17 +315,26 @@ public sealed class ApiClient : IDisposable
     }
 
     /// <summary>
-    /// Возвращает ссылку на поток для показа в окне камеры.
+    /// Возвращает адрес страницы камеры в веб-интерфейсе.
     ///
-    /// Отдаём относительный путь на сервере: страница живёт внутри окна
-    /// и обращается к серверу напрямую, поэтому полный адрес ей не нужен.
+    /// Ведёт на адрес интерфейса, а не API. Страницы интерфейса
+    /// существуют только внутри приложения на React: сервер API про
+    /// путь /cameras/&lt;id&gt; ничего не знает и отвечает «404 page not found».
     /// </summary>
     public string StreamPageUrl(string cameraId, string kind = "live")
-        => $"{BaseUrl}/cameras/{cameraId}?view={kind}&desktop=1";
+        => $"{EffectiveUiUrl}/cameras/{cameraId}?view={kind}&desktop=1";
 
     /// <summary>Адрес страницы входа веб-интерфейса.</summary>
     public string LoginPageUrl()
-        => $"{BaseUrl}/login";
+        => $"{EffectiveUiUrl}/login";
+
+    /// <summary>
+    /// Адрес интерфейса. Если он не задан или не определён, используем
+    /// адрес API: так приложение хотя бы попробует открыть страницу,
+    /// а не построит заведомо неверный адрес.
+    /// </summary>
+    private string EffectiveUiUrl
+        => string.IsNullOrEmpty(UiUrl) ? BaseUrl : UiUrl;
 
     public void Dispose()
     {
