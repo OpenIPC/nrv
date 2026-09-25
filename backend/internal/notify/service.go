@@ -202,22 +202,26 @@ func (s *Service) send(ctx context.Context, ev Event) {
 		return
 	}
 
-	cfg := settings.Notifications.Telegram
-	rule := RuleFromConfig(cfg)
-
-	if d := rule.Decide(ev); !d.Send {
-		// Причину отказа пишем в журнал: без неё оператор не поймёт,
-		// почему при включённых уведомлениях ничего не приходит.
-		s.writeLog(ctx, domain.NotificationLogRecord{
-			Channel:    "telegram",
-			EventType:  ev.Type,
-			CameraID:   &ev.CameraID,
-			CameraName: ev.CameraName,
-			DedupKey:   DedupKey(ev),
-			Status:     domain.NotifyStatusSkip,
-			Error:      d.Reason,
-		})
-		return
+	// Отказ Telegram не должен отменять отправку в MAX, поэтому причину
+	// отказа только записываем в журнал и идём дальше.
+	//
+	// Раньше здесь стоял return: если Telegram выключен или событие не
+	// прошло по фильтру, функция завершалась, и до MAX дело не доходило.
+	// В журнале при этом были только записи telegram — выглядело так,
+	// будто канал MAX вообще не настроен.
+	tgCfg := settings.Notifications.Telegram
+	if tgCfg.Enabled {
+		if d := RuleFromConfig(tgCfg).Decide(ev); !d.Send {
+			s.writeLog(ctx, domain.NotificationLogRecord{
+				Channel:    "telegram",
+				EventType:  ev.Type,
+				CameraID:   &ev.CameraID,
+				CameraName: ev.CameraName,
+				DedupKey:   DedupKey(ev),
+				Status:     domain.NotifyStatusSkip,
+				Error:      d.Reason,
+			})
+		}
 	}
 
 	key := DedupKey(ev)
@@ -417,9 +421,9 @@ func (s *Service) client(transport, proxyURL string) (*Telegram, error) {
 
 // TestResult — итог проверки настроек.
 type TestResult struct {
-	OK      bool   `json:"ok"`
+	OK       bool   `json:"ok"`
 	ChatName string `json:"chat_name,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // Test проверяет настройки Telegram и отправляет пробное сообщение.

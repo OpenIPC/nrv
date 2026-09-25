@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // maxAPIBase — адрес MAX Bot API. Вынесен в переменную для подмены в тестах.
@@ -82,6 +84,25 @@ func (e *maxError) Error() string {
 		return "MAX вернул ошибку: " + e.Code
 	}
 	return "неизвестная ошибка MAX"
+}
+
+// NotReadyError — вложение ещё не обработано сервером MAX.
+//
+// Отдельный тип нужен, чтобы вызывающий код повторил отправку: MAX
+// принимает загруженный файл не сразу, и первая попытка отправить его
+// в сообщении почти всегда отклоняется. Без повтора оператор видел бы
+// уведомление без видео и недоумевал, почему.
+type NotReadyError struct {
+	Inner error
+}
+
+func (e *NotReadyError) Error() string { return e.Inner.Error() }
+func (e *NotReadyError) Unwrap() error { return e.Inner }
+
+// isNotReady проверяет, что ошибка означает «файл ещё обрабатывается».
+func isNotReady(err error) bool {
+	var ready *NotReadyError
+	return errors.As(err, &ready)
 }
 
 // SendMessage отправляет текстовое сообщение.
@@ -281,24 +302,54 @@ func (m *Max) send(ctx context.Context, token, chatID string, payload map[string
 	}
 
 	endpoint := fmt.Sprintf("%s/messages?%s=%s", maxAPIBase, param, url.QueryEscape(chatID))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	m.authorize(req, token)
 
-	resp, err := m.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("нет связи с MAX: %w", err)
-	}
-	defer resp.Body.Close()
+	// MAX принимает загруженный файл не сразу: первая попытка отправить
+	// его в сообщении отклоняется с «файл ещё обрабатывается». Повторяем
+	// с растущей паузой — обычно хватает одного-двух повторов.
+	var lastErr error
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return fmt.Errorf("не удалось прочитать ответ MAX: %w", err)
+	for attempt := 0; attempt < maxRetryAttempts; attempt++ {
+		if attempt > 0 && maxRetryDelay > 0 {
+			select {
+			case <-time.After(time.Duration(attempt) * maxRetryDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		m.authorize(req, token)
+
+		resp, err := m.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("нет связи с MAX: %w", err)
+		}
+
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+
+		if readErr != nil {
+			return fmt.Errorf("не удалось прочитать ответ MAX: %w", readErr)
+		}
+
+		lastErr = m.checkError(resp.StatusCode, respBody)
+		if lastErr == nil {
+			return nil
+		}
+		if !isNotReady(lastErr) {
+			return lastErr
+		}
+
+		log.Debug().Int("попытка", attempt+1).Msg("вложение ещё не готово в MAX, повтор")
 	}
-	return m.checkError(resp.StatusCode, respBody)
+
+	// Все попытки исчерпаны: сообщение с файлом отправить не удалось, но
+	// отдаём понятную ошибку, а не молчание.
+	return fmt.Errorf("не удалось отправить вложение в MAX за %d попыток: %w", maxRetryAttempts, lastErr)
 }
 
 // authorize подставляет токен в заголовок.
@@ -309,6 +360,19 @@ func (m *Max) authorize(req *http.Request, token string) {
 	req.Header.Set("Authorization", strings.TrimSpace(token))
 }
 
+// maxRetryDelay — базовая пауза между повторами отправки вложения.
+//
+// Переменная, а не константа: тесты подменяют её нулём, чтобы проверка
+// повторов не занимала реальные секунды.
+var maxRetryDelay = 2 * time.Second
+
+// maxRetryAttempts — сколько раз пробовать отправить вложение.
+//
+// MAX обрабатывает загруженное видео не мгновенно, и первая попытка
+// почти всегда отклоняется. Пяти попыток с растущей паузой хватает
+// с запасом, а дольше держать событие в памяти бессмысленно.
+var maxRetryAttempts = 5
+
 // checkError разбирает ответ на ошибку.
 func (m *Max) checkError(status int, body []byte) error {
 	if status >= 200 && status < 300 {
@@ -317,6 +381,11 @@ func (m *Max) checkError(status int, body []byte) error {
 
 	var apiErr maxError
 	if err := json.Unmarshal(body, &apiErr); err == nil && (apiErr.Code != "" || apiErr.Message != "") {
+		// Отдельный тип для «вложение не готово»: вызывающий код повторит
+		// отправку, а не покажет оператору ошибку, которая исчезнет сама.
+		if apiErr.Code == "attachment.not.ready" {
+			return &NotReadyError{Inner: &apiErr}
+		}
 		return &apiErr
 	}
 

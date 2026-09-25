@@ -27,10 +27,10 @@ type channelSender interface {
 
 // telegramChannel — доставка в Telegram.
 type telegramChannel struct {
-	client  *Telegram
-	token   string
-	chatID  string
-	rule    Rule
+	client *Telegram
+	token  string
+	chatID string
+	rule   Rule
 }
 
 func (c telegramChannel) send(ctx context.Context, ev Event, text string, clipData []byte, clipMB int) error {

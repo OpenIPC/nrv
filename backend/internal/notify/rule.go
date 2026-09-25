@@ -23,7 +23,7 @@ type Event struct {
 	// Detail — расшифровка: номер машины, имя человека, класс объекта.
 	Detail string
 	// Class — класс объекта, если событие пришло от детектора объектов.
-	Class string
+	Class      string
 	Confidence float64
 	Time       time.Time
 	// Snapshot — JPEG снимка события. Может быть пустым.
