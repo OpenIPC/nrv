@@ -3,6 +3,7 @@ import { useAuth } from './hooks/useApi'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
+import GridPage from './pages/GridPage'
 import CamerasPage from './pages/CamerasPage'
 import CameraDetailPage from './pages/CameraDetailPage'
 import ScannerPage from './pages/ScannerPage'
@@ -35,6 +36,7 @@ export default function App() {
             <Layout>
               <Routes>
                 <Route path="/" element={<DashboardPage />} />
+                <Route path="/grid" element={<GridPage />} />
                 <Route path="/cameras" element={<CamerasPage />} />
                 <Route path="/cameras/:id" element={<CameraDetailPage />} />
                 <Route path="/scanner" element={<ScannerPage />} />

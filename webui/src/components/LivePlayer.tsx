@@ -20,6 +20,26 @@ interface LivePlayerProps {
   volume?: number
   /** Обработчик недоступности звука — камера без микрофона */
   onAudioUnavailable?: () => void
+  /**
+   * Показывать ли элементы управления плеера.
+   *
+   * В сетке камер панель управления мешает: ячейка маленькая, и кнопки
+   * занимают её заметную часть. Отключаем их там, а в развёрнутом
+   * просмотре включаем обратно.
+   */
+  showControls?: boolean
+  /**
+   * Не создавать WebRTC-соединение, использовать только HLS.
+   *
+   * В сетке одновременно играют десятки потоков. WebRTC устанавливает
+   * отдельное соединение на каждую камеру, и на 16-25 ячейках это даёт
+   * заметную нагрузку на сеть и процессор. HLS в мелких ячейках
+   * выглядит не хуже: изображение там и так небольшое.
+   *
+   * WebRTC включается при развороте камеры на весь экран, где важна
+   * задержка и качество.
+   */
+  preferHls?: boolean
 }
 
 export default function LivePlayer({
@@ -32,6 +52,8 @@ export default function LivePlayer({
   audioUrl,
   volume = 0.7,
   onAudioUnavailable,
+  showControls = true,
+  preferHls = false,
 }: LivePlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   // Элемент для звука: отдельный <video>, скрытый визуально (см. JSX).
@@ -281,7 +303,9 @@ export default function LivePlayer({
       setStatus('connecting')
       setTransport(null)
 
-      if (webrtcUrl) {
+      // В сетке WebRTC не используем: десятки одновременных соединений
+      // перегружают сеть, а в мелкой ячейке разницы не видно.
+      if (webrtcUrl && !preferHls) {
         const ok = await initWebRTC(video)
         if (cancelled) return
         if (ok) {
@@ -311,7 +335,7 @@ export default function LivePlayer({
         videoRef.current.srcObject = null
       }
     }
-  }, [webrtcUrl, initWebRTC, initHls])
+  }, [webrtcUrl, preferHls, initWebRTC, initHls])
 
   /**
    * Подключает отдельный аудиопоток.
@@ -471,8 +495,12 @@ export default function LivePlayer({
       {/* Метка транспорта.
           Оператору полезно видеть, каким каналом идёт поток: WebRTC даёт
           задержку меньше секунды, HLS — несколько секунд, и по одному
-          виду картинки отличить их нельзя. */}
-      {status === 'playing' && transport && (
+          виду картинки отличить их нельзя.
+
+          В сетке метка не показывается: там в правом верхнем углу стоит
+          кнопка разворота, и метка перекрывала бы её — щелчок попадал бы
+          в метку, а не в кнопку. */}
+      {showControls && status === 'playing' && transport && (
         <span
           title={
             transport === 'webrtc'
@@ -481,6 +509,9 @@ export default function LivePlayer({
           }
           style={{
             position: 'absolute', top: 8, right: 8, zIndex: 5,
+            // Щелчки должны проходить насквозь: метка информационная,
+            // и перекрывать управление под собой она не должна.
+            pointerEvents: 'none',
             padding: '2px 8px', borderRadius: 4, fontSize: 11,
             fontWeight: 600, letterSpacing: 0.5,
             background: transport === 'webrtc' ? 'rgba(52,199,89,0.85)' : 'rgba(255,159,10,0.85)',
@@ -495,7 +526,7 @@ export default function LivePlayer({
         className="video-player"
         poster={poster}
         muted
-        controls
+        controls={showControls}
         playsInline
         style={{ width: '100%', height: '100%', borderRadius: 'var(--radius)', background: '#000' }}
       />

@@ -2,11 +2,15 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useApi'
 import {
   LayoutDashboard, Video, AlertTriangle, HardDrive,
-  Shield, LogOut, Camera, Search, Settings, ScanFace, Volume2, Share2
+  Shield, LogOut, Camera, Search, Settings, ScanFace, Volume2, Share2,
+  LayoutGrid
 } from 'lucide-react'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Дашборд' },
+  // Сетка идёт сразу после дашборда и перед списком камер: это основной
+  // режим наблюдения, к нему обращаются чаще всего.
+  { to: '/grid', icon: LayoutGrid, label: 'Сетка' },
   { to: '/cameras', icon: Video, label: 'Камеры' },
   { to: '/scanner', icon: Search, label: 'Сканер' },
   { to: '/events', icon: AlertTriangle, label: 'События' },
