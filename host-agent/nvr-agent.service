@@ -1,0 +1,40 @@
+[Unit]
+Description=NVR Host Agent — управление временем и сетью
+Documentation=https://github.com/himik19872/OpenIPC-NRV
+# Агент нужен для настроек времени и сети, но его падение не должно
+# мешать остальным службам: он ничего не обслуживает напрямую.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/nvr-agent/agent.py
+Restart=always
+RestartSec=5
+
+# Агент работает от root, потому что меняет настройки системы.
+# Привилегии ограничены настолько, насколько это возможно при такой задаче.
+User=root
+
+# Файловая система: запись нужна только в каталог резервных копий
+# и в каталог сокета. Остальное — только чтение.
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelTunables=no
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectSystem=full
+ReadWritePaths=/var/lib/nvr-agent /run/nvr-agent /etc/netplan /etc/systemd /etc/chrony
+ReadOnlyPaths=/etc/timezone
+
+# Сокет лежит в этом каталоге, и он же монтируется в контейнер бэкенда.
+# Путь задаём явно: у systemd есть свой RuntimeDirectory в /run, но он
+# живёт в памяти и теряется при перезагрузке, а нам нужен постоянный
+# каталог, который виден из контейнера.
+Environment=NVR_AGENT_SOCKET=/var/lib/nvr-agent/socket/agent.sock
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
