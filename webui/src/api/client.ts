@@ -895,6 +895,38 @@ export interface NotificationSettings {
   telegram: TelegramConfig
 }
 
+/**
+ * Общие поля каналов уведомлений.
+ *
+ * В API они лежат внутри настроек каждого канала, поэтому вынесены
+ * в отдельный тип: форма на странице одна и та же, различается только
+ * подключение к сервису.
+ */
+export interface CommonChannelFields {
+  enabled: boolean
+  send_snapshot: boolean
+  send_clip: boolean
+  clip_max_mb: number
+  events: string[]
+  cameras: string[]
+  min_confidence: number
+  quiet_hours_enabled: boolean
+  quiet_hours_from: string
+  quiet_hours_to: string
+  repeat_minutes: number
+}
+
+/** MaxConfig — канал уведомлений в мессенджере MAX. */
+export interface MaxConfig extends CommonChannelFields {
+  /** Токен бота из настроек чат-бота в MAX. Сервер отдаёт его маской. */
+  bot_token: string
+  /**
+   * id чата или канала. Для личного диалога — с префиксом `u`,
+   * потому что MAX различает chat_id и user_id.
+   */
+  chat_id: string
+}
+
 /** Результат проверки связи с Telegram. */
 export interface NotificationTestResult {
   ok: boolean
@@ -938,6 +970,18 @@ export const notificationsAPI = {
 
   cleanupLog: (days = 30) =>
     api.delete<{ removed: number }>('/settings/notifications/log', { params: { days } }),
+
+  // --- Канал MAX ---
+  // Отдельные методы: у MAX свои токен и chat_id, а прокси не нужен —
+  // сервис доступен из России напрямую.
+  getMax: () => api.get<MaxConfig>('/settings/notifications/max'),
+  updateMax: (max: MaxConfig) =>
+    api.patch<MaxConfig>('/settings/notifications/max', { max }),
+  testMax: (max: MaxConfig, withSnapshot = true) =>
+    api.post<NotificationTestResult>('/settings/notifications/max/test', {
+      max,
+      with_snapshot: withSnapshot,
+    }, { timeout: 90000 }),
 }
 
 // --- Распознавание лиц и автомобильных номеров ---

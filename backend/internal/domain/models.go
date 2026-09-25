@@ -286,6 +286,74 @@ const (
 // только запутали бы.
 type NotificationSettings struct {
 	Telegram TelegramConfig `json:"telegram"`
+	Max      MaxConfig      `json:"max"`
+}
+
+// CommonChannelConfig — поля, общие для каналов уведомлений.
+//
+// Вынесены отдельно, чтобы правила отбора событий совпадали во всех
+// каналах: оператор настраивает «о чём сообщать» один раз и ожидает
+// одинакового поведения от Telegram и MAX.
+type CommonChannelConfig struct {
+	Enabled bool `json:"enabled"`
+	// SendSnapshot и SendClip — какие вложения прикладывать.
+	SendSnapshot bool `json:"send_snapshot"`
+	SendClip     bool `json:"send_clip"`
+	// ClipMaxMB — предел размера клипа. Мессенджеры отказывают целиком
+	// при превышении, а не отправляют сообщение без видео.
+	ClipMaxMB int `json:"clip_max_mb"`
+	// Events — типы событий. Пустой список означает «ничего не отправлять»:
+	// молчаливое включение всего подряд завалило бы оператора.
+	Events []string `json:"events"`
+	// Cameras — камеры-источники. Пустой список означает «все камеры».
+	Cameras []uuid.UUID `json:"cameras"`
+	// MinConfidence отсекает слабые срабатывания детектора.
+	MinConfidence float64 `json:"min_confidence"`
+	// QuietHours — период молчания: ночные тревоги без нужды будят,
+	// но отключить их совсем нельзя — поэтому окно, а не выключатель.
+	QuietHoursEnabled bool   `json:"quiet_hours_enabled"`
+	QuietHoursFrom    string `json:"quiet_hours_from"`
+	QuietHoursTo      string `json:"quiet_hours_to"`
+	// RepeatMinutes — пауза между сообщениями об одном и том же.
+	RepeatMinutes int `json:"repeat_minutes"`
+}
+
+// MaxConfig — канал уведомлений в мессенджере MAX.
+//
+type MaxConfig struct {
+	CommonChannelConfig
+	// BotToken — токен бота из настроек чат-бота в MAX. Секрет.
+	BotToken string `json:"bot_token"`
+	// ChatID — id чата или канала. Для личного диалога допускается
+	// значение с префиксом «u»: MAX различает chat_id и user_id.
+	ChatID string `json:"chat_id"`
+	// UpdatedAt заполняется при чтении из БД.
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+// Common возвращает общие поля канала MAX.
+func (c MaxConfig) Common() CommonChannelConfig {
+	return c.CommonChannelConfig
+}
+
+// Common возвращает общие поля канала Telegram.
+//
+// Нужен для единого отбора событий: сервис уведомлений работает
+// с общим набором полей и не разбирает особенности каждого канала.
+func (c TelegramConfig) Common() CommonChannelConfig {
+	return CommonChannelConfig{
+		Enabled:           c.Enabled,
+		SendSnapshot:      c.SendSnapshot,
+		SendClip:          c.SendClip,
+		ClipMaxMB:         c.ClipMaxMB,
+		Events:            c.Events,
+		Cameras:           c.Cameras,
+		MinConfidence:     c.MinConfidence,
+		QuietHoursEnabled: c.QuietHoursEnabled,
+		QuietHoursFrom:    c.QuietHoursFrom,
+		QuietHoursTo:      c.QuietHoursTo,
+		RepeatMinutes:     c.RepeatMinutes,
+	}
 }
 
 // TelegramConfig — канал уведомлений в Telegram.

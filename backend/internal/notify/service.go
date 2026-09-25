@@ -42,10 +42,12 @@ type Service struct {
 	files    FileReader
 	logger   Logger
 
-	// клиенты кэшируются по параметрам транспорта: настройка читается
-	// на каждое событие, а новое TLS-соединение каждый раз недопустимо дорого.
+	// Клиенты кэшируются: настройка читается на каждое событие, а новое
+	// TLS-соединение каждый раз недопустимо дорого. Клиент Telegram —
+	// по параметрам транспорта, клиент MAX — один, прокси у него нет.
 	mu      sync.Mutex
 	clients map[string]*Telegram
+	max     *Max
 
 	// queue ограничивает число одновременных отправок.
 	queue chan struct{}
@@ -77,7 +79,7 @@ func NewService(settings SettingsSource, files FileReader, logger Logger) *Servi
 		logger:   logger,
 		clients:  make(map[string]*Telegram),
 		pending:  make(map[string]pendingEvent),
-		// Больше 8 одновременных отправок не нужно: Telegram ограничивает
+		// Больше 8 одновременных отправок не нужно: мессенджеры ограничивают
 		// частоту, а очередь защищает от роста памяти при всплеске событий.
 		queue: make(chan struct{}, 8),
 	}
@@ -90,33 +92,33 @@ func (s *Service) Notify(ctx context.Context, ev Event) {
 
 // ClipExpected сообщает, стоит ли ждать клип по событию этой камеры.
 //
-// Проверяются три условия: включён ли канал, включена ли отправка видео
-// и пишет ли камера по событиям. Если хотя бы одно не выполнено, клипа
-// не будет, и задерживать уведомление на полторы минуты незачем.
+// Проверяются включённость канала и отправка видео: если видео не шлётся
+// ни в один канал, клипа в уведомлении не будет, и задерживать его
+// на полторы минуты незачем.
 func (s *Service) ClipExpected(ctx context.Context, cameraID uuid.UUID) bool {
 	settings, err := s.settings.GetServerSettings(ctx)
 	if err != nil {
 		return false
 	}
-	cfg := settings.Notifications.Telegram
-	if !cfg.Enabled || !cfg.SendClip {
-		return false
-	}
 
-	// Список камер из настроек: пустой означает «все камеры».
-	if len(cfg.Cameras) > 0 {
-		found := false
+	for _, cfg := range []domain.CommonChannelConfig{
+		settings.Notifications.Telegram.Common(),
+		settings.Notifications.Max.Common(),
+	} {
+		if !cfg.Enabled || !cfg.SendClip {
+			continue
+		}
+		// Список камер из настроек: пустой означает «все камеры».
+		if len(cfg.Cameras) == 0 {
+			return true
+		}
 		for _, c := range cfg.Cameras {
 			if c == cameraID {
-				found = true
-				break
+				return true
 			}
 		}
-		if !found {
-			return false
-		}
 	}
-	return true
+	return false
 }
 
 // NotifyWaitingClip ставит событие в ожидание клипа.
@@ -220,55 +222,134 @@ func (s *Service) send(ctx context.Context, ev Event) {
 
 	key := DedupKey(ev)
 
+	// Один и тот же клип нужен обоим каналам: читаем его из хранилища
+	// один раз, а не по разу на канал.
+	clipData, clipMB, clipErr := s.readClip(ctx, ev, settings)
+
+	// Каналы проверяются независимо: выключенный Telegram не должен
+	// мешать отправке в MAX, и наоборот.
+	s.deliver(ctx, ev, key, "telegram", RuleFromConfig(settings.Notifications.Telegram), clipData, clipMB, clipErr,
+		settings.Notifications.Telegram.Common(),
+		func(rule Rule) channelSender {
+			client, err := s.client(settings.Notifications.Telegram.Transport, settings.Notifications.Telegram.ProxyURL)
+			if err != nil {
+				return errChannel{err: err}
+			}
+			return telegramChannel{
+				client: client,
+				token:  settings.Notifications.Telegram.BotToken,
+				chatID: settings.Notifications.Telegram.ChatID,
+				rule:   rule,
+			}
+		},
+		buildMessage,
+	)
+
+	s.deliver(ctx, ev, key, "max", RuleFromMax(settings.Notifications.Max), clipData, clipMB, clipErr,
+		settings.Notifications.Max.Common(),
+		func(rule Rule) channelSender {
+			return maxChannel{
+				client: s.maxClient(),
+				token:  settings.Notifications.Max.BotToken,
+				chatID: settings.Notifications.Max.ChatID,
+				rule:   rule,
+			}
+		},
+		buildMaxMessage,
+	)
+}
+
+// readClip читает клип из хранилища с учётом общего предела размера.
+//
+// Предел берётся максимальный из каналов: если он не подошёл одному,
+// это выяснится при его собственной отправке, и в журнал попадёт причина.
+// Загружать файл дважды ради разных пределов было бы расточительно.
+func (s *Service) readClip(ctx context.Context, ev Event, settings *domain.ServerSettings) ([]byte, int, error) {
+	if ev.ClipPath == "" {
+		return nil, 0, nil
+	}
+
+	data, size, err := s.files.ReadStoredFile(ctx, ev.ClipPath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("не удалось прочитать клип: %w", err)
+	}
+
+	limitMB := max(
+		settings.Notifications.Telegram.ClipMaxMB,
+		settings.Notifications.Max.ClipMaxMB,
+	)
+	if limitMB <= 0 {
+		limitMB = 45
+	}
+
+	sizeMB := int(size >> 20)
+	// Превышение лимита мессенджер воспринимает как отказ всего запроса,
+	// а не как «отправлено без видео», поэтому большой клип не отправляем.
+	if sizeMB > limitMB {
+		return nil, sizeMB, fmt.Errorf("клип %d МБ превышает лимит %d МБ", sizeMB, limitMB)
+	}
+	return data, sizeMB, nil
+}
+
+// deliver отправляет событие в один канал.
+//
+// Общая часть для всех каналов: проверка правила, отсечение повторов,
+// журнал. Отличия каналов спрятаны за фабрикой sender и сборкой текста.
+func (s *Service) deliver(
+	ctx context.Context,
+	ev Event,
+	key, channelName string,
+	rule Rule,
+	clipData []byte, clipMB int, clipErr error,
+	common domain.CommonChannelConfig,
+	makeSender func(Rule) channelSender,
+	buildText func(Event) string,
+) {
+	if !common.Enabled {
+		return // выключенный канал не пишем в журнал: это не отказ
+	}
+
+	if d := rule.Decide(ev); !d.Send {
+		// Причину отказа пишем в журнал: без неё оператор не поймёт,
+		// почему при включённых уведомлениях ничего не приходит.
+		s.writeLog(ctx, domain.NotificationLogRecord{
+			Channel:    channelName,
+			EventType:  ev.Type,
+			CameraID:   &ev.CameraID,
+			CameraName: ev.CameraName,
+			DedupKey:   key,
+			Status:     domain.NotifyStatusSkip,
+			Error:      d.Reason,
+		})
+		return
+	}
+
 	// Отсечение повторов: за проезжающую машину детектор срабатывает
 	// много раз, и без паузы оператор получил бы десяток сообщений.
 	if rule.RepeatMinutes > 0 {
 		since := time.Now().Add(-time.Duration(rule.RepeatMinutes) * time.Minute)
-		recent, err := s.logger.HasRecentNotification(ctx, "telegram", key, since)
-		if err == nil && recent {
+		if recent, err := s.logger.HasRecentNotification(ctx, channelName, key, since); err == nil && recent {
 			return
 		}
 	}
 
-	client, err := s.client(cfg.Transport, cfg.ProxyURL)
-	if err != nil {
-		s.fail(ctx, ev, err)
+	sender := makeSender(rule)
+	text := buildText(ev)
+
+	// Ошибка чтения клипа не отменяет уведомление: снимок и текст важнее,
+	// а причина попадает в журнал.
+	if clipErr != nil {
+		log.Warn().Err(clipErr).Str("channel", channelName).
+			Str("clip", ev.ClipPath).Msg("клип не отправлен")
+	}
+
+	if err := sender.send(ctx, ev, text, clipData, clipMB); err != nil {
+		s.fail(ctx, channelName, ev, key, err)
 		return
 	}
 
-	text := buildMessage(ev)
-	caption := text
-
-	// 1. Снимок — самое информативное вложение, поэтому он первым.
-	//    Если снимка нет, отправим текстом, а не потеряем сообщение.
-	var sentMedia bool
-	if cfg.SendSnapshot && len(ev.Snapshot) > 0 {
-		if err := client.SendPhoto(ctx, cfg.BotToken, cfg.ChatID, ev.Snapshot, caption); err != nil {
-			log.Warn().Err(err).Msg("не удалось отправить снимок, отправляю текстом")
-		} else {
-			sentMedia = true
-		}
-	}
-
-	// 2. Клип.
-	if cfg.SendClip && ev.ClipPath != "" {
-		if err := s.sendClip(ctx, client, cfg, ev, caption); err != nil {
-			log.Warn().Err(err).Str("clip", ev.ClipPath).Msg("клип не отправлен")
-		} else {
-			sentMedia = true
-		}
-	}
-
-	// 3. Текст — если ни одно вложение не ушло.
-	if !sentMedia {
-		if err := client.SendMessage(ctx, cfg.BotToken, cfg.ChatID, text); err != nil {
-			s.fail(ctx, ev, err)
-			return
-		}
-	}
-
 	s.writeLog(ctx, domain.NotificationLogRecord{
-		Channel:    "telegram",
+		Channel:    channelName,
 		EventType:  ev.Type,
 		CameraID:   &ev.CameraID,
 		CameraName: ev.CameraName,
@@ -278,52 +359,29 @@ func (s *Service) send(ctx context.Context, ev Event) {
 	})
 }
 
-// sendClip отправляет видео с ограничениями по размеру.
-func (s *Service) sendClip(ctx context.Context, client *Telegram, cfg domain.TelegramConfig, ev Event, caption string) error {
-	data, size, err := s.files.ReadStoredFile(ctx, ev.ClipPath)
-	if err != nil {
-		return fmt.Errorf("не удалось прочитать клип: %w", err)
-	}
+// errChannel — заглушка канала, который не удалось настроить.
+//
+// Нужна, чтобы ошибка создания клиента (например, неверный адрес прокси)
+// попала в журнал и была видна оператору.
+type errChannel struct{ err error }
 
-	limitMB := cfg.ClipMaxMB
-	if limitMB <= 0 {
-		limitMB = 45
-	}
-	limit := int64(limitMB) << 20
-
-	// Превышение лимита Telegram приводит не к «отправке без видео»,
-	// а к отказу всего запроса, поэтому большой клип пропускаем осознанно.
-	if size > limit {
-		return fmt.Errorf("клип %d МБ превышает лимит %d МБ", size>>20, limitMB)
-	}
-
-	// Основной путь — видео: оператор смотрит его прямо в переписке.
-	if err := client.SendVideo(ctx, cfg.BotToken, cfg.ChatID, data, caption); err == nil {
-		return nil
-	} else {
-		// Как video Telegram перекодирует и ограничивает сильнее,
-		// поэтому пробуем документом: он проходит чаще.
-		name := fmt.Sprintf("%s_%s.mp4", ev.CameraName, ev.Time.Format("2006-01-02_15-04-05"))
-		if errDoc := client.SendDocument(ctx, cfg.BotToken, cfg.ChatID, data, name, caption); errDoc != nil {
-			return fmt.Errorf("видео: %v; документом: %w", err, errDoc)
-		}
-		return nil
-	}
-}
+func (c errChannel) send(context.Context, Event, string, []byte, int) error { return c.err }
+func (c errChannel) test(context.Context, bool, []byte) (string, error)     { return "", c.err }
 
 // fail пишет неудачную отправку в журнал.
-func (s *Service) fail(ctx context.Context, ev Event, err error) {
+func (s *Service) fail(ctx context.Context, channelName string, ev Event, key string, err error) {
 	log.Warn().Err(err).
+		Str("channel", channelName).
 		Str("camera", ev.CameraName).
 		Str("event", ev.Type).
 		Msg("уведомление не отправлено")
 
 	s.writeLog(ctx, domain.NotificationLogRecord{
-		Channel:    "telegram",
+		Channel:    channelName,
 		EventType:  ev.Type,
 		CameraID:   &ev.CameraID,
 		CameraName: ev.CameraName,
-		DedupKey:   DedupKey(ev),
+		DedupKey:   key,
 		Status:     domain.NotifyStatusFailed,
 		Error:      err.Error(),
 	})
@@ -364,7 +422,7 @@ type TestResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// Test проверяет настройки и отправляет пробное сообщение.
+// Test проверяет настройки Telegram и отправляет пробное сообщение.
 //
 // Проверка идёт в два шага: сначала getChat подтверждает, что бот видит
 // чат, потом реальное сообщение. Одного сообщения мало — ошибка прав
@@ -375,43 +433,24 @@ func (s *Service) Test(ctx context.Context, cfg domain.TelegramConfig, withSnaps
 		return TestResult{Error: err.Error()}
 	}
 
+	rule := RuleFromConfig(cfg)
+	// Транспорт нужен только для текста сообщения о проверке.
+	rule.transport = cfg.Transport
+	rule.proxyURL = cfg.ProxyURL
+
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	info, err := client.GetChat(ctx, cfg.BotToken, cfg.ChatID)
+	ch := telegramChannel{client: client, token: cfg.BotToken, chatID: cfg.ChatID, rule: rule}
+	chatName, err := ch.test(ctx, withSnapshot, testSnapshot())
 	if err != nil {
-		return TestResult{Error: err.Error()}
-	}
-
-	text := fmt.Sprintf(
-		"<b>Проверка связи</b>\n\nNVR успешно настроен.\nЧат: <b>%s</b>\nТранспорт: %s\nВремя: %s",
-		html.EscapeString(info.Title),
-		transportLabel(cfg.Transport, cfg.ProxyURL),
-		time.Now().Format("02.01.2006 15:04:05"),
-	)
-
-	if withSnapshot {
-		// Пробный снимок рисуем сами: при проверке настроек реального
-		// события нет, а убедиться нужно именно в отправке вложения.
-		if err := client.SendPhoto(ctx, cfg.BotToken, cfg.ChatID, testSnapshot(), text); err != nil {
-			// Вложение не прошло, но связь есть — сообщаем об этом честно,
-			// а не выдаём полный отказ.
-			if errText := client.SendMessage(ctx, cfg.BotToken, cfg.ChatID, text); errText == nil {
-				return TestResult{
-					OK:       true,
-					ChatName: info.Title,
-					Error:    "связь есть, но снимок отправить не удалось: " + err.Error(),
-				}
-			}
-			return TestResult{Error: err.Error()}
+		// Частичный успех: связь есть, но вложение не прошло.
+		if chatName != "" {
+			return TestResult{OK: true, ChatName: chatName, Error: err.Error()}
 		}
-		return TestResult{OK: true, ChatName: info.Title}
-	}
-
-	if err := client.SendMessage(ctx, cfg.BotToken, cfg.ChatID, text); err != nil {
 		return TestResult{Error: err.Error()}
 	}
-	return TestResult{OK: true, ChatName: info.Title}
+	return TestResult{OK: true, ChatName: chatName}
 }
 
 // transportLabel описывает транспорт для сообщения.
@@ -431,7 +470,7 @@ func maskProxy(raw string) string {
 	return "***@" + raw[at+1:]
 }
 
-// buildMessage собирает текст уведомления.
+// buildMessage собирает текст уведомления для Telegram.
 //
 // Без ссылки на архив: сервер обычно доступен только в локальной сети,
 // и ссылка в Telegram оказалась бы нерабочей. Оператор откроет запись

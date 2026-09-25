@@ -258,6 +258,12 @@ func (r *DetectionSettingsRepo) GetServerSettings(ctx context.Context) (*domain.
 			if err := json.Unmarshal(raw, &out.Notifications); err != nil {
 				return nil, fmt.Errorf("decode notifications settings: %w", err)
 			}
+		case "notifications_max":
+			// Канал MAX лежит отдельным ключом: у него свои токен и chat_id,
+			// а общие правила отбора событий совпадают с Telegram.
+			if err := json.Unmarshal(raw, &out.Notifications.Max); err != nil {
+				return nil, fmt.Errorf("decode max settings: %w", err)
+			}
 		}
 	}
 	return out, rows.Err()

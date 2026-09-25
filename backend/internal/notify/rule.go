@@ -33,10 +33,14 @@ type Event struct {
 }
 
 // Rule описание того, что и когда отправлять.
+//
+// Одно и то же правило применяется ко всем каналам: оператор настраивает
+// «о чём сообщать» один раз и ожидает одинакового поведения от Telegram
+// и MAX. Различия каналов — только в транспорте.
 type Rule struct {
-	Enabled      bool
-	Events       []string
-	Cameras      []uuid.UUID
+	Enabled       bool
+	Events        []string
+	Cameras       []uuid.UUID
 	MinConfidence float64
 
 	QuietHoursEnabled bool
@@ -49,12 +53,14 @@ type Rule struct {
 	SendClip     bool
 	ClipMaxMB    int
 
-	DailyReport     bool
-	DailyReportTime string
+	// transport и proxyURL нужны только для текста сообщения о проверке
+	// связи: оператору полезно видеть, каким путём ушло сообщение.
+	transport string
+	proxyURL  string
 }
 
-// RuleFromConfig переводит настройки из БД в правило.
-func RuleFromConfig(cfg domain.TelegramConfig) Rule {
+// RuleFromCommon переводит общие настройки канала в правило.
+func RuleFromCommon(cfg domain.CommonChannelConfig) Rule {
 	return Rule{
 		Enabled:           cfg.Enabled,
 		Events:            cfg.Events,
@@ -67,9 +73,17 @@ func RuleFromConfig(cfg domain.TelegramConfig) Rule {
 		SendSnapshot:      cfg.SendSnapshot,
 		SendClip:          cfg.SendClip,
 		ClipMaxMB:         cfg.ClipMaxMB,
-		DailyReport:       cfg.DailyReport,
-		DailyReportTime:   cfg.DailyReportTime,
 	}
+}
+
+// RuleFromConfig переводит настройки Telegram из БД в правило.
+func RuleFromConfig(cfg domain.TelegramConfig) Rule {
+	return RuleFromCommon(cfg.Common())
+}
+
+// RuleFromMax переводит настройки MAX из БД в правило.
+func RuleFromMax(cfg domain.MaxConfig) Rule {
+	return RuleFromCommon(cfg.Common())
 }
 
 // Decision — что делать с событием.

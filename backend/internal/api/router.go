@@ -232,6 +232,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/settings/notifications/test", notifyH.Test)
 			r.Get("/settings/notifications/log", notifyH.Log)
 			r.Delete("/settings/notifications/log", notifyH.Cleanup)
+
+			// Канал MAX: отдельные настройки, потому что у него свои токен
+			// и chat_id, а прокси не нужен — сервис доступен из России.
+			r.Get("/settings/notifications/max", notifyH.GetMax)
+			r.Patch("/settings/notifications/max", notifyH.UpdateMax)
+			r.Post("/settings/notifications/max/test", notifyH.TestMax)
 			// Справочник известных лиц
 			r.Get("/faces", recogH.ListFaces)
 			r.Post("/faces", recogH.CreateFace)

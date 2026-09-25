@@ -165,6 +165,163 @@ func (h *NotificationHandler) Cleanup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"removed": removed})
 }
 
+// GetMax возвращает настройки канала MAX с замаскированным токеном.
+func (h *NotificationHandler) GetMax(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.settings.GetServerSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, maskMax(settings.Notifications.Max))
+}
+
+// UpdateMax сохраняет настройки канала MAX.
+func (h *NotificationHandler) UpdateMax(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Max *domain.MaxConfig `json:"max"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "некорректный запрос"})
+		return
+	}
+	if req.Max == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "не переданы настройки MAX"})
+		return
+	}
+
+	// Токен приходит маской, когда оператор не менял это поле.
+	current, err := h.settings.GetServerSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	cfg := *req.Max
+	if isMaskedToken(cfg.BotToken) {
+		cfg.BotToken = current.Notifications.Max.BotToken
+	}
+
+	if err := validateMax(cfg); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	settings, err := h.settings.UpdateServerSettings(r.Context(), domain.UpdateServerSettingsRequest{
+		Notifications: &domain.NotificationSettings{
+			Max:      cfg,
+			Telegram: current.Notifications.Telegram,
+		},
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, maskMax(settings.Notifications.Max))
+}
+
+// TestMax проверяет настройки MAX, отправляя пробное сообщение.
+func (h *NotificationHandler) TestMax(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Max          *domain.MaxConfig `json:"max"`
+		WithSnapshot bool              `json:"with_snapshot"`
+	}
+	_ = decodeJSONBody(r, &req)
+
+	var cfg domain.MaxConfig
+	if req.Max != nil {
+		cfg = *req.Max
+		if isMaskedToken(cfg.BotToken) {
+			if cur, err := h.settings.GetServerSettings(r.Context()); err == nil {
+				cfg.BotToken = cur.Notifications.Max.BotToken
+			}
+		}
+	} else {
+		cur, err := h.settings.GetServerSettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		cfg = cur.Notifications.Max
+	}
+
+	if err := validateMax(cfg); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, h.notifier.TestMax(r.Context(), cfg, req.WithSnapshot))
+}
+
+// maskMax скрывает токен бота MAX.
+//
+// Прокси у MAX не настраивается: сервис доступен из России напрямую,
+// и это единственный канал, работающий без посредников.
+func maskMax(cfg domain.MaxConfig) domain.MaxConfig {
+	if cfg.BotToken != "" {
+		tail := cfg.BotToken
+		if len(tail) > maskTokenLength {
+			tail = tail[len(tail)-maskTokenLength:]
+		}
+		cfg.BotToken = "••••" + tail
+	}
+	// Пустые списки отдаём как []: в Go пустой срез превращается в null,
+	// а интерфейс обращается к длине списка и падает на null.
+	if cfg.Events == nil {
+		cfg.Events = []string{}
+	}
+	if cfg.Cameras == nil {
+		cfg.Cameras = []uuid.UUID{}
+	}
+	return cfg
+}
+
+// validateMax проверяет настройки MAX перед сохранением и отправкой.
+func validateMax(cfg domain.MaxConfig) error {
+	if !cfg.Enabled {
+		return nil // выключенный канал может хранить любые значения
+	}
+
+	if strings.TrimSpace(cfg.BotToken) == "" {
+		return errStr("не задан токен бота — скопируйте его из настроек чат-бота в MAX")
+	}
+	if strings.TrimSpace(cfg.ChatID) == "" {
+		return errStr("не задан chat_id — id чата или канала, куда слать уведомления")
+	}
+	// Префикс «u» означает личный диалог: MAX различает chat_id и user_id,
+	// и у нас нет способа угадать это по одному лишь числу.
+	rawID := strings.TrimPrefix(strings.TrimSpace(cfg.ChatID), "u")
+	if _, err := strconv.ParseInt(rawID, 10, 64); err != nil {
+		return errStr("chat_id должен быть числом; для личного диалога добавьте префикс u")
+	}
+
+	return validateCommon(cfg.CommonChannelConfig)
+}
+
+// validateCommon проверяет поля, общие для всех каналов.
+func validateCommon(cfg domain.CommonChannelConfig) error {
+	if cfg.ClipMaxMB < 0 || cfg.ClipMaxMB > 2000 {
+		return errStr("размер клипа должен быть от 0 до 2000 МБ")
+	}
+	if cfg.MinConfidence < 0 || cfg.MinConfidence > 1 {
+		return errStr("порог уверенности должен быть в пределах от 0 до 1")
+	}
+	if cfg.RepeatMinutes < 0 || cfg.RepeatMinutes > 1440 {
+		return errStr("пауза между повторами должна быть от 0 до 1440 минут")
+	}
+
+	if cfg.QuietHoursEnabled {
+		if !validClock(cfg.QuietHoursFrom) || !validClock(cfg.QuietHoursTo) {
+			return errStr("время тихих часов должно быть в формате ЧЧ:ММ")
+		}
+	}
+
+	for _, ev := range cfg.Events {
+		if !validEventType(ev) {
+			return errStr("неизвестный тип события: " + ev)
+		}
+	}
+	return nil
+}
+
 // maskTokenLength — сколько последних символов токена показывать.
 const maskTokenLength = 4
 
@@ -251,31 +408,12 @@ func validateTelegram(cfg domain.TelegramConfig) error {
 		return errStr("неизвестный способ соединения: " + cfg.Transport)
 	}
 
-	if cfg.ClipMaxMB < 0 || cfg.ClipMaxMB > 2000 {
-		return errStr("размер клипа должен быть от 0 до 2000 МБ")
-	}
-	if cfg.MinConfidence < 0 || cfg.MinConfidence > 1 {
-		return errStr("порог уверенности должен быть в пределах от 0 до 1")
-	}
-	if cfg.RepeatMinutes < 0 || cfg.RepeatMinutes > 1440 {
-		return errStr("пауза между повторами должна быть от 0 до 1440 минут")
-	}
-
-	if cfg.QuietHoursEnabled {
-		if !validClock(cfg.QuietHoursFrom) || !validClock(cfg.QuietHoursTo) {
-			return errStr("время тихих часов должно быть в формате ЧЧ:ММ")
-		}
-	}
 	if cfg.DailyReport && !validClock(cfg.DailyReportTime) {
 		return errStr("время ежедневного отчёта должно быть в формате ЧЧ:ММ")
 	}
 
-	for _, ev := range cfg.Events {
-		if !validEventType(ev) {
-			return errStr("неизвестный тип события: " + ev)
-		}
-	}
-	return nil
+	// Остальные поля общие для всех каналов — проверяются один раз.
+	return validateCommon(cfg.Common())
 }
 
 // validEventType проверяет тип события по списку поддерживаемых.
