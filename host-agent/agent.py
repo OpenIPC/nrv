@@ -101,6 +101,23 @@ def is_valid_prefix(value) -> bool:
         return False
 
 
+def network_address(ip: str, prefix: int) -> str:
+    """Возвращает сетевой адрес для адреса узла и длины маски.
+
+    Нужен, чтобы в правилах chrony записывать сеть, а не адрес узла:
+    камерам выдаётся диапазон, а не один компьютер.
+    """
+    octets = [int(part) for part in ip.split(".")]
+    value = 0
+    for octet in octets:
+        value = (value << 8) | octet
+
+    mask = (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF if prefix else 0
+    network = value & mask
+
+    return ".".join(str((network >> shift) & 0xFF) for shift in (24, 16, 8, 0))
+
+
 def is_valid_gateway(value: str) -> bool:
     """Шлюз должен быть корректным IPv4 и не совпадать с адресом сервера."""
     return is_valid_ipv4(value)
@@ -124,9 +141,24 @@ def read_time_state() -> dict:
         "local_time": datetime.now().astimezone().isoformat(),
     }
 
-    # Часовой пояс.
-    if TIMEZONE_FILE.exists():
+    # Часовой пояс. Берём из символической ссылки /etc/localtime, а не из
+    # файла /etc/timezone: файл обновляется не во всех случаях, а ссылка
+    # всегда указывает на текущий пояс. Так прочитанное значение совпадает
+    # с тем, что показывает сама система.
+    localtime = Path("/etc/localtime")
+    if localtime.is_symlink():
+        target = os.path.realpath(localtime)
+        marker = "/zoneinfo/"
+        if marker in target:
+            state["timezone"] = target.split(marker, 1)[1]
+    if state["timezone"] == "UTC" and TIMEZONE_FILE.exists():
+        # Запасной путь: если ссылки нет, читаем файл.
         state["timezone"] = TIMEZONE_FILE.read_text(encoding="utf-8").strip() or "UTC"
+
+    # Подтверждаем значение у системы: она знает точнее любого файла.
+    code, out, _ = run(["timedatectl", "show", "--property=Timezone", "--value"], check=False)
+    if code == 0 and out.strip():
+        state["timezone"] = out.strip()
 
     # Служба синхронизации: кто установлен и запущен.
     code, out, _ = run(["systemctl", "is-active", "systemd-timesyncd"], check=False)
@@ -139,19 +171,44 @@ def read_time_state() -> dict:
         "systemd-timesyncd" if timesyncd_active else ""
     )
 
-    # Серверы из настроек systemd-timesyncd.
-    if TIMESYNCD_CONF.exists():
+    # Серверы, по которым сверяются часы. Источник зависит от службы:
+    # chrony держит их в своём каталоге настроек, timesyncd — в одном файле.
+    if chrony_active:
+        servers = []
+        for conf in sorted(Path("/etc/chrony").glob("conf.d/*.conf")):
+            try:
+                text = conf.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                line = line.strip()
+                # Строки с «server» задают внешние серверы; «allow»
+                # описывает, кому отдаём время — это не наш источник.
+                if line.startswith("server ") or line.startswith("pool "):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        servers.append(parts[1])
+        state["servers"] = servers
+    elif TIMESYNCD_CONF.exists():
         for line in TIMESYNCD_CONF.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line.startswith("NTP="):
-                servers = line[4:].split()
-                state["servers"] = [s for s in servers if s]
+                state["servers"] = [s for s in line[4:].split() if s]
 
     # Отдаём ли время сами: chrony слушает 123/UDP только когда настроен
     # как сервер. Проверяем по факту прослушивания порта, а не по конфигу:
     # конфиг мог быть изменён, но служба ещё не перечитала его.
+    #
+    # Порт в ss может быть записан как "0.0.0.0:123", "[::]:123" или
+    # "*:123" — ловим все варианты, иначе включённый режим выглядит выключенным.
     code, out, _ = run(["ss", "-ulnp"], check=False)
-    state["server_mode"] = bool(re.search(r":123\b", out))
+    if code != 0:
+        # ss может быть недоступен в урезанной среде — тогда смотрим
+        # файл разрешений: его пишет только включение режима сервера.
+        code, out, _ = run(["cat", "/etc/chrony/conf.d/nvr-allow.conf"], check=False)
+        state["server_mode"] = "allow " in out
+    else:
+        state["server_mode"] = bool(re.search(r"[:\*\]]123\b", out))
 
     # Статус синхронизации.
     if chrony_active:
@@ -414,22 +471,47 @@ def set_timezone(timezone: str) -> dict:
 
 
 def set_ntp_servers(servers: list) -> dict:
-    """Прописывает NTP-серверы для systemd-timesyncd."""
+    """Прописывает NTP-серверы, по которым сервер сверяет свои часы.
+
+    Пишем в настройки chrony: он управляет часами в этой системе.
+    Файл кладём в conf.d, чтобы не трогать основной конфиг дистрибутива
+    и не потерять его при обновлении пакета.
+    """
     valid = [s for s in servers if s and (is_valid_ipv4(s) or re.fullmatch(r"[A-Za-z0-9.-]+", s))]
+
+    conf = Path("/etc/chrony/conf.d/nvr-servers.conf")
+
+    # Пустой список означает «вернуться к серверам дистрибутива»:
+    # убираем свой файл, чтобы не влиять на выбор источников.
+    # Совсем без источников сервер оставить нельзя — время уплывёт,
+    # поэтому не оставляем пустой файл, а именно удаляем его.
     if not valid:
-        return {"ok": False, "error": "не задан ни один корректный сервер времени"}
+        try:
+            if conf.exists():
+                backup_and_write(conf, "")
+                conf.unlink()
+            code, _, err = run(["systemctl", "restart", "chrony"], timeout=40)
+            if code != 0:
+                return {"ok": False, "error": err or "не удалось перезапустить chrony"}
+        except OSError as exc:
+            return {"ok": False, "error": f"не удалось убрать настройку серверов: {exc}"}
+        log.info("серверы времени сброшены к значениям по умолчанию")
+        return {"ok": True, "servers": []}
 
-    content = (
-        "# Файл изменён из интерфейса NVR.\n"
-        "# Правки вручную будут перезаписаны при следующем сохранении настроек.\n"
-        "[Time]\n"
-        f"NTP={' '.join(valid)}\n"
-    )
+    try:
+        conf.parent.mkdir(parents=True, exist_ok=True)
+        if conf.exists():
+            backup_and_write(conf, "")
+        content = (
+            "# Серверы времени заданы из интерфейса NVR.\n"
+            "# Правки вручную будут перезаписаны при следующем сохранении.\n"
+            + "".join(f"server {s} iburst\n" for s in valid)
+        )
+        conf.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": f"не удалось записать серверы времени: {exc}"}
 
-    backup_and_write(TIMESYNCD_CONF, content)
-    TIMESYNCD_CONF.write_text(content, encoding="utf-8")
-
-    code, _, err = run(["systemctl", "restart", "systemd-timesyncd"], timeout=30)
+    code, _, err = run(["systemctl", "restart", "chrony"], timeout=40)
     if code != 0:
         return {"ok": False, "error": err or "не удалось перезапустить синхронизацию"}
 
@@ -441,13 +523,27 @@ def enable_ntp_server(enabled: bool) -> dict:
     """Включает или отключает режим сервера времени для камер.
 
     Отдавать время умеет только chrony: systemd-timesyncd — клиент,
-    он не слушает порт 123. Поэтому при включении ставим chrony и
-    разрешаем запросы из локальной сети.
+    он не слушает порт 123.
+
+    chrony остаётся службой времени в обоих режимах: он синхронизирует
+    часы сам и, если включён режим сервера, дополнительно отвечает
+    камерам. Переключаться на systemd-timesyncd нельзя — установка chrony
+    удаляет его из системы, и сервер остался бы без синхронизации.
     """
     if not enabled:
-        # Возвращаемся в клиентский режим: chrony выключаем, timesyncd включаем.
-        run(["systemctl", "disable", "--now", "chrony"], check=False)
-        run(["systemctl", "enable", "--now", "systemd-timesyncd"], check=False)
+        # Убираем разрешение: иначе chrony продолжит отвечать по сети,
+        # хотя оператор режим выключил.
+        try:
+            Path("/etc/chrony/conf.d/nvr-allow.conf").unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("не удалось удалить правило chrony: %s", exc)
+
+        # Перезапуск возвращает chrony в клиентский режим: порт 123
+        # закрывается, синхронизация со внешними серверами продолжается.
+        code, _, err = run(["systemctl", "restart", "chrony"], timeout=40)
+        if code != 0:
+            return {"ok": False, "error": err or "не удалось перезапустить chrony"}
+
         log.info("режим сервера времени выключен")
         return {"ok": True, "server_mode": False}
 
@@ -461,12 +557,22 @@ def enable_ntp_server(enabled: bool) -> dict:
 
     # Определяем локальную сеть по адресу интерфейса, чтобы разрешить
     # синхронизацию только своим камерам, а не всем подряд.
+    #
+    # Важно привести адрес к сети: chrony понимает «адрес/маска» как сеть,
+    # но если записать адрес узла (192.168.1.111/24), chrony выведет
+    # 192.168.1.111/255.255.255.0 и предупредит о неоптимальной записи,
+    # а часть клиентов может не попасть под правило. Поэтому берём сетевой
+    # адрес: 192.168.1.0/24.
     subnet = ""
     for iface in list_interfaces():
         for addr in iface.get("addresses", []):
-            if is_valid_ipv4(addr.get("address", "")):
-                subnet = f"{addr['address']}/{addr.get('prefix', 24)}"
-                break
+            ip = addr.get("address", "")
+            prefix = int(addr.get("prefix", 24) or 24)
+            if not is_valid_ipv4(ip) or not 0 <= prefix <= 32:
+                continue
+            network = network_address(ip, prefix)
+            subnet = f"{network}/{prefix}"
+            break
         if subnet:
             break
 
@@ -478,9 +584,15 @@ def enable_ntp_server(enabled: bool) -> dict:
         allow_conf.parent.mkdir(parents=True, exist_ok=True)
         # chrony принимает сеть в виде «адрес/маска». Берём подсеть
         # интерфейса: камеры находятся в ней же, а наружу доступ закрыт.
+        #
+        # port 123 нужен явно: в клиентском режиме chrony слушает только
+        # локальный порт 323 для управления и на запросы из сети не
+        # отвечает. Без этой строки правило allow не даёт эффекта, и
+        # камеры получают отказ, хотя настройка записана.
         content = (
             "# Разрешение камерам брать время у этого сервера.\n"
             "# Добавлено из интерфейса NVR.\n"
+            "port 123\n"
             f"allow {subnet}\n"
         )
         allow_conf.write_text(content, encoding="utf-8")
@@ -496,6 +608,13 @@ def enable_ntp_server(enabled: bool) -> dict:
         # Возвращаем синхронизацию, чтобы сервер не остался без времени.
         run(["systemctl", "enable", "--now", "systemd-timesyncd"], check=False)
         return {"ok": False, "error": err or "не удалось запустить chrony"}
+
+    # Перезапускаем, а не перечитываем конфиг: смена порта (client → server)
+    # не подхватывается перечитыванием, служба осталась бы слушать только
+    # локальный порт управления.
+    code, _, err = run(["systemctl", "restart", "chrony"], timeout=40)
+    if code != 0:
+        return {"ok": False, "error": err or "не удалось перезапустить chrony"}
 
     log.info("режим сервера времени включён, разрешена сеть %s", subnet)
     return {"ok": True, "server_mode": True, "allow": subnet}

@@ -14,6 +14,7 @@ import RecognitionPage from './pages/RecognitionPage'
 import ACSPage from './pages/ACSPage'
 import SettingsPage from './pages/SettingsPage'
 import NotificationsPage from './pages/NotificationsPage'
+import ServerSettingsPage from './pages/ServerSettingsPage'
 import ExternalAccessPage from './pages/ExternalAccessPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -49,6 +50,10 @@ export default function App() {
                 <Route path="/external-access" element={<ExternalAccessPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
+                {/* Страница сервера отдельная: здесь меняются системные
+                    настройки (время и сеть), и ошибка тут заметнее по
+                    последствиям, чем в настройках камер. */}
+                <Route path="/server" element={<ServerSettingsPage />} />
               </Routes>
             </Layout>
           </ProtectedRoute>

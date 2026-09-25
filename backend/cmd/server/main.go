@@ -40,8 +40,12 @@ func main() {
 	// Часовой пояс берём из системы на старте: он уже мог быть изменён,
 	// а группировка дней в архиве зависит от него. Без этого календарь
 	// показывал бы дни по UTC до первой правки через интерфейс.
+	//
+	// Источник — запасной путь по файлу: основной способ узнать пояс
+	// появится ниже, когда будет создан клиент агента (он читает значение
+	// у самой системы, а файл в контейнере может устареть).
 	handlers.LoadTimezoneFromSystem()
-	log.Info().Str("timezone", time.Now().Location().String()).Msg("часовой пояс загружен")
+	log.Info().Str("timezone", handlers.ActiveTimezone()).Msg("часовой пояс загружен")
 
 	// Подключение к БД
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -158,6 +162,20 @@ func main() {
 	// Сам бэкенд системных прав не имеет — изменения выполняет служба
 	// на хосте, а здесь только клиент к её сокету.
 	hostAgent := hostagent.New(cfg.HostAgentSocket)
+
+	// Пояс уточняем у агента: он читает его у самой системы, а файл
+	// в контейнере может быть устаревшим (система заменяет файл целиком,
+	// и контейнер продолжает видеть прежний inode).
+	{
+		tzCtx, tzCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		hostH := handlers.NewHostHandler(hostAgent)
+		if err := hostH.LoadTimezoneFromAgent(tzCtx); err != nil {
+			log.Warn().Err(err).Msg("не удалось уточнить часовой пояс у агента")
+		} else {
+			log.Info().Str("timezone", handlers.ActiveTimezone()).Msg("часовой пояс уточнён")
+		}
+		tzCancel()
+	}
 
 	recordingMgr.OnSaved(func(clip service.SavedClip) {
 		half := time.Duration(clip.DurationSec) * time.Second / 2

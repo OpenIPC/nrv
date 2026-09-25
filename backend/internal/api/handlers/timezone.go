@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,9 +75,10 @@ func (h *HostHandler) ApplyTimezone(name string) error {
 
 // LoadTimezoneFromSystem выставляет пояс по системному файлу.
 //
-// Вызывается при старте: к моменту запуска контейнера пояс на хосте уже
-// может быть изменён, и приложение обязано это учесть, а не ждать
-// следующей правки через интерфейс.
+// Оставлено как запасной путь — на случай, если каталог смонтирован
+// целиком. Основной источник — агент на хосте: файл /etc/timezone,
+// смонтированный поштучно, устаревает, потому что система заменяет его
+// целиком, а контейнер продолжает видеть прежний inode.
 func LoadTimezoneFromSystem() {
 	data, err := os.ReadFile("/etc/timezone")
 	if err != nil {
@@ -84,20 +86,48 @@ func LoadTimezoneFromSystem() {
 		// остаётся пояс из переменной TZ или UTC.
 		return
 	}
+	_ = applyZoneName(strings.TrimSpace(string(data)))
+}
 
-	name := strings.TrimSpace(string(data))
-	if name == "" {
-		return
+// LoadTimezoneFromAgent спрашивает часовой пояс у службы на хосте.
+//
+// Это надёжнее чтения файла: агент берёт значение у самой системы, и оно
+// верно и после смены пояса, и после перезапуска контейнера.
+func (h *HostHandler) LoadTimezoneFromAgent(ctx context.Context) error {
+	state, err := h.agent.TimeState(ctx)
+	if err != nil {
+		return err
+	}
+	return applyZoneName(state.Timezone)
+}
+
+// applyZoneName загружает пояс по имени и делает его активным.
+func applyZoneName(name string) error {
+	if name == "" || name == "UTC" || name == "Etc/UTC" {
+		// Явный UTC: пояс может быть не задан, а для SQL нужно точное имя.
+		zoneMu.Lock()
+		activeZone = time.UTC
+		zoneMu.Unlock()
+		return nil
 	}
 
 	zone, err := time.LoadLocation(name)
 	if err != nil {
-		return
+		return fmt.Errorf("не удалось загрузить часовой пояс %s: %w", name, err)
 	}
 
 	zoneMu.Lock()
 	activeZone = zone
 	zoneMu.Unlock()
+	return nil
+}
+
+// ActiveTimezone возвращает имя активного пояса.
+//
+// Нужна для журнала при старте: time.Now().Location() всегда показывает
+// пояс процесса и не отражает выбор, сделанный через интерфейс.
+func ActiveTimezone() string {
+	return localZoneName()
 }
 
 // listTimezones возвращает список доступных часовых поясов.

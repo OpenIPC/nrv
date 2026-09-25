@@ -3,7 +3,7 @@ import { useAuth } from '../hooks/useApi'
 import {
   LayoutDashboard, Video, AlertTriangle, HardDrive,
   Shield, LogOut, Camera, Search, Settings, ScanFace, Volume2, Share2,
-  LayoutGrid, Bell
+  LayoutGrid, Bell, Server
 } from 'lucide-react'
 
 const navItems = [
@@ -22,6 +22,9 @@ const navItems = [
   // Уведомления рядом с настройками: это тоже настройка сервера,
   // но со своей страницей из-за проверки связи и журнала отправок.
   { to: '/notifications', icon: Bell, label: 'Уведомления' },
+  // Настройки сервера — системные (время и сеть): держим их отдельно от
+  // настроек камер, потому что ошибка здесь может прервать связь с сервером.
+  { to: '/server', icon: Server, label: 'Сервер' },
   { to: '/settings', icon: Settings, label: 'Настройки' },
 ]
 
