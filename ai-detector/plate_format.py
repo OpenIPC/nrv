@@ -235,6 +235,34 @@ def sanitize_ocr(text: str) -> str:
     return "".join(c for c in (text or "") if c not in _OCR_NOISE)
 
 
+def trim_to_format(text: str, fmt: PlateFormat) -> str:
+    """Отрезает от строки лишние символы, чтобы она совпала с шаблоном.
+
+    Нужно потому, что в режиме --psm 6 Tesseract читает весь блок целиком
+    и приклеивает к номеру соседние надписи и элементы рамки. На реальном
+    кадре вместо «E217HY142» приходило «4E217HY142» или «Y7E217HY142»:
+    край рамки знака OCR принимал за символ.
+
+    Функция ищет в строке такое окно, которое совпадает с шаблоном, и
+    возвращает только его. Если ничего не найдено, строка возвращается
+    без изменений — лучше показать её как есть, чем потерять.
+
+    Окна перебираются от самых длинных к коротким: если под шаблон
+    подходят два варианта, верным скорее будет более полный.
+    """
+    if not text or fmt.compiled() is None:
+        return text
+
+    n = len(text)
+    # Перебираем все подстроки от длинных к коротким.
+    for length in range(n, fmt.min_length - 1, -1):
+        for start in range(0, n - length + 1):
+            candidate = text[start:start + length]
+            if fmt.compiled().match(candidate):
+                return candidate
+    return text
+
+
 def apply_confusions(text: str, fmt: PlateFormat) -> str:
     """Исправляет символы, которые OCR путает, по позициям в номере.
 
@@ -264,7 +292,7 @@ def apply_confusions(text: str, fmt: PlateFormat) -> str:
 
 
 def _pattern_slots(pattern: str, length: int) -> list[str] | None:
-    """Разворачивает шаблон в список ожидаемых типов по позициям.
+    r"""Разворачивает шаблон в список ожидаемых типов по позициям.
 
     Возвращает список из «digit» и «letter» длиной ровно length, либо None,
     если шаблон не удалось разобрать.
