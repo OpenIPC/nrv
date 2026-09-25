@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nvr/backend/internal/api/handlers"
 	mw "github.com/nvr/backend/internal/api/middleware"
+	"github.com/nvr/backend/internal/hostagent"
 	"github.com/nvr/backend/internal/notify"
 	miniorepo "github.com/nvr/backend/internal/repository/minio"
 	"github.com/nvr/backend/internal/repository/postgres"
@@ -47,6 +48,8 @@ type RouterConfig struct {
 	ExternalRTSPSvc *service.ExternalRTSPService
 	// Notifier отправляет уведомления о событиях (Telegram)
 	Notifier *notify.Service
+	// HostAgent обращается к службе на хосте для смены времени и сети
+	HostAgent *hostagent.Client
 }
 
 func NewRouter(cfg RouterConfig) *chi.Mux {
@@ -101,6 +104,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		postgres.NewNotificationRepo(cfg.DB),
 		cfg.Notifier,
 	)
+
+	// Настройки времени и сети: изменения выполняет служба на хосте,
+	// бэкенд только передаёт ей команды и показывает результат.
+	hostH := handlers.NewHostHandler(cfg.HostAgent)
 
 	audioH := handlers.NewAudioHandler(postgres.NewAudioRepo(cfg.DB), cfg.AudioSvc)	// Адрес камеры нужен, чтобы определить аудиокодек через ffprobe.
 	audioH.WithCameraSource(func(cameraID uuid.UUID) string {
@@ -238,6 +245,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/settings/notifications/max", notifyH.GetMax)
 			r.Patch("/settings/notifications/max", notifyH.UpdateMax)
 			r.Post("/settings/notifications/max/test", notifyH.TestMax)
+
+			// Время и сеть сервера. Изменения выполняет служба на хосте:
+			// у контейнера системных прав нет намеренно.
+			r.Get("/settings/host", hostH.Status)
+			r.Patch("/settings/host/time", hostH.UpdateTime)
+			r.Patch("/settings/host/network", hostH.UpdateNetwork)
+			r.Get("/settings/host/timezones", hostH.Timezones)
 			// Справочник известных лиц
 			r.Get("/faces", recogH.ListFaces)
 			r.Post("/faces", recogH.CreateFace)

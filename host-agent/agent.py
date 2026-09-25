@@ -704,6 +704,12 @@ class Handler(socketserver.StreamRequestHandler):
 
         if not isinstance(result, dict):
             result = {"ok": True, "result": result}
+
+        # Признак успеха обязателен в каждом ответе: клиент различает
+        # успех и ошибку именно по нему. Обработчики, возвращающие данные
+        # напрямую (состояние времени и сети), его не ставят — добавляем здесь.
+        result.setdefault("ok", True)
+
         self.send(result)
 
     def send(self, payload: dict):

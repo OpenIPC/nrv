@@ -12,8 +12,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nvr/backend/internal/api"
+	"github.com/nvr/backend/internal/api/handlers"
 	"github.com/nvr/backend/internal/config"
 	"github.com/nvr/backend/internal/domain"
+	"github.com/nvr/backend/internal/hostagent"
 	natspkg "github.com/nvr/backend/internal/nats"
 	"github.com/nvr/backend/internal/notify"
 	miniorepo "github.com/nvr/backend/internal/repository/minio"
@@ -34,6 +36,12 @@ func main() {
 
 	// Инициализация логгера
 	logger.Init(cfg.LogLevel, cfg.LogFormat)
+
+	// Часовой пояс берём из системы на старте: он уже мог быть изменён,
+	// а группировка дней в архиве зависит от него. Без этого календарь
+	// показывал бы дни по UTC до первой правки через интерфейс.
+	handlers.LoadTimezoneFromSystem()
+	log.Info().Str("timezone", time.Now().Location().String()).Msg("часовой пояс загружен")
 
 	// Подключение к БД
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -145,6 +153,11 @@ func main() {
 	// по нему видно, дошло ли сообщение, и по нему же отсекаются повторы.
 	notificationRepo := postgres.NewNotificationRepo(db)
 	notifier := notify.NewService(detectionSettingsRepo, storageSvc, notificationRepo)
+
+	// Агент управления хостом: через него меняются часовой пояс и сеть.
+	// Сам бэкенд системных прав не имеет — изменения выполняет служба
+	// на хосте, а здесь только клиент к её сокету.
+	hostAgent := hostagent.New(cfg.HostAgentSocket)
 
 	recordingMgr.OnSaved(func(clip service.SavedClip) {
 		half := time.Duration(clip.DurationSec) * time.Second / 2
@@ -286,7 +299,8 @@ func main() {
 		ExternalRTSPSvc:    externalRTSPSvc,
 		// Сервис создан выше — по нему работает страница уведомлений:
 		// проверка связи и журнал отправок.
-		Notifier: notifier,
+		Notifier:  notifier,
+		HostAgent: hostAgent,
 	})
 
 	// HTTP-сервер

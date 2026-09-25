@@ -32,6 +32,9 @@ type Config struct {
 	RecordBufferDir string
 	// AudioClipDir — каталог для звуковых фрагментов (события аудиодетекции)
 	AudioClipDir string
+	// HostAgentSocket — сокет службы на хосте, через который меняются
+	// часовой пояс и сеть. Каталог монтируется из хоста.
+	HostAgentSocket string
 }
 
 func Load() (*Config, error) {
@@ -62,6 +65,7 @@ func Load() (*Config, error) {
 		MinioBucket:         envStr("MINIO_BUCKET", "nvr-recordings"),
 		RecordBufferDir:     envStr("RECORD_BUFFER_DIR", "/var/lib/nvr/buffer"),
 		AudioClipDir:        envStr("AUDIO_CLIP_DIR", "/var/lib/nvr/audio"),
+		HostAgentSocket:     envStr("HOST_AGENT_SOCKET", "/run/nvr-agent/agent.sock"),
 	}
 
 	if cfg.JWTSecret == "change-me-in-production" {
