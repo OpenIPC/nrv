@@ -1,0 +1,72 @@
+name: Сборка десктоп-приложения
+
+# Собираем на Windows: WPF не собирается на Linux, а сборка под Windows
+# с другой системы требует дополнительных условий и даёт менее надёжный
+# результат. Отдельная Windows-машина в проекте не нужна — GitHub
+# предоставляет её для сборки.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+  # Ручной запуск из вкладки Actions — удобно, когда нужно собрать
+  # версию без изменений в коде.
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Собрать NvrDesktop.exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Получить исходники
+        uses: actions/checkout@v4
+
+      - name: Установить .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Восстановить зависимости
+        working-directory: desktop
+        run: dotnet restore src/NvrDesktop/NvrDesktop.csproj
+
+      - name: Собрать
+        working-directory: desktop
+        run: >
+          dotnet publish src/NvrDesktop/NvrDesktop.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=false
+          -o ./publish
+
+      # Отдельный шаг на проверку результата: если сборка «прошла»,
+      # а файла нет, об этом лучше узнать здесь, а не при скачивании.
+      - name: Проверить, что файл собрался
+        shell: pwsh
+        run: |
+          $exe = "desktop/publish/NvrDesktop.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "Исполняемый файл не найден: $exe"
+            exit 1
+          }
+          $size = (Get-Item $exe).Length / 1MB
+          Write-Host "Собрано: $exe ($([math]::Round($size, 1)) МБ)"
+
+      - name: Упаковать в архив
+        shell: pwsh
+        run: |
+          Compress-Archive -Path desktop/publish/* -DestinationPath NvrDesktop-win-x64.zip -Force
+          $size = (Get-Item NvrDesktop-win-x64.zip).Length / 1MB
+          Write-Host "Архив: $([math]::Round($size, 1)) МБ"
+
+      - name: Приложить к сборке
+        uses: actions/upload-artifact@v4
+        with:
+          name: NvrDesktop-win-x64
+          path: NvrDesktop-win-x64.zip
+          # Хранить неделю: обычно свежая сборка нужна сразу,
+          # а старые только занимают место.
+          retention-days: 7

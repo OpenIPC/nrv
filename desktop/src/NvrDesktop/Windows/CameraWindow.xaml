@@ -1,0 +1,66 @@
+<Window x:Class="NvrDesktop.Windows.CameraWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="Камера"
+        Height="720" Width="1000"
+        Background="#000000"
+        FontFamily="Segoe UI">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!--
+          Панель окна. Здесь же снимается ограничение на микрофон:
+          кнопка разговора работает без повторных подтверждений,
+          потому что разрешение выдано один раз на уровне приложения.
+        -->
+        <Border Grid.Row="0" Background="#131a22" Padding="12,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="TitleText"
+                           Grid.Column="0"
+                           Foreground="#e6edf3"
+                           FontSize="15"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+
+                <Button x:Name="TalkButton"
+                        Grid.Column="1"
+                        Content="🎤 Разговор"
+                        Margin="0,0,8,0"
+                        ToolTip="Разговор через динамик камеры"
+                        Click="OnTalkClick"/>
+
+                <Button x:Name="FullscreenButton"
+                        Grid.Column="2"
+                        Content="На весь экран"
+                        Margin="0,0,8,0"
+                        Click="OnFullscreenClick"/>
+
+                <Button x:Name="MoveButton"
+                        Grid.Column="3"
+                        Content="На другой монитор"
+                        ToolTip="Перенести окно на следующий монитор и запомнить место"
+                        Click="OnMoveToNextMonitorClick"/>
+            </Grid>
+        </Border>
+
+        <!--
+          Встроенный браузер с интерфейсом сервера.
+          Через него показывается плеер, архив и панель разговора —
+          всё, что уже работает в веб-интерфейсе.
+        -->
+        <wv2:WebView2 x:Name="View" Grid.Row="1"/>
+    </Grid>
+</Window>

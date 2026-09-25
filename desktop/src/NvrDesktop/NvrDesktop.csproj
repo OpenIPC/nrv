@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    WPF-приложение под Windows.
+
+    Целевая платформа указана как net8.0-windows, потому что WPF работает
+    только на Windows. Это осознанное ограничение: приложение нужно именно
+    для рабочих мест операторов, а не для запуска на сервере.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+
+    <!--
+      Самодостаточная сборка: .NET не требуется на машине оператора.
+      Файл получается крупнее, но установка сводится к распаковке архива —
+      для рабочих мест это важнее размера.
+    -->
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+    <AssemblyName>NvrDesktop</AssemblyName>
+    <RootNamespace>NvrDesktop</RootNamespace>
+    <Version>0.1.0</Version>
+    <Product>NVR Control</Product>
+    <Description>Просмотр камер OpenIPC с рабочего места оператора</Description>
+
+    <!-- Значки и имена, видимые в свойствах файла Windows -->
+    <Company>OpenIPC NVR</Company>
+    <FileVersion>0.1.0.0</FileVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      WebView2 — встроенный браузер на движке Edge.
+
+      Через него показывается существующий веб-интерфейс: плеер, архив,
+      события. Переписывать их на C# не нужно, а доступ к микрофону,
+      хранение токена и работа с окнами решаются на стороне оболочки.
+    -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+
+    <!--
+      Хранение настроек в файле рядом с приложением.
+      Токен в нём не хранится — для него используется защищённое
+      хранилище Windows (см. TokenStore).
+    -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+</Project>

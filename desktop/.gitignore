@@ -1,0 +1,13 @@
+# Результаты сборки .NET
+bin/
+obj/
+publish/
+
+# Файлы Visual Studio и Rider
+.vs/
+.idea/
+*.user
+*.suo
+
+# Локальные настройки, если кто-то запускал сборку рядом с кодом
+*.binlog

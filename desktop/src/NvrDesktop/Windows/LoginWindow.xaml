@@ -1,0 +1,114 @@
+<Window x:Class="NvrDesktop.Windows.LoginWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NVR Control — вход"
+        Height="480" Width="420"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        Background="#0f1419"
+        FontFamily="Segoe UI">
+
+    <Window.Resources>
+        <!-- Поля ввода и кнопки оформлены в одном месте: страница входа
+             единственная, но так проще править вид, не трогая разметку. -->
+        <Style TargetType="TextBox">
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Background" Value="#1a2028"/>
+            <Setter Property="Foreground" Value="#e6edf3"/>
+            <Setter Property="BorderBrush" Value="#2d3742"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+
+        <Style TargetType="PasswordBox">
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Background" Value="#1a2028"/>
+            <Setter Property="Foreground" Value="#e6edf3"/>
+            <Setter Property="BorderBrush" Value="#2d3742"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#8b98a5"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="32">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="NVR Control"
+                   Foreground="#e6edf3"
+                   FontSize="24"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,4"/>
+
+        <TextBlock Grid.Row="1"
+                   Text="Просмотр камер с рабочего места"
+                   Margin="0,0,0,24"/>
+
+        <StackPanel Grid.Row="2" Margin="0,0,0,14">
+            <TextBlock Text="Адрес сервера"/>
+            <TextBox x:Name="ServerBox"
+                     ToolTip="Например: 192.168.1.111:8080"/>
+            <TextBlock Text="Можно без http:// — подставится автоматически"
+                       FontSize="11"
+                       Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="3" Margin="0,0,0,14">
+            <TextBlock Text="Логин"/>
+            <TextBox x:Name="UserBox"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="4" Margin="0,0,0,14">
+            <TextBlock Text="Пароль"/>
+            <PasswordBox x:Name="PassBox"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="6">
+            <!--
+              Сообщение об ошибке. Скрыто по умолчанию и появляется
+              только при неудаче: пустая красная полоса отвлекала бы.
+            -->
+            <TextBlock x:Name="ErrorText"
+                       Foreground="#ff5c5c"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,12"
+                       Visibility="Collapsed"/>
+
+            <CheckBox x:Name="RememberBox"
+                      Content="Запомнить меня"
+                      Foreground="#8b98a5"
+                      Margin="0,0,0,14"
+                      IsChecked="True"/>
+
+            <Button x:Name="LoginButton"
+                    Content="Войти"
+                    Height="42"
+                    FontSize="15"
+                    FontWeight="SemiBold"
+                    Background="#2f81f7"
+                    Foreground="White"
+                    BorderThickness="0"
+                    Cursor="Hand"
+                    Click="OnLoginClick"
+                    IsDefault="True"/>
+        </StackPanel>
+    </Grid>
+</Window>
