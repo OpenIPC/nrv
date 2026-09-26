@@ -8,8 +8,18 @@ services:
       POSTGRES_DB: nvr
       POSTGRES_USER: nvr
       POSTGRES_PASSWORD: ${DB_PASSWORD:-nvr_secret}
+      # Часовой пояс сервера баз данных. Через переменную, а не только
+      # монтированием файла: значение timezone записано в самом каталоге
+      # данных, и для уже созданной базы оно перебило бы пояс из файла.
+      # Значения времени при этом не меняются — они хранятся в UTC
+      # и лишь показываются в поясе сессии.
+      TZ: ${TZ:-Europe/Moscow}
+      PGTZ: ${TZ:-Europe/Moscow}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Часовой пояс хоста: без него время сессии остаётся в UTC,
+      # и SQL-функции возвращают время на несколько часов назад.
+      - /etc/localtime:/etc/localtime:ro
     ports:
       - "127.0.0.1:5434:5432"
     healthcheck:
@@ -116,6 +126,13 @@ services:
       # пояс и настройки сети. Привилегий контейнеру не даём — за него
       # системные изменения выполняет отдельная служба на хосте.
       - /var/lib/nvr-agent/socket:/run/nvr-agent
+      # Часовой пояс хоста. В образе нет /etc/localtime, поэтому время
+      # процесса остаётся в UTC: сообщения оператору уходили бы на 3 часа
+      # назад относительно времени сервера.
+      - /etc/localtime:/etc/localtime:ro
+      # Локальное время нужно некоторым библиотекам, которые читают его
+      # не через системные вызовы, а из файла.
+      - /etc/timezone:/etc/timezone:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -135,6 +152,10 @@ services:
       # Бэкенд слушает порт на хосте, а webui работает в bridge-сети —
       # так контейнер обращается к нему через host.docker.internal.
       - "host.docker.internal:host-gateway"
+    volumes:
+      # Часовой пояс хоста: nginx пишет время в журнал доступа, и без
+      # него записи шли бы в UTC — при разборе проблем это сбивает.
+      - /etc/localtime:/etc/localtime:ro
     depends_on:
       - backend
 
@@ -180,6 +201,10 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    volumes:
+      # Часовой пояс хоста: детектор проставляет время событий сам,
+      # и без этого файла оно уходило бы в UTC.
+      - /etc/localtime:/etc/localtime:ro
     depends_on:
       nats:
         condition: service_started
@@ -210,6 +235,10 @@ services:
       # поток идёт раз в секунду — поймать её в кадре иначе не удаётся.
       PLATE_FRAME_INTERVAL: "${PLATE_FRAME_INTERVAL:-0.2}"
       PLATE_FRAME_WIDTH: "${PLATE_FRAME_WIDTH:-640}"
+    volumes:
+      # Часовой пояс хоста: в журналах и метках кадров нужен местный
+      # время, а не UTC.
+      - /etc/localtime:/etc/localtime:ro
     depends_on:
       postgres:
         condition: service_healthy
