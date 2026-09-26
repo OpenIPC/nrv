@@ -142,7 +142,106 @@ const SHOTS = [
       await page.waitForTimeout(4000)
     },
   },
+  {
+    file: '14-notify-telegram.png',
+    title: 'Уведомления: Telegram',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/notifications`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(4000)
+      // Токен и chat_id — рабочие данные, в документацию они попадать не должны.
+      await maskSecrets(page)
+    },
+  },
+  {
+    file: '15-notify-max.png',
+    title: 'Уведомления: MAX',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/notifications`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(4000)
+      await page.locator('button:has-text("MAX")').first().click()
+      await page.waitForTimeout(1500)
+      await maskSecrets(page)
+    },
+  },
+  {
+    file: '16-notify-system.png',
+    title: 'Уведомления: состояние сервера и камер',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/notifications`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(4000)
+      await page.locator('button:has-text("Сервер")').first().click()
+      await page.waitForTimeout(1500)
+      // Показываем пороги сверху: дальше идут списки каналов и журнал,
+      // которые на снимке шириной в экран всё равно не поместятся.
+      await page.evaluate(() => {
+        const el = [...document.querySelectorAll('h3, h4')]
+          .find((e) => /порог|проверк|отслеж/i.test(e.textContent))
+        if (el) el.scrollIntoView({ block: 'start' })
+      })
+      await page.waitForTimeout(1200)
+      await maskSecrets(page)
+    },
+  },
+  {
+    file: '17-notify-log.png',
+    title: 'Журнал отправки уведомлений',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/notifications`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(4000)
+      await page.evaluate(() => {
+        const el = [...document.querySelectorAll('h3, h4')]
+          .find((e) => /журнал/i.test(e.textContent))
+        if (el) el.scrollIntoView({ block: 'start' })
+        else window.scrollTo(0, document.body.scrollHeight)
+      })
+      await page.waitForTimeout(1200)
+      await maskSecrets(page)
+    },
+  },
 ]
+
+/**
+ * Закрывает токены и адреса чатов на снимке.
+ *
+ * Страница уведомлений хранит рабочие боты и chat_id, а снимки попадают
+ * в репозиторий и в документацию. Токен бота — это ключ доступа к боту:
+ * по нему можно писать в чат от его имени, поэтому в кадр он попадать
+ * не должен. Поля не очищаем, а затираем: пустое поле выглядело бы как
+ * незаполненная настройка, и по снимку было бы не понять, что там что-то есть.
+ */
+async function maskSecrets(page) {
+  await page.evaluate(() => {
+    const mask = '***'
+    // Поля ввода: токен бота, chat_id, адрес прокси.
+    //
+    // На chat_id ориентируемся по подписи рядом с полем, а не по имени:
+    // поля описаны через label, а не через атрибут name, и по атрибутам
+    // chat_id неотличим от обычного числа.
+    for (const input of document.querySelectorAll('input')) {
+      const type = (input.getAttribute('type') || '').toLowerCase()
+      const own = (input.getAttribute('placeholder') || '') + (input.name || '') +
+        (input.id || '') + (input.getAttribute('aria-label') || '')
+      const label = input.closest('label')
+      const wrapper = input.closest('div')
+      const nearby = (label?.textContent || '') + (wrapper?.textContent || '')
+      // Ограничиваем окрестность: у обёртки может быть общий предок
+      // со всей страницей, и тогда под маску попадёт всё подряд.
+      const scope = nearby.length < 300 ? nearby : ''
+
+      if (type === 'password' || /token|chat|прокси|proxy/i.test(own + scope)) {
+        input.value = mask
+        input.setAttribute('value', mask)
+      }
+    }
+    // Токены, уже показанные текстом (журнал доставки).
+    for (const el of document.querySelectorAll('td, span, code, div')) {
+      const text = (el.textContent || '').trim()
+      if (/^\d{6,}:[A-Za-z0-9_-]{20,}$/.test(text)) {
+        el.textContent = mask
+      }
+    }
+  })
+}
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true })
