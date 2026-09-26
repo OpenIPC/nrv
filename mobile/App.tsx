@@ -3,9 +3,13 @@
  *
  * Возможности: выбор сервера по IP-адресу, порту или DNS-имени,
  * онлайн-просмотр камер и работа с архивом записей.
+ *
+ * На телевизоре включается отдельный режим: сетка камер, управление
+ * пультом и звук выбранной камеры. Код подключения к серверу общий,
+ * различается только интерфейс.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AppProvider, useApp } from './src/state/AppContext';
@@ -14,6 +18,8 @@ import LoginScreen from './src/screens/LoginScreen';
 import CamerasScreen from './src/screens/CamerasScreen';
 import LiveScreen from './src/screens/LiveScreen';
 import ArchiveScreen from './src/screens/ArchiveScreen';
+import TvApp from './src/tv/TvApp';
+import { isTelevision } from './src/tv/device';
 import { colors } from './src/theme';
 import type { Camera } from './src/types';
 
@@ -92,13 +98,56 @@ function Router() {
   }
 }
 
+/**
+ * Выбирает интерфейс по типу устройства.
+ *
+ * Проверка асинхронная, поэтому до её завершения показываем заставку.
+ * Показывать сразу телефонный интерфейс нельзя: на телевизоре он
+ * бесполезен без касаний, и пользователь успел бы увидеть нерабочий экран.
+ *
+ * Вход и выбор сервера общие для обоих режимов: подключение одинаковое,
+ * а экран входа удобен и на телевизоре.
+ */
+function Root() {
+  const { ready, current, token } = useApp();
+  const [television, setTelevision] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    isTelevision().then((value) => {
+      if (!cancelled) setTelevision(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (television === null) {
+    return (
+      <View style={styles.splash}>
+        <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
+
+  // Пока не выбран сервер и нет токена, телевизионный режим показывать
+  // нечем: сетка камер пуста. Поэтому сначала общий путь подключения.
+  const needsConnection = !ready || !current || !token;
+
+  if (television && !needsConnection) {
+    return <TvApp />;
+  }
+
+  return <Router />;
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="light-content" backgroundColor={colors.background} />
       <AppProvider>
         <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-          <Router />
+          <Root />
         </SafeAreaView>
       </AppProvider>
     </SafeAreaProvider>

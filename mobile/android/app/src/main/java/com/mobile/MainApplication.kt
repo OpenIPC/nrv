@@ -17,8 +17,10 @@ class MainApplication : Application(), ReactApplication {
       object : DefaultReactNativeHost(this) {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
-              // Packages that cannot be autolinked yet can be added manually here, for example:
-              // add(MyReactNativePackage())
+              // Сторонние библиотеки подключаются сами, но собственные
+              // модули приложения нужно регистрировать вручную:
+              // автоподключение ищет их только в node_modules.
+              add(DeviceInfoPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"
