@@ -32,6 +32,14 @@ interface AppState {
   ready: boolean;
   servers: ServerProfile[];
   current: ServerProfile | null;
+  /**
+   * Базовый адрес текущего сервера без завершающего слэша.
+   *
+   * Отдельным полем, а не через current.baseUrl: плееру и вёрстке нужен
+   * готовый адрес, а обращаться к необязательному полю в каждом месте —
+   * лишние проверки.
+   */
+  baseUrl: string;
   token: string | null;
   client: ApiClient | null;
   /** Добавляет сервер и делает его текущим. */
@@ -199,6 +207,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ready,
       servers,
       current,
+      baseUrl: current?.baseUrl ?? '',
       token,
       client,
       addServer,
