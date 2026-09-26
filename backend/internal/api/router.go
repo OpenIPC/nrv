@@ -215,6 +215,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			// Управление камерой (OpenIPC: Majestic + reboot)
 			r.Post("/cameras/{id}/restart-streamer", cameraH.RestartStreamer)
+			// Пересоздание пути в медиасервере: поднимает поток, когда
+			// камера в сети, но путь в MediaMTX остался без источника.
+			r.Post("/cameras/{id}/recreate-stream", cameraH.RecreateStream)
 			r.Post("/cameras/{id}/reboot", cameraH.Reboot)
 
 			// Настройки AI-детекции для камеры

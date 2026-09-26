@@ -30,7 +30,8 @@ export default function CameraDetailPage() {
   // Какой поток показываем в плеере: основной или дополнительный.
   const [activeStream, setActiveStream] = useState<'main' | 'sub'>('main')
   // Какая из команд выполняется сейчас (для индикации на кнопке).
-  const [busy, setBusy] = useState<'restart' | 'reboot' | null>(null)
+  // Какая команда выполняется сейчас: блокируем все кнопки, пока идёт одна.
+  const [busy, setBusy] = useState<'restart' | 'reboot' | 'recreate' | null>(null)
 
   // Снапшот для рисования линии детекции. Токен в query, т.к. <img>
   // не умеет передавать заголовок Authorization (как в списке камер).
@@ -91,6 +92,32 @@ export default function CameraDetailPage() {
       setBusy(null)
     }
   }
+  // Принудительное пересоздание потока в медиасервере.
+  //
+  // Нужно, когда камера уже в сети, а поток не идёт: путь в MediaMTX
+  // существует, но остался без источника после перезагрузки камеры.
+  // Автоматика такой путь считает живым и не восстанавливает, поэтому
+  // без этой кнопки камеру приходилось поднимать перезапуском сервера.
+  const handleRecreateStream = async () => {
+    setBusy('recreate')
+    try {
+      const res = await camerasAPI.recreateStream(id!)
+      if (res.data.ready) {
+        toast.success(`Поток поднялся за ${(res.data.elapsed_ms / 1000).toFixed(1)} с`)
+      } else {
+        // Не просто «ошибка»: сервер возвращает объяснение причины,
+        // и оператору важно его увидеть — от причины зависит, что делать.
+        toast.error(res.data.detail || 'Поток не поднялся')
+      }
+      loadStream()
+      refetch()
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || 'Не удалось пересоздать поток')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   // Перезагрузка камеры. Устройство уходит в reboot и недоступно ~1 минуту.
   // Команда идёт через API прошивки, а не по SSH: не нужны root-пароль
   // и доступ к shell камеры.
@@ -400,6 +427,19 @@ export default function CameraDetailPage() {
               Команды отправляются по HTTP API прошивки ({camera.ip || '—'}). SSH не требуется.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Первой — потому что это самый частый случай: камера уже
+                  в сети, а поток не идёт. Остальные команды её не заменяют:
+                  перезапуск стримера идёт на камере, перезагрузка перезапускает
+                  камеру целиком, а эта кнопка чинит поток на нашей стороне. */}
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={handleRecreateStream}
+                disabled={busy !== null}
+                title="Пересоздать путь камеры в медиасервере, если камера в сети, а поток не идёт"
+              >
+                {busy === 'recreate' ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                {busy === 'recreate' ? 'Запуск...' : 'Запустить поток'}
+              </button>
               <button
                 className="btn btn-outline btn-sm"
                 onClick={handleRestartStreamer}

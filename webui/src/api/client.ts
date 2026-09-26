@@ -58,6 +58,21 @@ export interface CameraCommandResult {
   error?: string
 }
 
+/**
+ * Итог принудительного пересоздания потока.
+ *
+ * Отличается от CameraCommandResult тем, что сообщает результат проверки,
+ * а не только факт отправки команды: пересоздание пути не гарантирует,
+ * что камера отдаст поток — она может быть недоступна или занята.
+ */
+export interface StreamRecreateResult {
+  camera_name: string
+  ip: string
+  ready: boolean
+  detail: string
+  elapsed_ms: number
+}
+
 // Сведения о камере со страницы дашборда OpenIPC.
 export interface CameraDeviceInfo {
   soc?: string
@@ -465,6 +480,11 @@ export const camerasAPI = {
   // Перезапуск стримера камеры (служба Majestic на OpenIPC)
   restartStreamer: (id: string) =>
     api.post<CameraCommandResult>(`/cameras/${id}/restart-streamer`, {}),
+  // Принудительное пересоздание пути в медиасервере. Нужно, когда камера
+  // в сети, но поток не поднялся: автоматика не трогает путь, который
+  // существует, но остался без источника.
+  recreateStream: (id: string) =>
+    api.post<StreamRecreateResult>(`/cameras/${id}/recreate-stream`, {}),
   // Перезагрузка камеры целиком
   reboot: (id: string) =>
     api.post<CameraCommandResult>(`/cameras/${id}/reboot`, {}),

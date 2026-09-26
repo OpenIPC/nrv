@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os/exec"
 	"sort"
@@ -220,6 +221,153 @@ func (s *CameraService) reconnectStream(cam *domain.Camera) {
 	time.Sleep(500 * time.Millisecond)
 	s.registerStreams(cam, "", "")
 	log.Info().Str("camera", cam.Name).Str("ip", cam.IP).Msg("stream path recreated")
+}
+
+// RecreateStream принудительно пересоздаёт пути камеры в MediaMTX
+// и возвращает состояние потока после попытки.
+//
+// Нужен потому, что автоматическое восстановление бессильно в самом частом
+// случае: путь в MediaMTX ЕСТЬ, но источника за ним нет (ready=false).
+// Автоматика считает такой путь живым и ничего не делает, а камера остаётся
+// без потока навсегда. Здесь мы удаляем путь и создаём заново — MediaMTX
+// подключается к камере с нуля, без старых сессий и таймеров переподключения.
+//
+// Пауза между созданием путей и проверкой нужна, чтобы MediaMTX успел
+// подключиться к RTSP камеры: соединение и обмен DESCRIBE/SETUP занимают
+// до нескольких секунд, особенно на слабых камерах.
+func (s *CameraService) RecreateStream(ctx context.Context, id uuid.UUID) (*StreamRecreateResult, error) {
+	cam, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Сбрасываем старые пути целиком: пересоздание источника через PATCH
+	// не работает (проверено: MediaMTX отвечает OK, но источник не меняет),
+	// а при 453 на камере остаётся висеть незакрытая RTSP-сессия, которая
+	// мешает новому подключению.
+	_ = s.removeMediaMTXPath(cam.ID.String())
+	_ = s.removeMediaMTXPath(cam.ID.String() + "_sub")
+	time.Sleep(500 * time.Millisecond)
+
+	s.registerStreams(cam, "", "")
+
+	// Даём MediaMTX время подключиться, прежде чем сообщать результат.
+	result := &StreamRecreateResult{CameraName: cam.Name, IP: cam.IP}
+	for attempt := 0; attempt < 6; attempt++ {
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case <-time.After(1500 * time.Millisecond):
+		}
+
+		ready, detail := s.streamState(ctx, cam.ID.String())
+		result.Ready = ready
+		result.Detail = detail
+		if ready {
+			result.Elapsed = time.Duration(attempt+1) * 1500 * time.Millisecond
+			return result, nil
+		}
+	}
+
+	// Поток не поднялся. Проверяем связь с камерой, чтобы дать точный
+	// совет: при недоступной камере перезапуск её стримера бесполезен.
+	result.Reachable = s.cameraReachable(ctx, cam.IP)
+	if !result.Reachable {
+		result.Detail = fmt.Sprintf(
+			"камера %s не отвечает по сети: поток не поднять, пока не восстановится связь. "+
+				"Проверьте питание камеры, кабель и адрес %s", cam.Name, cam.IP)
+	}
+
+	return result, nil
+}
+
+// StreamRecreateResult — итог принудительного пересоздания потока.
+type StreamRecreateResult struct {
+	CameraName string        `json:"camera_name"`
+	IP         string        `json:"ip"`
+	Ready      bool          `json:"ready"`
+	Detail     string        `json:"detail"`
+	Reachable  bool          `json:"reachable"`
+	Elapsed    time.Duration `json:"-"`
+	ElapsedMS  int64         `json:"elapsed_ms"`
+}
+
+// cameraReachable проверяет, отвечает ли камера по RTSP-порту.
+//
+// Нужна, чтобы отличить две разные причины отсутствия потока: камера
+// недоступна по сети (тогда перезапускать на ней нечего — сначала связь)
+// или камера на связи, но отвергла подключение (тогда поможет перезапуск
+// стримера на самой камере). Сам MediaMTX этого не различает: у него
+// online=true даже для выключенной камеры.
+func (s *CameraService) cameraReachable(ctx context.Context, ip string) bool {
+	if ip == "" {
+		return false
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", net.JoinHostPort(ip, "554"))
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// streamState спрашивает у MediaMTX состояние пути и, если источника нет,
+// возвращает его словами — по ним оператор понимает, что делать дальше.
+func (s *CameraService) streamState(ctx context.Context, pathName string) (bool, string) {
+	url := fmt.Sprintf("%s/v3/paths/get/%s", s.mediamtxAPI, pathName)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, "не удалось обратиться к медиасерверу"
+	}
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return false, "медиасервер недоступен"
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return false, "медиасервер не создал путь"
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Sprintf("медиасервер ответил кодом %d", resp.StatusCode)
+	}
+
+	// Структура ответа MediaMTX проверена на живом сервере:
+	//   tracks — массив СТРОК с кодеками (["H264","Generic"]), а не объектов;
+	//   source — объект с полем type;
+	//   online — true всегда, когда путь описан в конфиге, даже если
+	//   камера выключена, поэтому для вывода о связи его использовать нельзя.
+	var payload struct {
+		Ready  bool `json:"ready"`
+		Source struct {
+			Type string `json:"type"`
+		} `json:"source"`
+		Tracks        []string `json:"tracks"`
+		BytesReceived int64    `json:"bytesReceived"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return false, "не удалось разобрать ответ медиасервера"
+	}
+
+	if payload.Ready {
+		return true, "поток идёт"
+	}
+
+	// Поток не идёт. Отличить «камера недоступна» от «камера отвергла
+	// подключение» по ответу MediaMTX невозможно (у выключенной камеры
+	// ready=false, tracks=[], но online=true), поэтому перечисляем обе
+	// частые причины и порядок проверки. Точный ответ даёт проверка связи
+	// в cameraReachable, и её результат вызывающий подставляет сам.
+	return false, "камера не отдаёт поток. Проверьте по порядку: " +
+		"1) камера доступна по сети (ping); " +
+		"2) в карточке нажата кнопка «Перезапустить стример» — после перезагрузки " +
+		"прошивки камера часто отвечает «Live memory budget is full» (код 453) " +
+		"и не принимает подключения, пока поток не перезапустят на ней самой; " +
+		"3) путь RTSP в настройках камеры совпадает с настройками самой камеры"
 }
 
 // credentialsFromSettings извлекает логин/пароль камеры из settings.

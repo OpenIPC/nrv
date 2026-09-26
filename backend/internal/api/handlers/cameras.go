@@ -147,8 +147,32 @@ func (h *CameraHandler) RestartStreamer(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, res)
 }
 
-// Reboot перезагружает камеру.
-// POST /api/v1/cameras/{id}/reboot
+// RecreateStream принудительно пересоздаёт поток камеры в MediaMTX.
+//
+// POST /api/v1/cameras/{id}/recreate-stream
+//
+// Отличие от restart-streamer: тот перезапускает стример НА КАМЕРЕ по SSH,
+// а этот — путь в медиасервере. Понадобился потому, что автоматическое
+// восстановление не трогает путь, который существует, но не имеет источника:
+// камера при этом числится offline и без ручного вмешательства не поднимется.
+func (h *CameraHandler) RecreateStream(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+
+	res, err := h.svc.RecreateStream(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	res.ElapsedMS = res.Elapsed.Milliseconds()
+	writeJSON(w, http.StatusOK, res)
+}
+
+// Reboot перезагружает камеру.// POST /api/v1/cameras/{id}/reboot
 func (h *CameraHandler) Reboot(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
