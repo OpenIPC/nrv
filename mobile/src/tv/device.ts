@@ -18,7 +18,12 @@ interface DeviceInfoModule {
   isTelevision?: () => Promise<boolean>;
 }
 
-const nativeModule = NativeModules.DeviceInfo as DeviceInfoModule | undefined;
+/*
+ * Имя с префиксом, а не просто DeviceInfo: в React Native уже есть
+ * встроенный модуль с этим именем, и совпадение валит приложение
+ * при запуске с ошибкой «tried to override».
+ */
+const nativeModule = NativeModules.NvrDeviceInfo as DeviceInfoModule | undefined;
 
 /**
  * Кэш результата.

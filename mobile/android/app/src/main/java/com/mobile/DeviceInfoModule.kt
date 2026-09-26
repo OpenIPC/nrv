@@ -14,11 +14,16 @@ import com.facebook.react.bridge.ReactMethod
  * Отдельный модуль нужен ради одной проверки: телевизор это или телефон.
  * Из JavaScript её сделать нельзя — в React Native нет доступа к режиму
  * интерфейса системы.
+ *
+ * Имя модуля с префиксом приложения, а не просто "DeviceInfo":
+ * в React Native уже есть встроенный модуль с таким именем. При совпадении
+ * имён React Native отказывается запускаться с ошибкой «tried to override»,
+ * поэтому имя должно быть уникальным.
  */
 class DeviceInfoModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
-    override fun getName(): String = "DeviceInfo"
+    override fun getName(): String = "NvrDeviceInfo"
 
     /**
      * Сообщает, что приложение запущено на телевизоре.

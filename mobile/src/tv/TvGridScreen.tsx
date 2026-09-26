@@ -6,7 +6,7 @@ import { colors, radius, spacing } from '../theme';
 import type { Camera, StreamInfo } from '../types';
 import CameraTile from './CameraTile';
 import TvButton from './TvButton';
-import { tilePositions, type TvLayout } from './layout';
+import { tilePositions, type GridSize, type TvLayout } from './layout';
 
 /**
  * Экран наблюдения на телевизоре.
@@ -219,6 +219,9 @@ export default function TvGridScreen({
               overlay={{ showNames: false, showStatus: false, showClock: true }}
               soundEnabled={soundIds.includes(camera.id)}
               soundVolume={layout.sound.volume}
+              // В полноэкранном режиме плитка одна на весь экран,
+              // поэтому подписи можно не уменьшать.
+              gridSize={1}
               focused
               onFocus={() => undefined}
               onPress={() => undefined}
@@ -289,6 +292,7 @@ export default function TvGridScreen({
                     overlay={layout.overlay}
                     soundEnabled={soundIds.includes(camera.id)}
                     soundVolume={layout.sound.volume}
+                    gridSize={layout.size}
                     focused={focusedIndex === index}
                     onFocus={() => setFocusedIndex(index)}
                     onPress={() => activate(camera)}
@@ -302,7 +306,7 @@ export default function TvGridScreen({
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          {layout.size === 1 ? 'Одна камера' : `${layout.size} камеры`}
+          {gridLabel(layout.size)}
           {layout.sound.enabled && soundIds.length > 0 ? ' · звук включён' : ''}
           {' · '}
           {layout.enterAction === 'fullscreen'
@@ -312,6 +316,18 @@ export default function TvGridScreen({
       </View>
     </View>
   );
+}
+
+/**
+ * Подпись размера сетки внизу экрана.
+ *
+ * Показываем и число камер, и форму сетки: при размере 6 непонятно,
+ * будет это 3×2 или 2×3, а оператор ожидает увидеть именно форму.
+ */
+function gridLabel(size: GridSize): string {
+  const { columns, rows } = tilePositions(size);
+  if (size === 1) return 'Одна камера';
+  return `${columns}×${rows} · камер: ${size}`;
 }
 
 const styles = StyleSheet.create({

@@ -13,6 +13,7 @@ import { colors, radius, spacing } from '../theme';
 import type { Camera } from '../types';
 import TvButton from './TvButton';
 import type { GridSize, TvLayout } from './layout';
+import { DENSE_GRID_MIN_SIZE, GRID_SIZES } from './layout';
 
 /**
  * Настройка раскладки: сколько камер и какие показывать.
@@ -122,7 +123,7 @@ export default function TvLayoutScreen({
         <Text style={styles.sectionTitle}>Сколько камер показывать</Text>
         <View style={styles.section}>
           <View style={styles.sizeRow}>
-            {([1, 2, 4] as GridSize[]).map((value) => (
+            {GRID_SIZES.map((value) => (
               <TvButton
                 key={value}
                 title={sizeLabel(value)}
@@ -138,7 +139,9 @@ export default function TvLayoutScreen({
         </Text>
         <Text style={styles.sectionHint}>
           Порядок выбора задаёт расположение: первая камера встанет в левый
-          верхний угол.
+          верхний угол. При плотной сетке ({DENSE_GRID_MIN_SIZE} камер и больше)
+          подписи на плитках скрываются: в мелкой плитке они заслоняют
+          изображение.
         </Text>
 
         {loading ? (
@@ -227,7 +230,7 @@ function CameraRow({
 function sizeLabel(size: GridSize): string {
   if (size === 1) return 'Одна';
   if (size === 2) return 'Две';
-  return 'Четыре';
+  return `${size} кaмер`;
 }
 
 const styles = StyleSheet.create({

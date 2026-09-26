@@ -2,6 +2,8 @@ import {
   defaultLayout,
   normalizeLayout,
   tilePositions,
+  DENSE_GRID_MIN_SIZE,
+  GRID_SIZES,
   type TvLayout,
 } from '../src/tv/layout';
 
@@ -67,7 +69,25 @@ describe('нормализация раскладки', () => {
     // Значение могло остаться от прежней версии приложения.
     const layout = normalizeLayout({ size: 9 as never });
 
-    expect([1, 2, 4]).toContain(layout.size);
+    expect(GRID_SIZES).toContain(layout.size);
+  });
+
+  it('принимает каждый из поддерживаемых размеров сетки', () => {
+    // Список размеров и проверка при чтении с диска должны совпадать:
+    // если размер есть на кнопке, но не проходит проверку, он молча
+    // сбрасывается на прежний, и оператор не понимает, что произошло.
+    for (const size of GRID_SIZES) {
+      expect(normalizeLayout({ size }).size).toBe(size);
+    }
+  });
+
+  it('сохраняет камеры под большой размер сетки', () => {
+    // Старые записи на диске делались до появления больших сеток.
+    const ids = Array.from({ length: 16 }, (_, index) => `cam-${index}`);
+    const layout = normalizeLayout({ size: 16, cameraIds: ids });
+
+    expect(layout.size).toBe(16);
+    expect(layout.cameraIds).toHaveLength(16);
   });
 
   it('ограничивает громкость диапазоном', () => {
@@ -142,12 +162,47 @@ describe('расположение плиток', () => {
     expect(tilePositions(4)).toEqual({ columns: 2, rows: 2 });
   });
 
+  it('шесть камер раскладывает как три на два', () => {
+    // Шесть камер в один ряд слишком мелкие, а в 2×3 плитки вытянуты
+    // по вертикали: 3×2 ближе к пропорции телевизионного экрана.
+    expect(tilePositions(6)).toEqual({ columns: 3, rows: 2 });
+  });
+
+  it('девять камер раскладывает как три на три', () => {
+    expect(tilePositions(9)).toEqual({ columns: 3, rows: 3 });
+  });
+
+  it('шестнадцать камер раскладывает как четыре на четыре', () => {
+    expect(tilePositions(16)).toEqual({ columns: 4, rows: 4 });
+  });
+
+  it('двадцать пять камер раскладывает как пять на пять', () => {
+    expect(tilePositions(25)).toEqual({ columns: 5, rows: 5 });
+  });
+
   it('число плиток совпадает с размером сетки', () => {
-    // Проверка на будущее: если добавят размер 6, сетка обязана
-    // вмещать все плитки, иначе камеры просто не покажутся.
-    for (const size of [1, 2, 4] as const) {
+    // Если сетка не вмещает все плитки, часть камер просто не покажется,
+    // причём молча — это самая неприятная из возможных поломок.
+    for (const size of GRID_SIZES) {
       const { columns, rows } = tilePositions(size);
       expect(columns * rows).toBe(size);
     }
+  });
+
+  it('колонок не меньше, чем строк', () => {
+    // Экран телевизора шире, чем выше. При колонок < строк плитки
+    // вытянуты по вертикали: по бокам остаются чёрные полосы, а
+    // изображение теряет в размере.
+    for (const size of GRID_SIZES) {
+      const { columns, rows } = tilePositions(size);
+      expect(columns).toBeGreaterThanOrEqual(rows);
+    }
+  });
+
+  it('порог плотной сетки совпадает с одним из размеров', () => {
+    // Порог сравнивается со значением size: если он не совпадёт ни с одним
+    // размером, плотный режим либо не включится никогда, либо включится
+    // уже при четырёх камерах.
+    expect(GRID_SIZES).toContain(DENSE_GRID_MIN_SIZE);
   });
 });

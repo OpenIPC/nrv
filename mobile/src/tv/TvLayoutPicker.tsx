@@ -108,7 +108,7 @@ function LayoutRow({
 function sizeText(size: number): string {
   if (size === 1) return 'одна камера';
   if (size === 2) return 'две камеры';
-  return 'четыре камеры';
+  return `камер: ${size}`;
 }
 
 const styles = StyleSheet.create({

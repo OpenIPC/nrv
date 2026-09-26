@@ -10,7 +10,26 @@
  */
 
 /** Сколько камер показывать одновременно. */
-export type GridSize = 1 | 2 | 4;
+export type GridSize = 1 | 2 | 4 | 6 | 9 | 16 | 25;
+
+/**
+ * Все допустимые размеры сетки в порядке показа.
+ *
+ * Список нужен в двух местах: кнопки выбора размера и проверка
+ * при чтении с диска. Держать его в одном месте важно: если кнопки
+ * и проверка разойдутся, часть размеров станет недостижимой.
+ */
+export const GRID_SIZES: GridSize[] = [1, 2, 4, 6, 9, 16, 25];
+
+/**
+ * Сетка настолько плотная, что подписи на плитках только мешают.
+ *
+ * При шестнадцати плитках на экран телевизора приходится около сотни
+ * пикселей на камеру: имя займёт половину плитки и закроет изображение.
+ * Поэтому для плотных сеток подписи прячем сами, а не ждём, что оператор
+ * догадается выключить их в настройках.
+ */
+export const DENSE_GRID_MIN_SIZE = 16;
 
 /**
  * Дополнительные элементы на плитке.
@@ -104,9 +123,7 @@ export function normalizeLayout(input: Partial<TvLayout> | null | undefined): Tv
     return base;
   }
 
-  const size: GridSize = input.size === 1 || input.size === 2 || input.size === 4
-    ? input.size
-    : base.size;
+  const size: GridSize = isGridSize(input.size) ? input.size : base.size;
 
   return {
     id: input.id ?? base.id,
@@ -126,6 +143,11 @@ export function normalizeLayout(input: Partial<TvLayout> | null | undefined): Tv
   };
 }
 
+/** Проверяет, что число — допустимый размер сетки. */
+function isGridSize(value: unknown): value is GridSize {
+  return typeof value === 'number' && GRID_SIZES.includes(value as GridSize);
+}
+
 /** Ограничивает число диапазоном от 0 до 1. */
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -135,9 +157,13 @@ function clamp01(value: number): number {
 /**
  * Раскладки экранов для сетки.
  *
- * Порядок плиток задан заранее и одинаков для всех размеров: первая камера
- * всегда занимает верхний левый угол. Так оператор, переключая размер,
- * видит те же камеры на тех же местах, а не привыкает заново.
+ * Форма подобрана под телевизионный экран 16:9, а не под квадрат: на
+ * квадратной сетке плитки были бы вытянуты по вертикали, а по бокам
+ * остались бы чёрные полосы. Поэтому везде колонок не меньше, чем строк.
+ *
+ * Порядок плиток задан заранее и одинаков для всех размеров: первая
+ * камера всегда занимает верхний левый угол. Так оператор, переключая
+ * размер, видит те же камеры на тех же местах, а не привыкает заново.
  */
 export function tilePositions(size: GridSize): { columns: number; rows: number } {
   switch (size) {
@@ -145,7 +171,15 @@ export function tilePositions(size: GridSize): { columns: number; rows: number }
       return { columns: 1, rows: 1 };
     case 2:
       return { columns: 2, rows: 1 };
-    default:
+    case 4:
       return { columns: 2, rows: 2 };
+    case 6:
+      return { columns: 3, rows: 2 };
+    case 9:
+      return { columns: 3, rows: 3 };
+    case 16:
+      return { columns: 4, rows: 4 };
+    default:
+      return { columns: 5, rows: 5 };
   }
 }

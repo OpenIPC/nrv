@@ -4,7 +4,7 @@ import Video, { type OnVideoErrorData } from 'react-native-video';
 import { joinUrl } from '../net/address';
 import { colors, radius, spacing } from '../theme';
 import type { Camera, StreamInfo } from '../types';
-import type { OverlayOptions } from './layout';
+import { DENSE_GRID_MIN_SIZE, type GridSize, type OverlayOptions } from './layout';
 
 /**
  * Плитка с камерой в сетке.
@@ -18,6 +18,10 @@ import type { OverlayOptions } from './layout';
  *     перезапуск всех плиток устроил бы пик запросов к серверу;
  *   - звук выключен, пока его не включат для конкретной камеры: иначе
  *     звучали бы все открытые камеры разом.
+ *
+ * Размер подписей зависит от плотности сетки: имя камеры при четырёх
+ * плитках читается нормально, а в сетке из двадцати пяти плиток оно
+ * заняло бы половину экрана и закрыло изображение.
  */
 export default function CameraTile({
   camera,
@@ -27,6 +31,7 @@ export default function CameraTile({
   overlay,
   soundEnabled,
   soundVolume,
+  gridSize,
   focused,
   onFocus,
   onPress,
@@ -40,6 +45,8 @@ export default function CameraTile({
   /** Слышен ли звук именно этой камеры. */
   soundEnabled: boolean;
   soundVolume: number;
+  /** Размер сетки: по нему подбирается масштаб подписей. */
+  gridSize: GridSize;
   focused: boolean;
   onFocus: () => void;
   onPress: () => void;
@@ -47,6 +54,9 @@ export default function CameraTile({
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [now, setNow] = useState(() => new Date());
+
+  // Плотная сетка — подписи мельче, фокусная рамка тоньше.
+  const dense = gridSize >= DENSE_GRID_MIN_SIZE;
 
   // Счётчик повторов держим в ref: его изменение не должно вызывать
   // перерисовку плитки.
@@ -111,7 +121,11 @@ export default function CameraTile({
     <Pressable
       onPress={onPress}
       onFocus={onFocus}
-      style={[styles.tile, focused && styles.tileFocused]}
+      style={[
+        styles.tile,
+        dense && styles.tileDense,
+        focused && styles.tileFocused,
+      ]}
     >
       <View style={styles.videoBox}>
         {hlsUrl ? (
@@ -167,11 +181,13 @@ export default function CameraTile({
 
         {error && (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>{error}</Text>
+            <Text style={[styles.errorText, dense && styles.errorTextDense]} numberOfLines={2}>
+              {error}
+            </Text>
           </View>
         )}
 
-        {overlay.showNames && (
+        {overlay.showNames && !dense && (
           <View style={styles.nameTag}>
             <Text style={styles.nameText} numberOfLines={1}>
               {camera.name}
@@ -179,7 +195,7 @@ export default function CameraTile({
           </View>
         )}
 
-        {overlay.showStatus && (
+        {overlay.showStatus && !dense && (
           <View style={styles.statusTag}>
             {soundEnabled && <Text style={styles.soundIcon}>🔊</Text>}
             <View
@@ -197,10 +213,25 @@ export default function CameraTile({
           </View>
         )}
 
-        {overlay.showClock && (
+        {overlay.showClock && !dense && (
           <View style={styles.clockTag}>
             <Text style={styles.clockText}>{formatClock(now)}</Text>
           </View>
+        )}
+
+        {/* В плотной сетке ни имени, ни времени не видно — вместо них
+            остаётся только точка состояния: по ней сразу заметно, какая
+            камера отвалилась, тогда как чёрные плитки выглядят одинаково. */}
+        {dense && overlay.showStatus && (
+          <View
+            style={[
+              styles.denseDot,
+              {
+                backgroundColor:
+                  camera.status === 'online' ? colors.success : colors.danger,
+              },
+            ]}
+          />
         )}
       </View>
     </Pressable>
@@ -236,6 +267,14 @@ const styles = StyleSheet.create({
     // по нажатию «ОК».
     borderColor: colors.primary,
   },
+  tileDense: {
+    // В сетке из 25 плиток отступ в четверть сантиметра съедает заметную
+    // долю экрана, а рамка в три пикселя почти не оставляет изображению
+    // места. Уменьшаем оба.
+    margin: 2,
+    borderWidth: 2,
+    borderRadius: radius.sm,
+  },
   videoBox: { flex: 1, backgroundColor: '#000' },
   video: { flex: 1 },
   hiddenAudio: {
@@ -253,6 +292,11 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   errorText: { color: colors.text, fontSize: 13, textAlign: 'center' },
+  errorTextDense: {
+    // В мелкой плитке текст ошибки не помещается и вылезал бы за края.
+    fontSize: 10,
+    lineHeight: 12,
+  },
 
   nameTag: {
     position: 'absolute',
@@ -290,4 +334,15 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
   },
   clockText: { color: colors.text, fontSize: 12 },
+
+  denseDot: {
+    // Точка состояния в плотной сетке: имени и времени там не видно,
+    // поэтому о состоянии сообщает только цвет.
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
 });
