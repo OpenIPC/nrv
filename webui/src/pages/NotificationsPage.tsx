@@ -6,13 +6,15 @@ import {
 import { useToast } from '../context/ToastContext'
 import {
   Bell, Loader2, Save, RefreshCw, Trash2, CheckCircle2, XCircle,
-  ShieldCheck, AlertCircle, MessageCircle, Eye, EyeOff,
+  ShieldCheck, AlertCircle, MessageCircle, Eye, EyeOff, Server,
 } from 'lucide-react'
 import {
   ChannelEventRules, TestBar, EVENT_OPTIONS,
   labelStyle, hintStyle, checkStyle,
 } from '../components/NotificationChannel'
 import { parseProxyInput, type ParsedProxy } from '../utils/proxyLink'
+import { systemAPI, DEFAULT_SYSTEM, type SystemConfig } from '../api/system'
+import SystemNotifications from '../components/SystemNotifications'
 
 const EMPTY_TELEGRAM: TelegramConfig = {
   enabled: false,
@@ -54,9 +56,10 @@ const EMPTY_MAX: MaxConfig = {
 const CHANNEL_LABELS: Record<string, string> = {
   telegram: 'Telegram',
   max: 'MAX',
+  system: 'Сервер',
 }
 
-type Tab = 'telegram' | 'max'
+type Tab = 'telegram' | 'max' | 'system'
 
 export default function NotificationsPage() {
   const toast = useToast()
@@ -65,6 +68,9 @@ export default function NotificationsPage() {
 
   const [telegram, setTelegram] = useState<TelegramConfig>(EMPTY_TELEGRAM)
   const [max, setMax] = useState<MaxConfig>(EMPTY_MAX)
+  // Системные уведомления настраиваются отдельно: здесь не «куда
+  // отправлять», а «что считать проблемой сервера».
+  const [system, setSystem] = useState<SystemConfig>(DEFAULT_SYSTEM)
   const [cameras, setCameras] = useState<Camera[]>([])
 
   const [loading, setLoading] = useState(true)
@@ -88,9 +94,10 @@ export default function NotificationsPage() {
     Promise.all([
       notificationsAPI.get(),
       notificationsAPI.getMax(),
+      systemAPI.get(),
       camerasAPI.list(),
     ])
-      .then(([tgRes, maxRes, camRes]) => {
+      .then(([tgRes, maxRes, sysRes, camRes]) => {
         if (cancelled) return
         // Сервер отдаёт пустые списки как null: в Go пустой срез без
         // явной инициализации превращается в null, и обращения к нему
@@ -106,6 +113,12 @@ export default function NotificationsPage() {
           ...maxRes.data,
           events: maxRes.data.events || [],
           cameras: maxRes.data.cameras || [],
+        })
+        setSystem({
+          ...DEFAULT_SYSTEM,
+          ...sysRes.data,
+          events: sysRes.data.events || [],
+          cameras: sysRes.data.cameras || [],
         })
         setCameras(camRes.data || [])
       })
@@ -141,6 +154,29 @@ export default function NotificationsPage() {
     setTestResult(null)
   }, [])
 
+  /** Обновление поля системных настроек.
+   *
+   * Принимает имя строкой, а не ключом типа: общий блок правил отдаёт
+   * пары «ключ-значение» без знания о конкретных полях.
+   */
+  const patchSystem = useCallback((key: string, value: unknown) => {
+    setSystem((prev) => ({ ...prev, [key]: value }))
+    setDirty(true)
+  }, [])
+
+  /** Обновление одного порога.
+   *
+   * Пороги лежат вложенным объектом, поэтому обычный patch по имени поля
+   * здесь не подходит — нужен отдельный путь через thresholds.
+   */
+  const patchThreshold = useCallback((key: string, value: unknown) => {
+    setSystem((prev) => ({
+      ...prev,
+      thresholds: { ...prev.thresholds, [key]: value },
+    }))
+    setDirty(true)
+  }, [])
+
   /**
    * Обновление поля активного канала по имени.
    *
@@ -161,12 +197,13 @@ export default function NotificationsPage() {
       return { ...prev, events }
     }
     if (tab === 'telegram') setTelegram(update)
-    else setMax(update)
+    else if (tab === 'max') setMax(update)
+    else setSystem(update)
     setDirty(true)
     setTestResult(null)
   }, [tab])
 
-  /** Переключение камеры-источника в активном канале. */
+  /** Переключение камеры-источника в активном разделе. */
   const toggleCameraActive = useCallback((id: string) => {
     const update = (prev: any) => {
       const cameras = prev.cameras.includes(id)
@@ -175,21 +212,25 @@ export default function NotificationsPage() {
       return { ...prev, cameras }
     }
     if (tab === 'telegram') setTelegram(update)
-    else setMax(update)
+    else if (tab === 'max') setMax(update)
+    else setSystem(update)
     setDirty(true)
     setTestResult(null)
   }, [tab])
 
-  /** Записывает настройки открытого канала в базу. */
+  /** Записывает настройки открытого раздела в базу. */
   const persist = async (): Promise<void> => {
-    // Сохраняем только открытый канал: во втором могут быть
+    // Сохраняем только открытый раздел: в остальных могут быть
     // незавершённые правки, и записывать их оператор не просил.
     if (tab === 'telegram') {
       const res = await notificationsAPI.update(telegram)
       setTelegram((prev) => ({ ...prev, ...res.data }))
-    } else {
+    } else if (tab === 'max') {
       const res = await notificationsAPI.updateMax(max)
       setMax((prev) => ({ ...prev, ...res.data }))
+    } else {
+      const res = await systemAPI.update(system)
+      setSystem((prev) => ({ ...prev, ...res.data }))
     }
     setDirty(false)
   }
@@ -283,11 +324,11 @@ export default function NotificationsPage() {
         </button>
       </div>
 
-      {/* Переключатель каналов */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {(['telegram', 'max'] as Tab[]).map((t) => {
+      {/* Переключатель разделов */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        {(['telegram', 'max', 'system'] as Tab[]).map((t) => {
           const active = tab === t
-          const channelCfg = t === 'telegram' ? telegram : max
+          const channelCfg = t === 'telegram' ? telegram : t === 'max' ? max : system
           return (
             <button
               key={t}
@@ -301,9 +342,11 @@ export default function NotificationsPage() {
                 color: active ? 'var(--accent)' : 'var(--text-secondary)',
               }}
             >
-              {t === 'telegram' ? <MessageCircle size={15} /> : <Bell size={15} />}
+              {t === 'telegram' ? <MessageCircle size={15} />
+                : t === 'max' ? <Bell size={15} />
+                : <Server size={15} />}
               {CHANNEL_LABELS[t]}
-              {/* Точка показывает, что канал включён — видно, не открывая вкладку */}
+              {/* Точка показывает, включён ли раздел — видно, не открывая вкладку */}
               <span style={{
                 width: 7, height: 7, borderRadius: '50%',
                 background: channelCfg.enabled ? 'var(--success)' : 'var(--border)',
@@ -313,6 +356,22 @@ export default function NotificationsPage() {
         })}
       </div>
 
+      {/* Вкладка состояния сервера: свои поля, каналы те же */}
+      {tab === 'system' && (
+        <SystemNotifications
+          config={system}
+          cameras={cameras}
+          patch={patchSystem}
+          patchThreshold={patchThreshold}
+          toggleEvent={toggleEventActive}
+          toggleCamera={toggleCameraActive}
+          saving={saving}
+          onSave={save}
+        />
+      )}
+
+      {tab !== 'system' && (
+      <>
       {/* Управление каналом */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
@@ -514,6 +573,8 @@ export default function NotificationsPage() {
         result={testResult}
         hint="Настройки сохраняются, затем отправляется пробное сообщение."
       />
+      </>
+      )}
 
       {/* Журнал отправок: общий для обоих каналов */}
       <div className="card">

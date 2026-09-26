@@ -29,8 +29,8 @@ type HostStatus struct {
 	// Available — отвечает ли агент управления хостом.
 	// Ложь означает, что служба не установлена: тогда менять настройки
 	// нельзя, но показать текущее состояние всё равно нужно.
-	Available bool                  `json:"available"`
-	Time      *hostagent.TimeState  `json:"time,omitempty"`
+	Available bool                    `json:"available"`
+	Time      *hostagent.TimeState    `json:"time,omitempty"`
 	Network   *hostagent.NetworkState `json:"network,omitempty"`
 	// Error — почему состояние недоступно.
 	Error string `json:"error,omitempty"`

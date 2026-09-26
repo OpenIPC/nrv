@@ -118,6 +118,126 @@ def network_address(ip: str, prefix: int) -> str:
     return ".".join(str((network >> shift) & 0xFF) for shift in (24, 16, 8, 0))
 
 
+# ---------------------------------------------- состояние железа сервера
+
+
+def read_hardware_state() -> dict:
+    """Читает то, чего не видно из контейнера: видеокарту и температуру.
+
+    Работает только агент: /dev/dri и nvidia-smi есть на хосте, а в
+    контейнер они не пробрасываются, и sysfs датчиков там пуст.
+    """
+    state = {
+        "gpus": read_gpus(),
+        "temperatures": read_temperatures(),
+        "cpu_temp": None,
+    }
+
+    # За общую температуру процессора берём первый доступный датчик
+    # с подходящим именем: на разных платформах он называется по-разному.
+    for item in state["temperatures"]:
+        label = item.get("label", "").lower()
+        if any(word in label for word in ("coretemp", "k10temp", "cpu", "package", "tctl")):
+            state["cpu_temp"] = item.get("celsius")
+            break
+
+    return state
+
+
+def read_gpus() -> list:
+    """Возвращает состояние видеокарт NVIDIA.
+
+    Через nvidia-smi, а не через sysfs: он даёт и температуру, и загрузку,
+    и занятую память одним запросом, а формат вывода стабилен.
+    """
+    code, out, _ = run([
+        "nvidia-smi",
+        "--query-gpu=index,name,temperature.gpu,utilization.gpu,memory.used,memory.total",
+        "--format=csv,noheader,nounits",
+    ], timeout=10, check=False)
+
+    if code != 0:
+        # Видеокарты может не быть, или драйвер не установлен — это
+        # нормальное состояние, а не ошибка агента.
+        return []
+
+    gpus = []
+    for line in out.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 6:
+            continue
+        try:
+            gpus.append({
+                "index": int(parts[0]),
+                "name": parts[1],
+                "temperature": _to_number(parts[2]),
+                "utilization": _to_number(parts[3]),
+                "memory_used_mb": _to_number(parts[4]),
+                "memory_total_mb": _to_number(parts[5]),
+            })
+        except ValueError:
+            # Строка неожиданного вида: пропускаем, чтобы не терять
+            # состояние остальных карт.
+            continue
+
+    return gpus
+
+
+def read_temperatures() -> list:
+    """Возвращает показания температурных датчиков.
+
+    Читаем hwmon напрямую: он есть и на реальном железе, и в виртуалке,
+    и не требует lm-sensors. На виртуальных машинах список обычно пуст —
+    это нормально.
+    """
+    items = []
+    hwmon = Path("/sys/class/hwmon")
+
+    if not hwmon.is_dir():
+        return items
+
+    for device in sorted(hwmon.iterdir()):
+        # Имя датчика лежит в файле name; при его отсутствии используем
+        # имя каталога, чтобы запись всё равно осталась читаемой.
+        label = device.name
+        try:
+            label = (device / "name").read_text(encoding="utf-8").strip() or label
+        except OSError:
+            pass
+
+        for temp_file in sorted(device.glob("temp*_input")):
+            try:
+                raw = int(temp_file.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                continue
+
+            # Значение приходит в тысячных долях градуса.
+            celsius = raw / 1000.0
+            if not -50 < celsius < 150:
+                # Отсекаем мусор: некоторые драйверы отдают максимум
+                # целого при отсутствии датчика.
+                continue
+
+            items.append({"label": label, "celsius": round(celsius, 1)})
+
+    return items
+
+
+def _to_number(value: str):
+    """Переводит значение nvidia-smi в число.
+
+    При отсутствии датчика nvidia-smi печатает «N/A» — это не ошибка,
+    просто данных нет.
+    """
+    value = (value or "").strip()
+    if not value or value.upper() in ("N/A", "[N/A]", "NOT SUPPORTED"):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
 def is_valid_gateway(value: str) -> bool:
     """Шлюз должен быть корректным IPv4 и не совпадать с адресом сервера."""
     return is_valid_ipv4(value)
@@ -787,6 +907,7 @@ HANDLERS = {
         "interfaces": list_interfaces(),
     },
     "network_apply": apply_network,
+    "hardware_state": lambda payload: read_hardware_state(),
     "ping": lambda payload: {"ok": True, "pong": True},
 }
 

@@ -265,8 +265,8 @@ type StorageConfig struct {
 
 // ServerSettings — глобальные настройки сервера.
 type ServerSettings struct {
-	Storage       StorageConfig `json:"storage"`
-	Snapshots     StorageConfig `json:"snapshots"`
+	Storage       StorageConfig        `json:"storage"`
+	Snapshots     StorageConfig        `json:"snapshots"`
 	Notifications NotificationSettings `json:"notifications"`
 }
 
@@ -287,6 +287,11 @@ const (
 type NotificationSettings struct {
 	Telegram TelegramConfig `json:"telegram"`
 	Max      MaxConfig      `json:"max"`
+	// System — уведомления о состоянии сервера: пропавшие камеры,
+	// перегрузка, нехватка памяти, перегрев. Отдельно от каналов,
+	// потому что это сообщения о самом сервере, а не о событиях
+	// на камерах, и пороги у них свои.
+	System SystemConfig `json:"system"`
 }
 
 // CommonChannelConfig — поля, общие для каналов уведомлений.
@@ -319,7 +324,6 @@ type CommonChannelConfig struct {
 }
 
 // MaxConfig — канал уведомлений в мессенджере MAX.
-//
 type MaxConfig struct {
 	CommonChannelConfig
 	// BotToken — токен бота из настроек чат-бота в MAX. Секрет.
@@ -693,9 +697,13 @@ const (
 
 // UpdateServerSettingsRequest — частичное обновление настроек сервера.
 type UpdateServerSettingsRequest struct {
-	Storage       *StorageConfig       `json:"storage,omitempty"`
-	Snapshots     *StorageConfig       `json:"snapshots,omitempty"`
+	Storage       *StorageConfig        `json:"storage,omitempty"`
+	Snapshots     *StorageConfig        `json:"snapshots,omitempty"`
 	Notifications *NotificationSettings `json:"notifications,omitempty"`
+	// System — настройки уведомлений о состоянии сервера. Отдельным
+	// полем, а не внутри Notifications: у них свои пороги, и страница
+	// сохраняет их отдельно от каналов.
+	System *SystemConfig `json:"system,omitempty"`
 }
 
 // CreateCameraRequest — запрос на создание камеры

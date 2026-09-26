@@ -245,28 +245,74 @@ func (r *DetectionSettingsRepo) GetServerSettings(ctx context.Context) (*domain.
 		if err := rows.Scan(&key, &raw); err != nil {
 			return nil, fmt.Errorf("scan server settings: %w", err)
 		}
-		switch key {
-		case "storage":
-			if err := json.Unmarshal(raw, &out.Storage); err != nil {
-				return nil, fmt.Errorf("decode storage settings: %w", err)
-			}
-		case "snapshots":
-			if err := json.Unmarshal(raw, &out.Snapshots); err != nil {
-				return nil, fmt.Errorf("decode snapshots settings: %w", err)
-			}
-		case "notifications":
-			if err := json.Unmarshal(raw, &out.Notifications); err != nil {
-				return nil, fmt.Errorf("decode notifications settings: %w", err)
-			}
-		case "notifications_max":
-			// Канал MAX лежит отдельным ключом: у него свои токен и chat_id,
-			// а общие правила отбора событий совпадают с Telegram.
-			if err := json.Unmarshal(raw, &out.Notifications.Max); err != nil {
-				return nil, fmt.Errorf("decode max settings: %w", err)
-			}
+		if err := applySetting(out, key, raw); err != nil {
+			return nil, err
 		}
 	}
+
+	// Пороги по умолчанию подставляем, если оператор их не задавал:
+	// без них проверки не сработали бы вовсе, и раздел выглядел бы
+	// неработающим.
+	applySystemDefaults(&out.Notifications.System)
+
 	return out, rows.Err()
+}
+
+// applySetting разбирает одну строку настроек в общий объект.
+//
+// Вынесено отдельной функцией, а не оставлено в цикле: порядок строк из
+// базы не гарантирован, и разные ключи пишут в разные части одного
+// объекта. Так это можно проверить тестом без базы данных.
+func applySetting(out *domain.ServerSettings, key string, raw []byte) error {
+	switch key {
+	case "storage":
+		if err := json.Unmarshal(raw, &out.Storage); err != nil {
+			return fmt.Errorf("decode storage settings: %w", err)
+		}
+	case "snapshots":
+		if err := json.Unmarshal(raw, &out.Snapshots); err != nil {
+			return fmt.Errorf("decode snapshots settings: %w", err)
+		}
+	case "notifications":
+		// Разбираем во временную структуру и переносим только каналы:
+		// в ключе notifications поля System нет (оно живёт отдельным
+		// ключом), и прямая распаковка затирала бы уже прочитанные
+		// системные настройки, если строки пришли в другом порядке.
+		var loaded struct {
+			Telegram domain.TelegramConfig `json:"telegram"`
+			Max      domain.MaxConfig      `json:"max"`
+		}
+		if err := json.Unmarshal(raw, &loaded); err != nil {
+			return fmt.Errorf("decode notifications settings: %w", err)
+		}
+		out.Notifications.Telegram = loaded.Telegram
+		out.Notifications.Max = loaded.Max
+	case "notifications_max":
+		// Канал MAX лежит отдельным ключом: у него свои токен и chat_id,
+		// а общие правила отбора событий совпадают с Telegram.
+		if err := json.Unmarshal(raw, &out.Notifications.Max); err != nil {
+			return fmt.Errorf("decode max settings: %w", err)
+		}
+	case "notifications_system":
+		// Системные уведомления тоже отдельным ключом: у них свои
+		// пороги, а каналы доставки общие с Telegram и MAX.
+		if err := json.Unmarshal(raw, &out.Notifications.System); err != nil {
+			return fmt.Errorf("decode system notification settings: %w", err)
+		}
+	}
+	return nil
+}
+
+// applySystemDefaults заполняет незаданные пороги значениями по умолчанию.
+//
+// Нулевой порог означает «проверка выключена», поэтому просто подставить
+// значения нельзя — иначе оператор не смог бы отключить отдельную
+// проверку. Исключение — первая настройка: если объект пуст целиком,
+// значит раздел ещё не сохраняли, и нужны все значения по умолчанию.
+func applySystemDefaults(cfg *domain.SystemConfig) {
+	if cfg.Thresholds == (domain.SystemThresholds{}) {
+		cfg.Thresholds = domain.DefaultSystemThresholds()
+	}
 }
 
 // UpdateServerSettings сохраняет переданные секции настроек.
@@ -296,6 +342,13 @@ func (r *DetectionSettingsRepo) UpdateServerSettings(ctx context.Context, req do
 	if req.Notifications != nil {
 		if err := save("notifications", req.Notifications); err != nil {
 			return nil, fmt.Errorf("save notifications settings: %w", err)
+		}
+	}
+	if req.System != nil {
+		// Системные настройки — отдельным ключом: они не относятся к
+		// каналам, а каналы доставки берутся из настроек Telegram и MAX.
+		if err := save("notifications_system", req.System); err != nil {
+			return nil, fmt.Errorf("save system notification settings: %w", err)
 		}
 	}
 	return r.GetServerSettings(ctx)

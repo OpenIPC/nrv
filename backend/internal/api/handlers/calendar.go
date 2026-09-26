@@ -192,12 +192,12 @@ func (h *RecordingHandler) DayTimeline(w http.ResponseWriter, r *http.Request) {
 	// Отдаём плоскую структуру, а не domain.Recording: интерфейсу нужны
 	// только эти поля, и лишние ссылки на файлы его не интересуют.
 	type TimelineItem struct {
-		ID          string  `json:"id"`
-		CameraID    string  `json:"camera_id"`
-		CameraName  string  `json:"camera_name"`
-		StartTime   string  `json:"start_time"`
-		EndTime     string  `json:"end_time"`
-		TriggerType string  `json:"trigger_type"`
+		ID          string `json:"id"`
+		CameraID    string `json:"camera_id"`
+		CameraName  string `json:"camera_name"`
+		StartTime   string `json:"start_time"`
+		EndTime     string `json:"end_time"`
+		TriggerType string `json:"trigger_type"`
 		// FilePath — путь к файлу записи в хранилище. Без него шкала
 		// не сможет воспроизвести клип: File принимает path, не id.
 		FilePath string `json:"file_path"`

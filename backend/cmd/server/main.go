@@ -16,12 +16,14 @@ import (
 	"github.com/nvr/backend/internal/config"
 	"github.com/nvr/backend/internal/domain"
 	"github.com/nvr/backend/internal/hostagent"
+	"github.com/nvr/backend/internal/monitor"
 	natspkg "github.com/nvr/backend/internal/nats"
 	"github.com/nvr/backend/internal/notify"
 	miniorepo "github.com/nvr/backend/internal/repository/minio"
 	"github.com/nvr/backend/internal/repository/postgres"
 	"github.com/nvr/backend/internal/service"
 	"github.com/nvr/backend/internal/service/acs"
+	"github.com/nvr/backend/internal/sysinfo"
 	"github.com/nvr/backend/internal/tunnel"
 	"github.com/nvr/backend/pkg/logger"
 	"github.com/rs/zerolog/log"
@@ -277,6 +279,25 @@ func main() {
 	// Управление камерами через HTTP API прошивки (вместо SSH):
 	// настройки видео, изображения, ночного режима, OSD и перезапуск.
 	settingsSvc := service.NewCameraSettingsService(cameraRepo)
+
+	// Мониторинг состояния сервера и камер: пропавшие камеры, перегрузка
+	// процессора, нехватка памяти, заполненный диск, перегрев, видеокарта.
+	//
+	// Отдельная служба, а не часть уведомлений: здесь решается, о чём
+	// стоит сообщать (пороги, выдержка, антидребезг), а доставкой
+	// занимается notify.
+	//
+	// Каталог для проверки места берём там, где лежит архив: именно его
+	// заполнение прекратит запись, а не заполнение корня контейнера.
+	systemReader := sysinfo.NewReader(cfg.RecordBufferDir)
+	systemMonitor := monitor.NewMonitor(
+		monitor.NewCameraRepoSource(cameraRepo),
+		monitor.NewSettingsProvider(detectionSettingsRepo),
+		monitor.NewSystemReaderAdapter(systemReader),
+		monitor.NewHardwareAdapter(hostAgent),
+		monitor.NewNotifierAdapter(notifier),
+	)
+	go systemMonitor.Start(context.Background())
 
 	// Превью камер: одиночный кадр по HTTP вместо видеопотока.
 	previewSvc := service.NewCameraPreviewService(cameraRepo)

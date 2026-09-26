@@ -90,6 +90,33 @@ func (s *Service) Notify(ctx context.Context, ev Event) {
 	go s.send(context.Background(), ev)
 }
 
+// NotifySystem отправляет сообщение о состоянии сервера.
+//
+// Отдельный путь, а не общий с событиями камер: у системных сообщений
+// нет снимка и клипа, зато есть порог важности, свой текст и решение
+// о необходимости отправки, которое уже принял мониторинг.
+func (s *Service) NotifySystem(ctx context.Context, ev SystemEvent) {
+	go s.sendSystem(context.Background(), ev)
+}
+
+// SystemEvent — сообщение о состоянии сервера.
+type SystemEvent struct {
+	// Type — один из domain.SystemTrigger*.
+	Type string
+	// Title и Detail — заголовок и расшифровка.
+	Title  string
+	Detail string
+	// Severity: warning, critical или info.
+	Severity string
+	// CameraID и CameraName заполнены для событий о камерах: по ним
+	// сообщение можно ограничить списком выбранных камер.
+	CameraID   uuid.UUID
+	CameraName string
+	// Resolved означает, что проблема устранена.
+	Resolved bool
+	Time     time.Time
+}
+
 // ClipExpected сообщает, стоит ли ждать клип по событию этой камеры.
 //
 // Проверяются включённость канала и отправка видео: если видео не шлётся

@@ -283,3 +283,53 @@ func (c *Client) ApplyNetwork(ctx context.Context, req ApplyNetworkRequest) erro
 	_, err := c.call(ctx, "network_apply", payload)
 	return err
 }
+
+// GPU — состояние одной видеокарты.
+//
+// Числовые поля указатели: nvidia-smi отдаёт «N/A» там, где датчика нет,
+// и это нужно отличать от нуля. Ноль загрузки — карта простаивает,
+// отсутствие данных — она вообще не сообщает о себе.
+type GPU struct {
+	Index         int      `json:"index"`
+	Name          string   `json:"name"`
+	Temperature   *float64 `json:"temperature"`
+	Utilization   *float64 `json:"utilization"`
+	MemoryUsedMB  *float64 `json:"memory_used_mb"`
+	MemoryTotalMB *float64 `json:"memory_total_mb"`
+}
+
+// Temperature — показание температурного датчика.
+type Temperature struct {
+	Label   string  `json:"label"`
+	Celsius float64 `json:"celsius"`
+}
+
+// HardwareState — состояние железа, которое видно только с хоста.
+//
+// В контейнере этих данных нет: видеокарта не пробрасывается, а
+// температурные датчики в sysfs виртуальной машины пусты.
+type HardwareState struct {
+	GPUs         []GPU         `json:"gpus"`
+	Temperatures []Temperature `json:"temperatures"`
+	// CPUTemp — температура процессора. Может отсутствовать: на
+	// виртуальных машинах датчиков обычно нет.
+	CPUTemp *float64 `json:"cpu_temp"`
+}
+
+// HardwareState запрашивает состояние железа у службы на хосте.
+func (c *Client) HardwareState(ctx context.Context) (*HardwareState, error) {
+	raw, err := c.call(ctx, "hardware_state", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	st := &HardwareState{}
+	marshal, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(marshal, st); err != nil {
+		return nil, fmt.Errorf("не удалось разобрать состояние железа: %w", err)
+	}
+	return st, nil
+}

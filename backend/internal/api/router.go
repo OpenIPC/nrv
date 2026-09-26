@@ -109,7 +109,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// бэкенд только передаёт ей команды и показывает результат.
 	hostH := handlers.NewHostHandler(cfg.HostAgent)
 
-	audioH := handlers.NewAudioHandler(postgres.NewAudioRepo(cfg.DB), cfg.AudioSvc)	// Адрес камеры нужен, чтобы определить аудиокодек через ffprobe.
+	audioH := handlers.NewAudioHandler(postgres.NewAudioRepo(cfg.DB), cfg.AudioSvc) // Адрес камеры нужен, чтобы определить аудиокодек через ffprobe.
 	audioH.WithCameraSource(func(cameraID uuid.UUID) string {
 		url, err := cfg.CameraSvc.StreamURLForRecord(context.Background(), cameraID)
 		if err != nil {
@@ -245,6 +245,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/settings/notifications/max", notifyH.GetMax)
 			r.Patch("/settings/notifications/max", notifyH.UpdateMax)
 			r.Post("/settings/notifications/max/test", notifyH.TestMax)
+
+			// Системные уведомления: пропавшие камеры, перегрузка, память,
+			// диск, перегрев. Отдельный раздел, потому что у него свои
+			// пороги, а каналы доставки общие с Telegram и MAX.
+			r.Get("/settings/notifications/system", notifyH.GetSystem)
+			r.Patch("/settings/notifications/system", notifyH.UpdateSystem)
 
 			// Время и сеть сервера. Изменения выполняет служба на хосте:
 			// у контейнера системных прав нет намеренно.
