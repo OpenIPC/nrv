@@ -26,6 +26,7 @@ func (r *CameraRepo) List(ctx context.Context) ([]domain.Camera, error) {
 			COALESCE(ip, '') as ip,
 			COALESCE(mac, '') as mac,
 			COALESCE(firmware, '') as firmware,
+			COALESCE(vendor, 'unknown') as vendor,
 			site_id, COALESCE(wg_ip::text, '') as wg_ip, status, hw_info, settings,
 			channel_number, created_at, updated_at
 		FROM cameras ORDER BY created_at DESC
@@ -39,7 +40,7 @@ func (r *CameraRepo) List(ctx context.Context) ([]domain.Camera, error) {
 	for rows.Next() {
 		var c domain.Camera
 		var hwInfo, settings []byte
-		if err := rows.Scan(&c.ID, &c.Name, &c.RTSPUrl, &c.MainStream, &c.SubStream, &c.IP, &c.MAC, &c.Firmware,
+		if err := rows.Scan(&c.ID, &c.Name, &c.RTSPUrl, &c.MainStream, &c.SubStream, &c.IP, &c.MAC, &c.Firmware, &c.Vendor,
 			&c.SiteID, &c.WGIP,
 			&c.Status, &hwInfo, &settings, &c.ChannelNumber, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
@@ -78,10 +79,11 @@ func (r *CameraRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Camera,
 			COALESCE(ip, '') as ip,
 			COALESCE(mac, '') as mac,
 			COALESCE(firmware, '') as firmware,
+			COALESCE(vendor, 'unknown') as vendor,
 			site_id, COALESCE(wg_ip::text, '') as wg_ip, status, hw_info, settings,
 			channel_number, created_at, updated_at
 		FROM cameras WHERE id = $1
-	`, id).Scan(&c.ID, &c.Name, &c.RTSPUrl, &c.MainStream, &c.SubStream, &c.IP, &c.MAC, &c.Firmware,
+	`, id).Scan(&c.ID, &c.Name, &c.RTSPUrl, &c.MainStream, &c.SubStream, &c.IP, &c.MAC, &c.Firmware, &c.Vendor,
 		&c.SiteID, &c.WGIP,
 		&c.Status, &hwInfo, &settings, &c.ChannelNumber, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
@@ -101,12 +103,25 @@ func (r *CameraRepo) Create(ctx context.Context, cam *domain.Camera) error {
 	hwInfo, _ := json.Marshal(cam.HWInfo)
 	settings, _ := json.Marshal(cam.Settings)
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO cameras (id, name, rtsp_url, main_stream, sub_stream, ip, mac, firmware, site_id, wg_ip, status, hw_info, settings, channel_number, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, '')::inet, $11, $12, $13, $14, $15, $16)
+		INSERT INTO cameras (id, name, rtsp_url, main_stream, sub_stream, ip, mac, firmware, vendor, site_id, wg_ip, status, hw_info, settings, channel_number, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')::inet, $12, $13, $14, $15, $16, $17)
 	`, cam.ID, cam.Name, cam.RTSPUrl, cam.MainStream, cam.SubStream, cam.IP, cam.MAC, cam.Firmware,
+		vendorOrDefault(cam.Vendor),
 		cam.SiteID, cam.WGIP,
 		cam.Status, hwInfo, settings, cam.ChannelNumber, cam.CreatedAt, cam.UpdatedAt)
 	return err
+}
+
+// vendorOrDefault — значение вендора для записи в базу.
+//
+// Пустая строка превращается в 'unknown': в базе «неизвестно» — это
+// отдельное значение, а не отсутствие данных, и по нему принимается
+// решение не показывать настройки OpenIPC.
+func vendorOrDefault(v domain.Vendor) string {
+	if v == "" {
+		return string(domain.VendorUnknown)
+	}
+	return string(v)
 }
 
 func (r *CameraRepo) Update(ctx context.Context, cam *domain.Camera) error {
@@ -115,10 +130,10 @@ func (r *CameraRepo) Update(ctx context.Context, cam *domain.Camera) error {
 	cam.UpdatedAt = time.Now()
 	_, err := r.db.Exec(ctx, `
 		UPDATE cameras SET name=$2, rtsp_url=$3, main_stream=$4, sub_stream=$5, ip=$6, mac=$7, firmware=$8,
-		site_id=$9, wg_ip=NULLIF($10, '')::inet, status=$11,
-		hw_info=$12, settings=$13, channel_number=$14, updated_at=$15 WHERE id=$1
+		vendor=$9, site_id=$10, wg_ip=NULLIF($11, '')::inet, status=$12,
+		hw_info=$13, settings=$14, channel_number=$15, updated_at=$16 WHERE id=$1
 	`, cam.ID, cam.Name, cam.RTSPUrl, cam.MainStream, cam.SubStream, cam.IP, cam.MAC, cam.Firmware,
-		cam.SiteID, cam.WGIP,
+		vendorOrDefault(cam.Vendor), cam.SiteID, cam.WGIP,
 		cam.Status, hwInfo, settings, cam.ChannelNumber, cam.UpdatedAt)
 	return err
 }

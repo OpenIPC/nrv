@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { camerasAPI, Camera, CameraHealth } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
+import VendorBadge from '../components/VendorBadge'
 import { Plus, Trash2, RefreshCw, Eye, Radio, Wifi, WifiOff, Activity, AlertTriangle } from 'lucide-react'
 
 // Цвет и подпись для уровня здоровья камеры. Один источник правды, чтобы
@@ -186,7 +187,12 @@ export default function CamerasPage() {
               style={{ cursor: 'pointer' }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                <h3 style={{ fontSize: 16 }}>{cam.name}</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <h3 style={{ fontSize: 16, margin: 0 }}>{cam.name}</h3>
+                  {/* Производитель рядом с именем, а не только на превью:
+                      он определяет, какие настройки на камере существуют. */}
+                  <VendorBadge vendor={cam.vendor} verbose />
+                </div>
                 <span className={`badge badge-${isOnline ? (cam.status === 'recording' ? 'recording' : 'online') : 'offline'}`}>
                   <span className={`badge-dot badge-dot-${isOnline ? 'online' : 'offline'}`} />
                   {cam.status}
@@ -213,6 +219,10 @@ export default function CamerasPage() {
                       fontSize: 10, padding: '2px 6px', borderRadius: 4,
                     }}>main</span>
                   )}
+                  {/* Производитель виден прямо в списке: от него зависит,
+                      какие настройки на камере вообще существуют, и при
+                      разборе проблемы это первое, что нужно знать. */}
+                  <VendorBadge vendor={cam.vendor} />
                 </div>
                 <div style={{ position: 'absolute', top: 8, right: 8 }}>
                   {isOnline ? (

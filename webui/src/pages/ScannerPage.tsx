@@ -97,6 +97,10 @@ export default function ScannerPage() {
         ip: cam.ip,
         mac: cam.mac,
         firmware: cam.firmware,
+        // Производителя передаём явно: сканер определил его по API самой
+        // камеры, и это надёжнее, чем потом угадывать по версии прошивки.
+        // От него зависит, какие разделы карточки будут доступны.
+        vendor: cam.vendor,
         username,
         password,
       })

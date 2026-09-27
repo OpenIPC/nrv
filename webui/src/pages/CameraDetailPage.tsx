@@ -11,6 +11,8 @@ import AudioSettingsPanel from '../components/AudioSettingsPanel'
 import CameraSettingsPanel from '../components/CameraSettingsPanel'
 import CameraConfigPanel from '../components/CameraConfigPanel'
 import CameraImageProfilePanel from '../components/CameraImageProfilePanel'
+import OpenIPCOnly from '../components/OpenIPCOnly'
+import VendorBadge from '../components/VendorBadge'
 import {
   ArrowLeft, RefreshCw, Wifi, WifiOff, Radio, Info,
   Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, Loader2, Crosshair, Volume2, Sliders,
@@ -103,21 +105,32 @@ export default function CameraDetailPage() {
       .catch(() => setMajestic(null))
   }
 
+  // Признак OpenIPC нужен и здесь, а не только при отрисовке раздела.
+  //
+  // Без него карточка чужой камеры при каждом открытии дёргала бы NTP,
+  // логи и присмотр — запросы, которых на Hikvision нет по определению.
+  // Они бы падали с ошибкой, и оператор видел бы мигающие сообщения о
+  // сбоях там, где ничего не сломано.
+  const isOpenIPC = camera?.vendor === 'openipc'
+
   useEffect(() => {
     loadStream()
+    if (!isOpenIPC) return
     loadNTP()
     loadLogRemote()
     loadMajestic()
-  }, [id])
+  }, [id, isOpenIPC])
 
   const events: DetectionEvent[] = eventsData?.events || []
 
   const handleRefresh = async () => {
     await Promise.all([refetch(), refetchEvents()])
     loadStream()
-    loadNTP()
-    loadLogRemote()
-    loadMajestic()
+    if (isOpenIPC) {
+      loadNTP()
+      loadLogRemote()
+      loadMajestic()
+    }
     toast.success('Данные обновлены')
   }
 
@@ -309,6 +322,15 @@ export default function CameraDetailPage() {
               <span className={`badge-dot badge-dot-${isOnline ? 'online' : 'offline'}`} />
               {camera.status}
             </span>
+            {/* Производитель в заголовке — не украшение. Он объясняет,
+                почему ниже часть разделов выглядит иначе: на не-OpenIPC
+                камере настроек прошивки нет вовсе, и оператор должен
+                видеть причину рядом с названием, а не догадываться.
+
+                Короткая метка, без пояснения: подробное объяснение стоит
+                в самих закрытых разделах, а в заголовке оно превращается
+                в шум рядом с названием камеры. */}
+            <VendorBadge vendor={camera.vendor} />
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
             {isOnline ? 'Камера активна, поток доступен' : 'Камера не в сети'}
@@ -422,14 +444,20 @@ export default function CameraDetailPage() {
                 Настройки
               </button>
               {/* Все настройки прошивки: состав полей приходит от самой
-                  камеры, поэтому здесь есть всё, что она поддерживает. */}
-              <button
-                className={`btn ${tab === 'advanced' ? 'btn-primary' : 'btn-outline'} btn-sm`}
-                onClick={() => setTab('advanced')}
-              >
-                <Layers size={14} />
-                Прошивка
-              </button>
+                  камеры, поэтому здесь есть всё, что она поддерживает.
+
+                  Кнопку показываем только на OpenIPC. На чужой камере
+                  схему настроек взять негде, и кнопка вела бы в пустоту:
+                  оператор нажал бы и решил, что камера не отвечает. */}
+              {isOpenIPC && (
+                <button
+                  className={`btn ${tab === 'advanced' ? 'btn-primary' : 'btn-outline'} btn-sm`}
+                  onClick={() => setTab('advanced')}
+                >
+                  <Layers size={14} />
+                  Прошивка
+                </button>
+              )}
             </div>
 
             {tab === 'live' && (
@@ -514,7 +542,9 @@ export default function CameraDetailPage() {
                       различим. По отдельности они бесполезны: зона по
                       смазанной картинке номер не прочитает, а резкая
                       картинка вне зоны номера не покажет. */}
-                  <CameraImageProfilePanel cameraId={camera.id} />
+                  <OpenIPCOnly vendor={camera.vendor} title="Режимы съёмки">
+                    <CameraImageProfilePanel cameraId={camera.id} />
+                  </OpenIPCOnly>
                 </div>
               </div>
             )}
@@ -526,7 +556,11 @@ export default function CameraDetailPage() {
             {/* Настройки по схеме камеры: состав полей приходит
                 с устройства, поэтому здесь есть всё, что поддерживает
                 эта прошивка — и ничего лишнего. */}
-            {tab === 'advanced' && <CameraConfigPanel cameraId={camera.id} />}
+            {tab === 'advanced' && (
+              <OpenIPCOnly vendor={camera.vendor} title="Настройки прошивки">
+                <CameraConfigPanel cameraId={camera.id} />
+              </OpenIPCOnly>
+            )}
           </div>
         </div>
 
@@ -602,7 +636,8 @@ export default function CameraDetailPage() {
               <button
                 className="btn btn-outline btn-sm"
                 onClick={handleRestartStreamer}
-                disabled={busy !== null || !camera.ip}
+                disabled={busy !== null || !camera.ip || !isOpenIPC}
+                title={isOpenIPC ? undefined : 'Перезапуск стримера есть только на OpenIPC: на других камерах стример встроен в устройство и своим API не перезапускается'}
               >
                 {busy === 'restart' ? <Loader2 size={14} className="spin" /> : <RotateCw size={14} />}
                 {busy === 'restart' ? 'Перезапуск...' : 'Перезапустить стример'}
@@ -622,6 +657,15 @@ export default function CameraDetailPage() {
                 Нужен IP-адрес камеры для отправки команд.
               </p>
             )}
+            {/* Поясняем ограничение словами, а не только серой кнопкой:
+                иначе выглядит как поломка, а не как разница между
+                производителями. */}
+            {!isOpenIPC && (
+              <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 8 }}>
+                Перезапуск стримера доступен только на OpenIPC. Перезагрузка работает
+                и на этой камере, но делает это её собственный веб-интерфейс.
+              </p>
+            )}
           </div>
 
           {/* Время камеры.
@@ -629,6 +673,7 @@ export default function CameraDetailPage() {
               в архиве оказывается неверная дата. По умолчанию камеры
               OpenIPC берут время у публичных серверов в интернете —
               здесь видно, так ли это, и можно перевести на наш сервер. */}
+          <OpenIPCOnly vendor={camera.vendor} title="Время камеры">
           <div className="card" style={{ marginTop: 16 }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 15 }}>
               <Clock size={18} style={{ color: 'var(--primary)' }} />
@@ -707,12 +752,14 @@ export default function CameraDetailPage() {
               </p>
             )}
           </div>
+          </OpenIPCOnly>
 
           {/* Логи камеры.
               Лог в самой камере живёт в оперативной памяти и затирается
               по кругу: когда камера виснет и её перезагружают, объяснение
               пропадает вместе с буфером. Здесь включается отправка логов
               на сервер, где они переживут и перезагрузку, и саму камеру. */}
+          <OpenIPCOnly vendor={camera.vendor} title="Логи на сервере">
           <div className="card" style={{ marginTop: 16 }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 15 }}>
               <ScrollText size={18} style={{ color: 'var(--primary)' }} />
@@ -788,13 +835,14 @@ export default function CameraDetailPage() {
               в журнале на сервере. Без этого причину сбоя установить нечем.
             </p>
           </div>
+          </OpenIPCOnly>
 
           {/* Состояние стримера.
               Веб-интерфейс встроен в сам Majestic, поэтому при его падении
               пропадает и страница камеры. Здесь видно, что стример упал,
               что сервер его уже поднимает и сколько раз это случалось —
               то есть понятно, ждать или ехать к камере. */}
-          {majestic && majestic.last_state && (
+          {isOpenIPC && majestic && majestic.last_state && (
             <div className="card" style={{ marginTop: 16 }}>
               <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 15 }}>
                 <Activity size={18} style={{ color: 'var(--primary)' }} />

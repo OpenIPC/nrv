@@ -8,18 +8,26 @@ import (
 
 // Camera — модель камеры
 type Camera struct {
-	ID         uuid.UUID  `json:"id"`
-	Name       string     `json:"name"`
-	RTSPUrl    string     `json:"rtsp_url"`
-	MainStream string     `json:"main_stream,omitempty"` // rtsp://.../stream=0
-	SubStream  string     `json:"sub_stream,omitempty"`  // rtsp://.../stream=1
-	IP         string     `json:"ip,omitempty"`          // 192.168.1.75
-	MAC        string     `json:"mac,omitempty"`
-	Firmware   string     `json:"firmware,omitempty"`
-	SiteID     *uuid.UUID `json:"site_id,omitempty"`
-	WGIP       string     `json:"wg_ip,omitempty"`
-	Status     string     `json:"status"` // online, offline, recording
-	PTZ        bool       `json:"ptz"`    // поддерживает ли камера поворот (ONVIF PTZ)
+	ID         uuid.UUID `json:"id"`
+	Name       string    `json:"name"`
+	RTSPUrl    string    `json:"rtsp_url"`
+	MainStream string    `json:"main_stream,omitempty"` // rtsp://.../stream=0
+	SubStream  string    `json:"sub_stream,omitempty"`  // rtsp://.../stream=1
+	IP         string    `json:"ip,omitempty"`          // 192.168.1.75
+	MAC        string    `json:"mac,omitempty"`
+	Firmware   string    `json:"firmware,omitempty"`
+	// Vendor — производитель камеры. Определяет, какие разделы карточки
+	// имеют смысл: настройки OpenIPC доступны только на OpenIPC, у чужих
+	// производителей их показывать нельзя, иначе оператор будет искать
+	// настройку, которой нет.
+	//
+	// Пустое значение означает «не определено» и трактуется как чужой
+	// производитель: показывать лишнее опаснее, чем показать меньше.
+	Vendor Vendor     `json:"vendor"`
+	SiteID *uuid.UUID `json:"site_id,omitempty"`
+	WGIP   string     `json:"wg_ip,omitempty"`
+	Status string     `json:"status"` // online, offline, recording
+	PTZ    bool       `json:"ptz"`    // поддерживает ли камера поворот (ONVIF PTZ)
 	// ChannelNumber — номер канала для внешнего RTSP-доступа. В адресе
 	// потока он идёт со смещением на минус один: канал 1 это cameras/0.
 	// nil означает, что канал не назначен и камера по внешнему адресу
@@ -726,11 +734,15 @@ type CreateCameraRequest struct {
 	IP         string `json:"ip,omitempty"`
 	MAC        string `json:"mac,omitempty"`
 	Firmware   string `json:"firmware,omitempty"`
-	SiteID     string `json:"site_id,omitempty"`
-	WGIP       string `json:"wg_ip,omitempty"`
-	Username   string `json:"username,omitempty"`
-	Password   string `json:"password,omitempty"`
-	PTZ        bool   `json:"ptz,omitempty"`
+	// Vendor приходит от сканера: он определяет производителя по API самой
+	// камеры, и это самый надёжный источник. Если пусто, сервис попробует
+	// определить по прошивке, а не сможет — оставит «неизвестно».
+	Vendor   Vendor `json:"vendor,omitempty"`
+	SiteID   string `json:"site_id,omitempty"`
+	WGIP     string `json:"wg_ip,omitempty"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	PTZ      bool   `json:"ptz,omitempty"`
 	// ChannelNumber — номер канала для внешнего RTSP-доступа (канал 1 → cameras/0).
 	ChannelNumber *int `json:"channel_number,omitempty"`
 }
@@ -743,10 +755,13 @@ type UpdateCameraRequest struct {
 	IP         *string `json:"ip,omitempty"`
 	MAC        *string `json:"mac,omitempty"`
 	Firmware   *string `json:"firmware,omitempty"`
-	Status     *string `json:"status,omitempty"`
-	Username   *string `json:"username,omitempty"`
-	Password   *string `json:"password,omitempty"`
-	PTZ        *bool   `json:"ptz,omitempty"`
+	// Vendor можно поправить вручную: автоматика определяет производителя
+	// по прошивке, а на перешитой камере это может не сработать.
+	Vendor   *Vendor `json:"vendor,omitempty"`
+	Status   *string `json:"status,omitempty"`
+	Username *string `json:"username,omitempty"`
+	Password *string `json:"password,omitempty"`
+	PTZ      *bool   `json:"ptz,omitempty"`
 	// ChannelNumber — номер канала для внешнего RTSP-доступа.
 	ChannelNumber *int `json:"channel_number,omitempty"`
 }

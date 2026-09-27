@@ -29,6 +29,19 @@ import (
 type ImageProfileService struct {
 	schemas *SchemaSettingsService
 	repo    ImageProfileCameraRepo
+	// cameras нужен, чтобы узнать производителя: от него зависит,
+	// существуют ли эти настройки на камере вообще.
+	cameras CameraRepo
+}
+
+// CameraRepo — доступ к камере целиком, а не только к её профилю.
+//
+// Отдельный интерфейс от ImageProfileCameraRepo, потому что задачи
+// разные: один запоминает выбор оператора, второй отвечает на вопрос
+// «что это за устройство». Смешивать их значило бы заставлять каждую
+// заглушку в тестах реализовывать лишнее.
+type CameraRepo interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Camera, error)
 }
 
 // ImageProfileCameraRepo запоминает выбранный профиль.
@@ -44,6 +57,16 @@ type ImageProfileCameraRepo interface {
 
 func NewImageProfileService(schemas *SchemaSettingsService, repo ImageProfileCameraRepo) *ImageProfileService {
 	return &ImageProfileService{schemas: schemas, repo: repo}
+}
+
+// WithCameras подключает источник камер для определения производителя.
+//
+// Отдельный метод, а не аргумент конструктора: производителя проверяем
+// только ради скрытия разделов, и сервис должен уметь работать без этого
+// источника — иначе любая заглушка в тестах обязана будет его иметь.
+func (s *ImageProfileService) WithCameras(cameras CameraRepo) *ImageProfileService {
+	s.cameras = cameras
+	return s
 }
 
 // ProfileAvailability — что произойдёт, если применить профиль.
@@ -86,6 +109,26 @@ func (s *ImageProfileService) Availability(ctx context.Context, cameraID uuid.UU
 	profile, ok := domain.FindImageProfile(profileID)
 	if !ok {
 		return nil, fmt.Errorf("профиль %q не найден", profileID)
+	}
+
+	// Проверяем производителя до всего остального, и это не просто
+	// вежливая проверка на входе.
+	//
+	// Профили задают ключи вида `isp.exposure` — они существуют только
+	// в прошивке OpenIPC. На камере другого производителя попытка их
+	// применить либо не сработает, либо, что хуже, попадёт в чужой
+	// обработчик HTTP API и выставит не то. Поэтому на не-OpenIPC
+	// не спрашиваем схему вовсе: спрашивать нечего.
+	if err := s.requireOpenIPC(ctx, cameraID); err != nil {
+		// Отвечаем понятной причиной, а не ошибкой: оператор должен
+		// видеть, почему режимы недоступны, и не искать их настройку.
+		return &ProfileAvailability{
+			Profile:           profile,
+			UnsupportedReason: err.Error(),
+			Missing:           sortedKeys(profile.Values),
+			Partial:           true,
+			Usable:            false,
+		}, nil
 	}
 
 	schema, err := s.schemas.Schema(ctx, cameraID, false)
@@ -213,6 +256,17 @@ func (s *ImageProfileService) Apply(ctx context.Context, cameraID uuid.UUID, pro
 		return nil, err
 	}
 
+	// На чужой камере применять нечего: ключей прошивки OpenIPC там нет,
+	// а запись может попасть в чужой обработчик HTTP API. Останавливаемся
+	// здесь, а не полагаемся на то, что камера отвергнет запрос.
+	if !availability.Usable {
+		reason := availability.UnsupportedReason
+		if reason == "" {
+			reason = "профиль не поддерживается этой камерой"
+		}
+		return nil, fmt.Errorf("%s", reason)
+	}
+
 	// Собираем только применимые поля: тех, которых нет в схеме,
 	// в запросе быть не должно — сервис настроек их отклонит.
 	patch := map[string]any{}
@@ -273,6 +327,23 @@ func (s *ImageProfileService) Current(ctx context.Context, cameraID uuid.UUID) (
 // дадут результат, а какие нет. Считать это по одному запросу на профиль
 // было бы wasteful — схема и значения читаются один раз.
 func (s *ImageProfileService) ListAll(ctx context.Context, cameraID uuid.UUID) ([]ProfileAvailability, error) {
+	// На камере другого производителя профилей нет в принципе: все
+	// профили задаются ключами прошивки OpenIPC. Отдаём причину, чтобы
+	// оператор понял, почему раздела нет, а не считал это сбоем.
+	if err := s.requireOpenIPC(ctx, cameraID); err != nil {
+		out := make([]ProfileAvailability, 0, len(domain.ImageProfiles()))
+		for _, profile := range domain.ImageProfiles() {
+			out = append(out, ProfileAvailability{
+				Profile:           profile,
+				UnsupportedReason: err.Error(),
+				Missing:           sortedKeys(profile.Values),
+				Partial:           true,
+				Usable:            false,
+			})
+		}
+		return out, nil
+	}
+
 	schema, err := s.schemas.Schema(ctx, cameraID, false)
 	if err != nil {
 		return nil, err
@@ -333,6 +404,33 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// requireOpenIPC проверяет, что настройки OpenIPC на этой камере имеют смысл.
+//
+// Вынесено в отдельный метод, а не сравнение на месте: это одно и то же
+// правило для всех разделов, и оно должно меняться в одном месте. Когда
+// появится вторая прошивка с таким же доступом, правка будет здесь,
+// а не в каждом обработчике по отдельности.
+func (s *ImageProfileService) requireOpenIPC(ctx context.Context, cameraID uuid.UUID) error {
+	if s.cameras == nil {
+		return nil
+	}
+	cam, err := s.cameras.GetByID(ctx, cameraID)
+	if err != nil {
+		return fmt.Errorf("не удалось прочитать камеру: %w", err)
+	}
+	vendor := domain.ResolveVendor(cam)
+	if domain.SupportsOpenIPC(vendor) {
+		return nil
+	}
+	// Формулировка важна: оператор читает её на карточке и должен понять
+	// не только, что раздела нет, но и почему — иначе он пойдёт искать
+	// его в другом месте.
+	return fmt.Errorf(
+		"режимы съёмки настраиваются только на камерах OpenIPC. Эта камера — %s, у неё другой способ настройки",
+		domain.VendorTitle(vendor),
+	)
 }
 
 // containsString проверяет наличие строки в срезе.

@@ -29,6 +29,15 @@ export default api
 
 // --- Типы ---
 
+/**
+ * Производитель камеры.
+ *
+ * Значения совпадают с тем, что отдаёт сервер в поле `vendor`. Отдельный
+ * тип, а не строка: по этому значению принимается решение о показе
+ * разделов, и опечатка в сравнении приводила бы к показу чужих настроек.
+ */
+export type CameraVendor = 'openipc' | 'hikvision' | 'dahua' | 'beward' | 'unknown'
+
 export interface Camera {
   id: string
   name: string
@@ -38,6 +47,18 @@ export interface Camera {
   ip?: string
   mac?: string
   firmware?: string
+  /**
+   * Производитель: openipc, hikvision, dahua, beward, unknown.
+   *
+   * От него зависит, какие разделы карточки показывать. Настройки OpenIPC
+   * (схема прошивки, логи, NTP, присмотр за стримером, профили изображения)
+   * существуют только на OpenIPC; на камерах других производителей их
+   * показывать нельзя — оператор станет искать настройку, которой нет.
+   *
+   * `unknown` — не то же самое, что openipc: если производитель не опознан,
+   * чужие разделы всё равно скрываются.
+   */
+  vendor?: CameraVendor
   site_id?: string
   wg_ip?: string
   status: 'online' | 'offline' | 'recording'
@@ -627,12 +648,13 @@ export const camerasAPI = {
   getSnapshot: (id: string) => api.get<{ message: string }>(`/cameras/${id}/snapshot`),
   create: (data: {
     name: string; rtsp_url?: string; main_stream?: string; sub_stream?: string;
-    ip?: string; mac?: string; firmware?: string; username?: string; password?: string;
+    ip?: string; mac?: string; firmware?: string; vendor?: string;
+    username?: string; password?: string;
     channel_number?: number;
   }) => api.post<Camera>('/cameras', data),
   update: (id: string, data: {
     name?: string; rtsp_url?: string; main_stream?: string; sub_stream?: string;
-    ip?: string; mac?: string; firmware?: string; status?: string;
+    ip?: string; mac?: string; firmware?: string; vendor?: string; status?: string;
     username?: string; password?: string; wg_ip?: string; ptz?: boolean;
     channel_number?: number;
   }) => api.patch<Camera>(`/cameras/${id}`, data),
