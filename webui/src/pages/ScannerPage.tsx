@@ -183,6 +183,15 @@ export default function ScannerPage() {
             <span style={{ fontWeight: 600 }}>Результаты:</span>{' '}
             <span style={{ color: 'var(--success)' }}>{result.found} камер</span> найдено из{' '}
             {result.total} проверенных IP
+            {/* Сколько из найденных уже заведено: без этого числа
+                оператор считает список новыми устройствами и начинает
+                добавлять то, что уже работает. */}
+            {result.added > 0 && (
+              <>
+                , из них{' '}
+                <span style={{ color: 'var(--warning)' }}>{result.added} уже добавлено</span>
+              </>
+            )}
           </div>
 
           {(!result.cameras || result.cameras.length === 0) ? (
@@ -221,11 +230,17 @@ export default function ScannerPage() {
                       </td>
                       <td>
                         {/* Производитель определён по фирменному API, ONVIF
-                            или заголовкам веб-интерфейса. Цвет помогает
-                            отличить опознанные устройства от «generic». */}
+                            или заголовкам веб-интерфейса. Способ показан
+                            подписью: для спорных случаев важно понять,
+                            на чём основан вывод, а не верить вслепую. */}
                         <span className={`badge ${vendorBadgeClass(cam.vendor)}`}>
-                          {vendorLabel(cam.vendor)}
+                          {vendorLabel(cam.vendor, cam.vendor_name)}
                         </span>
+                        {cam.how_found && (
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                            {cam.how_found}
+                          </div>
+                        )}
                       </td>
                       <td>{cam.model || '—'}</td>
                       <td style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{cam.firmware || '—'}</td>
@@ -261,8 +276,12 @@ export default function ScannerPage() {
                         )}
                       </td>
                       <td>
-                        {added.has(cam.ip) ? (
-                          <span className="badge badge-online">
+                        {/* Пометка приходит с сервера: он сверяет найденные
+                            устройства с базой по MAC и адресу. Своя
+                            сверка в интерфейсе была бы неточной — она
+                            видела бы только текущую страницу. */}
+                        {cam.already_added ? (
+                          <span className="badge badge-online" title="Камера уже заведена в системе">
                             <Check size={14} />
                             Добавлена
                           </span>
@@ -297,11 +316,15 @@ export default function ScannerPage() {
 /**
  * Человекочитаемое название производителя.
  *
- * Сервер отдаёт короткий идентификатор, а оператору нужно название:
- * одна и та же камера может попасть в список как «dahua», и по этой
- * строке непонятно, что это за устройство.
+ * Название приходит с сервера полем vendor_name: держать второй список
+ * здесь было бы ошибкой — при добавлении нового производителя на сервере
+ * список в интерфейсе отставал бы, и камера показывалась бы кодом
+ * вида «xiongmai». Локальный разбор оставлен только для старых ответов
+ * сервера, где поля vendor_name ещё нет.
  */
-function vendorLabel(vendor?: string): string {
+function vendorLabel(vendor?: string, vendorName?: string): string {
+  if (vendorName) return vendorName
+
   switch (vendor) {
     case 'openipc':
       return 'OpenIPC'
@@ -315,20 +338,8 @@ function vendorLabel(vendor?: string): string {
       return 'Axis'
     case 'reolink':
       return 'Reolink'
-    case 'tvt':
-      return 'TVT'
-    case 'xiongmai':
-      return 'Xiongmai'
-    case 'bosch':
-      return 'Bosch'
-    case 'samsung':
-      return 'Samsung'
     case 'vivotek':
       return 'Vivotek'
-    case 'panasonic':
-      return 'Panasonic'
-    case 'sony':
-      return 'Sony'
     case 'onvif':
       return 'ONVIF'
     case 'generic':

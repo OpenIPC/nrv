@@ -749,17 +749,32 @@ type ScanRequest struct {
 
 // DiscoveredCamera — камера, найденная при сканировании
 type DiscoveredCamera struct {
-	IP         string `json:"ip"`
-	MAC        string `json:"mac,omitempty"`
-	Firmware   string `json:"firmware,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Vendor     string `json:"vendor,omitempty"` // openipc, hikvision, dahua, onvif, generic
+	IP       string `json:"ip"`
+	MAC      string `json:"mac,omitempty"`
+	Firmware string `json:"firmware,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Vendor   string `json:"vendor,omitempty"` // openipc, hikvision, dahua, onvif, generic
+	// VendorName — название производителя для показа оператору.
+	// Отличается от Vendor тем, что это человекочитаемая строка:
+	// код нужен для ветвлений, имя — для списка найденных устройств.
+	VendorName string `json:"vendor_name,omitempty"`
+	// HowFound объясняет, как определён производитель: по ONVIF,
+	// по MAC-префиксу, по заголовкам HTTP. Это важно для разбора спорных
+	// случаев: оператор видит, на чём основан вывод, а не верит вслепую.
+	HowFound   string `json:"how_found,omitempty"`
 	MainStream string `json:"main_stream"`
 	SubStream  string `json:"sub_stream"`
 	Snapshot   string `json:"snapshot,omitempty"`
 	Username   string `json:"username,omitempty"` // учётные данные, которые подошли
 	Password   string `json:"password,omitempty"`
 	Online     bool   `json:"online"`
+	// AlreadyAdded — этот адрес уже заведён в системе. Повторное
+	// добавление создаст дубль и второй путь в медиасервере, поэтому
+	// такие устройства помечаем, а не показываем как новые.
+	AlreadyAdded bool `json:"already_added"`
+	// AddedID — идентификатор уже заведённой камеры, чтобы из сканера
+	// можно было перейти в её карточку.
+	AddedID string `json:"added_id,omitempty"`
 }
 
 // ScanResult — результат сканирования подсети
@@ -767,6 +782,7 @@ type ScanResult struct {
 	Subnet  string             `json:"subnet"`
 	Total   int                `json:"total"` // всего просканировано IP
 	Found   int                `json:"found"` // найдено камер
+	Added   int                `json:"added"` // из них уже заведено в системе
 	Cameras []DiscoveredCamera `json:"cameras"`
 }
 

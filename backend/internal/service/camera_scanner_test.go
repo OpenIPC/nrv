@@ -282,11 +282,64 @@ func TestClassifyVendorPage(t *testing.T) {
 			want: "",
 		},
 		{
-			// Axis не называет себя в теле, но отдаёт фирменный
-			// веб-сервер и область авторизации streaming_server.
-			name: "Axis по веб-серверу",
+			// ВАЖНО: «streaming_server» убран из признаков Axis. Это
+			// общая область авторизации, её отдают и Axis, и Vivotek —
+			// по ней PTZ-камера Vivotek числилась как Axis. Настоящая
+			// камера Axis проверяется по Rapid Logic (тест ниже).
+			name: "streaming_server не достаточен для Axis",
 			page: `HTTP/1.1 401 Unauthorized Server: Web Server WWW-Authenticate: Digest realm="streaming_server", nonce="abc"`,
-			want: "axis",
+			want: "",
+		},
+		{
+			// Vivotek отдаёт в HTML собственную подпись VVTK — по ней
+			// и определяется, несмотря на общую область авторизации.
+			name: "Vivotek по подписи VVTK",
+			page: `<html><body>VVTK</body></html>`,
+			want: "vivotek",
+		},
+		{
+			// Древняя камера без бренда: страница «Net Video Browser»
+			// с кодировкой gb2312. Названия производителя нет нигде,
+			// поэтому оставляем неизвестным, а не приписываем бренду.
+			name: "старая камера без бренда",
+			page: `<title>Net Video Browser</title><meta charset="gb2312">`,
+			want: "generic",
+		},
+		{
+			// Hikvision подписывает свой веб-сервер как App-webs —
+			// этот признак виден даже когда API недоступен.
+			name: "Hikvision по веб-серверу",
+			page: `HTTP/1.1 401 Unauthorized Server: App-webs/`,
+			want: "hikvision",
+		},
+		{
+			// OpenIPC подписывается просто «webserver». Проверка идёт
+			// по значению заголовка, как его отдаёт fetchPage: без
+			// префикса «Server:». Живая камера 192.168.1.56 отдаёт
+			// именно такую строку вместе с пустой страницей-заглушкой.
+			name: "OpenIPC по веб-серверу",
+			page: "webserver <!doctype html><html><head><title></title>",
+			want: "openipc",
+		},
+		{
+			// Тот же признак, но в составе полного текста ответа.
+			name: "OpenIPC по заголовку с префиксом",
+			page: "HTTP/1.1 200 OK Server: webserver",
+			want: "openipc",
+		},
+		{
+			// Современные прошивки Hikvision отдают маленькую
+			// страницу-заглушку с редиректом на /doc/index.html,
+			// а дальше — React-приложение со «shepherd.css».
+			// Нашли по камере 192.168.1.55.
+			name: "Hikvision по редиректу на /doc",
+			page: `<script>document.location.href = "/doc/index.html";</script>`,
+			want: "hikvision",
+		},
+		{
+			name: "Hikvision по веб-панели shepherd",
+			page: `<link href="./css/root-application.css"><link href="./Common/static/libs/shepherd.css">`,
+			want: "hikvision",
 		},
 		{
 			name: "Axis по Rapid Logic",

@@ -120,7 +120,15 @@ func main() {
 	}
 
 	// Camera scanner
-	scanner := service.NewCameraScanner()
+	//
+	// Сканеру даём доступ к списку камер, чтобы он помечал уже заведённые
+	// устройства. Без этого оператор видит одну и ту же камеру как новую
+	// при каждом сканировании и может добавить её второй раз — а это
+	// создаёт дубль и лишнюю RTSP-сессию к камере.
+	scanner := service.NewCameraScanner().
+		WithKnownCameras(func(ctx context.Context) ([]domain.Camera, error) {
+			return cameraRepo.List(ctx)
+		})
 
 	// MinIO — архив видеозаписей. Не критичен для работы: если хранилище
 	// недоступно, сервис стартует и продолжает отдавать live-потоки.

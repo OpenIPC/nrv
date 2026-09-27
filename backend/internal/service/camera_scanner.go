@@ -48,6 +48,18 @@ type CameraScanner struct {
 	client   *http.Client
 	arpCache map[string]string
 	arpMu    sync.Mutex
+	// knownCameras возвращает камеры, уже заведённые в системе.
+	//
+	// Задан функцией, чтобы сканер не зависел от репозитория напрямую:
+	// так его можно проверять тестами без базы данных.
+	knownCameras func(ctx context.Context) ([]domain.Camera, error)
+}
+
+// WithKnownCameras подключает источник списка уже заведённых камер.
+// Без него найденные камеры не помечаются как добавленные.
+func (s *CameraScanner) WithKnownCameras(fn func(ctx context.Context) ([]domain.Camera, error)) *CameraScanner {
+	s.knownCameras = fn
+	return s
 }
 
 func NewCameraScanner() *CameraScanner {
@@ -220,8 +232,77 @@ func (s *CameraScanner) Scan(ctx context.Context, req domain.ScanRequest) (*doma
 	wg.Wait()
 	result.Found = len(result.Cameras)
 
+	s.markAlreadyAdded(ctx, result)
+
 	log.Info().Int("found", result.Found).Str("subnet", req.Subnet).Msg("scan complete")
 	return result, nil
+}
+
+// markAlreadyAdded помечает камеры, которые уже заведены в системе.
+//
+// Нужно, чтобы оператор не добавлял устройство второй раз: повторное
+// добавление создаёт дубль в базе и второй путь в медиасервере, а камера
+// ограничивает число одновременных RTSP-сессий. На слабых моделях это
+// приводит к тому, что перестаёт работать и первый поток.
+//
+// Сверяем по MAC, а не по IP: адрес камера получает по DHCP и может
+// сменить при перезагрузке, а MAC остаётся неизменным. Если MAC не
+// удалось прочитать (нет в ARP-таблице), сверяем по IP — это лучше,
+// чем ничего.
+func (s *CameraScanner) markAlreadyAdded(ctx context.Context, result *domain.ScanResult) {
+	if s.knownCameras == nil {
+		return
+	}
+
+	known, err := s.knownCameras(ctx)
+	if err != nil {
+		// Не отказываем в сканировании из-за неудачной сверки: список
+		// найденных камер полезен и без пометок.
+		log.Warn().Err(err).Msg("не удалось получить список камер для сверки")
+		return
+	}
+
+	byMAC := make(map[string]string, len(known))
+	byIP := make(map[string]string, len(known))
+	for _, cam := range known {
+		if cam.MAC != "" {
+			byMAC[normalizeMAC(cam.MAC)] = cam.ID.String()
+		}
+		if cam.IP != "" {
+			byIP[cam.IP] = cam.ID.String()
+		}
+	}
+
+	result.Added = 0
+	for i := range result.Cameras {
+		cam := &result.Cameras[i]
+
+		if cam.MAC != "" {
+			if id, ok := byMAC[normalizeMAC(cam.MAC)]; ok {
+				cam.AlreadyAdded = true
+				cam.AddedID = id
+				result.Added++
+				continue
+			}
+		}
+		if id, ok := byIP[cam.IP]; ok {
+			cam.AlreadyAdded = true
+			cam.AddedID = id
+			result.Added++
+		}
+	}
+}
+
+// normalizeMAC приводит MAC-адрес к единому виду для сравнения.
+//
+// В базе адрес может храниться с разными разделителями или в верхнем
+// регистре — например, после ручного ввода. Без приведения сравнение
+// «18:68:82:34:79:77» и «18-68-82-34-79-77» не сработает, и уже
+// добавленная камера покажется новой.
+func normalizeMAC(mac string) string {
+	clean := strings.NewReplacer(":", "", "-", "", ".", "", " ", "").
+		Replace(strings.ToLower(strings.TrimSpace(mac)))
+	return clean
 }
 
 // findAliveHosts возвращает адреса подсети, которые отвечают на запросы.
@@ -325,9 +406,39 @@ func genericCamera(ip, vendor string) *domain.DiscoveredCamera {
 // probeCamera пробует все доступные протоколы с перебором учётных данных.
 func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint string) *domain.DiscoveredCamera {
 	// --- Быстрая проверка: открыт ли RTSP-порт 554 ---
-	if !s.checkTCP(ip, 554) {
-		// Без RTSP-порта это точно не камера (проверяем всё же HTTP на всякий случай)
-		if !s.checkTCP(ip, 80) {
+	//
+	// Это главный признак камеры. Без порта 554 или 80 устройство —
+	// не камера, и показывать его в результатах нельзя.
+	//
+	// Проверка появилась после разбора результатов скана: в списке
+	// оказывались роутер (192.168.1.1), серверы с nginx и устройства
+	// умного дома — только потому, что они отвечали по HTTP и были
+	// в ARP-таблице. Оператор видел 39 «камер» вместо 24, и половину
+	// приходилось отсеивать вручную.
+	hasRTSP := s.checkTCP(ip, 554)
+	hasHTTP := s.checkTCP(ip, 80)
+
+	if !hasRTSP && !hasHTTP {
+		return nil
+	}
+
+	// HTTP без RTSP — почти наверняка не камера: у камеры открыт и
+	// RTSP-порт, и веб-интерфейс. Исключение — старые модели, где
+	// RTSP живёт на нестандартном порту, но такие мы увидим по
+	// признакам страницы устройства.
+	if !hasRTSP {
+		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+
+		if vendor := vendorByMAC(s.getMAC(ip)); vendor != "" {
+			// MAC указывает на камеру — оставляем, даже без порта 554.
+			log.Debug().Str("ip", ip).Str("vendor", vendor).
+				Msg("устройство опознано по MAC без открытого RTSP")
+		} else if v := s.detectVendorByHeaders(probeCtx, ip); v == "" || v == "generic" {
+			// Ни MAC, ни заголовки не говорят о камере: пропускаем.
+			// Так из результатов уходят роутеры, серверы и бытовая
+			// техника — они отвечают по HTTP, но камерами не являются.
+			log.Debug().Str("ip", ip).Msg("устройство не похоже на камеру — пропущено")
 			return nil
 		}
 	}
@@ -390,16 +501,36 @@ func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint 
 	//    молчат на запросы, а также те, у кого исчерпан бюджет времени.
 	//    Показываем их как «generic»: оператор увидит камеру в списке и
 	//    поправит путь потока вручную, а не будет считать, что её нет.
-	if s.checkTCP(ip, 554) {
+	if s.checkTCP(ip, 554) || s.checkTCP(ip, 80) {
 		// Бюджет мог истечь, поэтому определение вендора по заголовкам
 		// даём отдельный короткий контекст — иначе оно не выполнится.
 		detectCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
 		defer cancel()
 
+		// Порядок тот же, что и везде: MAC надёжнее заголовков, потому
+		// что не зависит от того, что устройство показывает по HTTP.
+		//
+		// Здесь это особенно важно: камера 192.168.1.64 не отдаёт
+		// ни заголовка Server, ни страницы — на все запросы молчит,
+		// хотя порты 80 и 554 открыты. Опознать её можно только по MAC.
+		if vendor := vendorByMAC(s.getMAC(ip)); vendor != "" {
+			log.Debug().Str("ip", ip).Str("vendor", vendor).
+				Msg("камера опознана по MAC-адресу")
+			cam := genericCamera(ip, vendor)
+			cam.VendorName = VendorName(vendor)
+			cam.HowFound = "по MAC-адресу"
+			return cam
+		}
+
 		vendor := s.detectVendorByHeaders(detectCtx, ip)
 		log.Debug().Str("ip", ip).Str("vendor", vendor).
 			Msg("камера не опознана по API — определена по заголовкам")
-		return genericCamera(ip, vendor)
+		cam := genericCamera(ip, vendor)
+		cam.VendorName = VendorName(vendor)
+		if vendor != "generic" {
+			cam.HowFound = "по заголовкам HTTP"
+		}
+		return cam
 	}
 
 	return nil
@@ -505,23 +636,27 @@ func (s *CameraScanner) probeONVIF(ctx context.Context, ip, username, password s
 				continue
 			}
 
-			vendor := normalizeVendor(info.Manufacturer)
+			vendor, how := s.resolveVendor(ctx, ip, info)
+
 			log.Info().
 				Str("ip", ip).
 				Str("manufacturer", info.Manufacturer).
 				Str("model", info.Model).
 				Str("vendor", vendor).
+				Str("how", how).
 				Msg("камера опознана через ONVIF")
 
 			cam := &domain.DiscoveredCamera{
-				IP:       ip,
-				Vendor:   vendor,
-				Model:    strings.TrimSpace(info.Model),
-				Firmware: strings.TrimSpace(info.FirmwareVersion),
-				Online:   true,
-				MAC:      s.getMAC(ip),
-				Username: username,
-				Password: password,
+				IP:         ip,
+				Vendor:     vendor,
+				VendorName: VendorName(vendor),
+				HowFound:   how,
+				Model:      strings.TrimSpace(info.Model),
+				Firmware:   strings.TrimSpace(info.FirmwareVersion),
+				Online:     true,
+				MAC:        s.getMAC(ip),
+				Username:   username,
+				Password:   password,
 			}
 
 			// RTSP-адреса строим по вендору: ONVIF-запрос за медиапрофилями
@@ -544,6 +679,155 @@ func (s *CameraScanner) probeONVIF(ctx context.Context, ip, username, password s
 	}
 
 	return nil
+}
+
+// resolveVendor определяет производителя по данным ONVIF и подбирает
+// доказательство для каждой догадки.
+//
+// Здесь и решается случай, из-за которого SIP-домофон Hikvision
+// (DS07P-LP) записывался как «onvif»: ONVIF вернул пустого производителя,
+// и вся информация о бренде осталась только в модели. Поэтому при пустом
+// производителе пробуем определить по модели, а если и это не помогло —
+// по MAC-адресу и заголовкам HTTP.
+//
+// Порядок намеренно такой: сначала ONVIF (самые подробные данные),
+// затем модель, MAC и заголовки. Так для камеры с заполненным
+// производителем мы не тратим лишние запросы.
+func (s *CameraScanner) resolveVendor(ctx context.Context, ip string, info deviceInfo) (string, string) {
+	// Производитель заполнен — этого достаточно.
+	if v := normalizeVendor(info.Manufacturer); v != "onvif" {
+		return v, "по ONVIF"
+	}
+
+	// Производитель пуст или незнаком, но модель узнаваема.
+	if v := vendorByModel(info.Model); v != "" {
+		return v, "по модели устройства"
+	}
+
+	// Пробуем MAC: он не зависит от прошивки.
+	if v := vendorByMAC(s.getMAC(ip)); v != "" {
+		return v, "по MAC-адресу"
+	}
+
+	// Последняя попытка — заголовки HTTP и текст страницы.
+	detectCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
+	defer cancel()
+
+	if header := s.fetchAuthHeader(detectCtx, ip); header != "" {
+		if v := vendorByRealm(header); v != "" {
+			return v, "по заголовку авторизации"
+		}
+	}
+
+	page := s.fetchPage(detectCtx, ip)
+
+	// Страницы старых камер без бренда и с опознаваемым устройством.
+	//
+	// Проверяется ДО разбора признаков, потому что такие камеры нередко
+	// отвечают по ONVIF обобщённо («IPCamera», «onvif_v2.4.0»), и на этом
+	// определение останавливалось: камера попадала в категорию
+	// ONVIF-совместимых. Оператору при этом не сообщалось главное —
+	// что это старое устройство без нормальной поддержки ONVIF.
+	// Так вышло с камерой 192.168.1.83: страница «Net Video Browser»
+	// с кодировкой gb2312, но определялась она как ONVIF-совместимая.
+	if v := classifyLegacyDevice(page); v != "" {
+		return v, "по странице устройства"
+	}
+
+	if v := classifyVendorPage(page); v != "" && v != "generic" {
+		return v, "по странице устройства"
+	}
+
+	return "onvif", "только по ONVIF"
+}
+
+// classifyLegacyDevice распознаёт старые устройства без бренда.
+//
+// Возвращает код производителя, если страница выдаёт в устройстве
+// заведомо старую модель, бренд которой установить нечем.
+//
+// Признак — страница «Net Video Browser» с кодировкой gb2312. Так отдавали
+// свои веб-интерфейсы китайские камеры начала 2010-х, выпускавшиеся под
+// множеством марок без общего названия. Смысл проверки в том, чтобы
+// не записать такую камеру в «ONVIF-совместимые»: у этих моделей ONVIF
+// либо нет вовсе, либо он без профилей потоков, и рассчитывать на
+// автоматически полученные RTSP-адреса нельзя.
+func classifyLegacyDevice(page string) string {
+	lower := strings.ToLower(page)
+
+	if strings.Contains(lower, "net video browser") ||
+		strings.Contains(lower, "gb2312") {
+		return "generic"
+	}
+
+	return ""
+}
+
+// fetchPage читает страницу устройства по HTTP.
+//
+// Отдельно от detectVendorByHeaders, чтобы признаки разбирались одной
+// функцией: так проверку бренда и проверку старых моделей можно держать
+// в понятном порядке, а не разбрасывать по нескольким запросам.
+func (s *CameraScanner) fetchPage(ctx context.Context, ip string) string {
+	for _, port := range []int{80, 8080} {
+		if !s.checkTCPFast(ip, port) {
+			continue
+		}
+
+		url := fmt.Sprintf("http://%s:%d/", ip, port)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			continue
+		}
+
+		resp, err := s.client.Do(req)
+		if err != nil {
+			continue
+		}
+
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+		resp.Body.Close()
+
+		return resp.Header.Get("Server") + " " +
+			resp.Header.Get("WWW-Authenticate") + " " +
+			resp.Header.Get("X-Powered-By") + " " +
+			string(body)
+	}
+
+	return ""
+}
+
+// fetchAuthHeader возвращает содержимое заголовка WWW-Authenticate.
+//
+// Здесь лежит больше информации, чем кажется: устройства подставляют
+// в область авторизации модель и серийный номер. У домофона Hikvision
+// область выглядит как «DS07P-LP SIP Door Station - 186882347977» —
+// по ней бренд определяется без единого запроса к API камеры.
+func (s *CameraScanner) fetchAuthHeader(ctx context.Context, ip string) string {
+	for _, port := range []int{80, 8080} {
+		if !s.checkTCPFast(ip, port) {
+			continue
+		}
+
+		url := fmt.Sprintf("http://%s:%d/", ip, port)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			continue
+		}
+
+		resp, err := s.client.Do(req)
+		if err != nil {
+			continue
+		}
+		auth := resp.Header.Get("WWW-Authenticate")
+		resp.Body.Close()
+
+		if auth != "" {
+			return auth
+		}
+	}
+
+	return ""
 }
 
 // postSOAP отправляет SOAP-запрос и возвращает тело ответа.
@@ -735,11 +1019,27 @@ func classifyVendorPage(haystack string) string {
 	// принята за Dahua. Путь live.cgi указывает именно на OpenIPC.
 	case strings.Contains(haystack, "openipc"),
 		strings.Contains(haystack, "majestic"),
+		// Веб-сервер OpenIPC подписывается просто «webserver».
+		// Признак слабый сам по себе, но в сочетании с открытым
+		// RTSP-портом и страницей без признаков других брендов
+		// указывает именно на OpenIPC: камера 192.168.1.56 отдаёт
+		// заголовок «Server: webserver» и пустую страницу-заглушку.
+		// Ни один другой производитель так не подписывается:
+		// Hikvision — «App-webs», Vivotek и Axis — «Web Server».
+		strings.Contains(haystack, "webserver"),
 		strings.Contains(haystack, "/cgi-bin/live.cgi"):
 		return "openipc"
-
 	case strings.Contains(haystack, "hikvision"),
 		strings.Contains(haystack, "ds-"),
+		strings.Contains(haystack, "app-webs/"),
+		// Современные прошивки Hikvision отдают страницу-заглушку
+		// с редиректом на /doc/index.html. Проблема в том, что:
+		// сам редирект в теле страницы, а она маленькая, и отличить
+		// её от других заглушек нечем. Нашли по камере 192.168.1.55:
+		// она редиректит туда же, а дальше отдаёт React-приложение
+		// со «shepherd.css» — это новая веб-панель Hikvision.
+		strings.Contains(haystack, "/doc/index.html"),
+		strings.Contains(haystack, "shepherd.css"),
 		strings.Contains(haystack, "/isapi/"):
 		return "hikvision"
 
@@ -748,20 +1048,38 @@ func classifyVendorPage(haystack string) string {
 		strings.Contains(haystack, "realmonitor"):
 		return "dahua"
 
+	// Vivotek проверяется ДО Axis, потому что у них общий признак
+	// «streaming_server»: так называется область авторизации у обеих.
+	// Раньше правило Axis срабатывало первым, и PTZ-камеры Vivotek
+	// числились как Axis. Собственные признаки Vivotek надёжнее:
+	// VVTK — это подпись в HTML-странице устройства,
+	// а /cgi-bin/ — путь их фирменного интерфейса.
+	case strings.Contains(haystack, "vivotek"),
+		strings.Contains(haystack, "vvtk"):
+		return "vivotek"
+
 	case strings.Contains(haystack, "uniview"),
 		strings.Contains(haystack, "uniarch"):
 		return "uniview"
 
-	// Axis прячет производителя, но выдаёт фирменный веб-сервер Rapid Logic
-	// и область авторизации streaming_server. Эти признаки встречаются
-	// только у камер Axis и переживают любую прошивку.
+	// Axis. «streaming_server» убран из признаков: он есть и у Vivotek,
+	// поэтому как признак одного производителя не годится. Остались
+	// фирменный веб-сервер Rapid Logic и название в тексте страницы.
 	case strings.Contains(haystack, "rapid logic"),
-		strings.Contains(haystack, "axis"),
-		strings.Contains(haystack, "streaming_server"):
+		strings.Contains(haystack, "axis"):
 		return "axis"
 
 	case strings.Contains(haystack, "reolink"):
 		return "reolink"
+
+	// Старые китайские камеры без единого узнаваемого бренда: страница
+	// «Net Video Browser» с кодировкой gb2312. Производителя установить
+	// нечем — ни в заголовках, ни в тексте названия нет, — но сам факт
+	// такой страницы полезно отметить: это заведомо старая камера,
+	// и на ней наверняка не будет ONVIF с готовыми профилями.
+	case strings.Contains(haystack, "net video browser"),
+		strings.Contains(haystack, "gb2312"):
+		return "generic"
 
 	case strings.Contains(haystack, "onvif"):
 		return "onvif"
@@ -837,12 +1155,14 @@ func (s *CameraScanner) probeMajestic(ctx context.Context, ip, username, passwor
 	}
 
 	cam := &domain.DiscoveredCamera{
-		IP:       ip,
-		Vendor:   "openipc",
-		Online:   true,
-		MAC:      s.getMAC(ip),
-		Username: username,
-		Password: password,
+		IP:         ip,
+		Vendor:     "openipc",
+		VendorName: VendorName("openipc"),
+		HowFound:   "по API Majestic",
+		Online:     true,
+		MAC:        s.getMAC(ip),
+		Username:   username,
+		Password:   password,
 	}
 
 	// Модель (сенсор)
@@ -925,13 +1245,15 @@ func (s *CameraScanner) probeHikvision(ctx context.Context, ip, username, passwo
 	}
 
 	cam := &domain.DiscoveredCamera{
-		IP:       ip,
-		Vendor:   "hikvision",
-		Model:    info.Model,
-		Firmware: info.FirmwareVersion,
-		Online:   true,
-		Username: username,
-		Password: password,
+		IP:         ip,
+		Vendor:     "hikvision",
+		VendorName: VendorName("hikvision"),
+		HowFound:   "по ISAPI",
+		Model:      info.Model,
+		Firmware:   info.FirmwareVersion,
+		Online:     true,
+		Username:   username,
+		Password:   password,
 	}
 
 	if info.MacAddress != "" {
@@ -986,14 +1308,16 @@ func (s *CameraScanner) probeDahua(ctx context.Context, ip, username, password s
 	}
 
 	cam := &domain.DiscoveredCamera{
-		IP:       ip,
-		Vendor:   "dahua",
-		Model:    model,
-		Firmware: strVal(magicBox, "firmwareVersion"),
-		MAC:      s.getMAC(ip),
-		Online:   true,
-		Username: username,
-		Password: password,
+		IP:         ip,
+		Vendor:     "dahua",
+		VendorName: VendorName("dahua"),
+		HowFound:   "по CGI API",
+		Model:      model,
+		Firmware:   strVal(magicBox, "firmwareVersion"),
+		MAC:        s.getMAC(ip),
+		Online:     true,
+		Username:   username,
+		Password:   password,
 	}
 
 	if sn := strVal(magicBox, "serial"); sn != "" && cam.MAC == "" {
@@ -1088,7 +1412,14 @@ func (s *CameraScanner) ProbeSingle(ctx context.Context, ip, username, password 
 	if cam == nil {
 		return nil, fmt.Errorf("no camera found at %s", ip)
 	}
-	return cam, nil
+
+	// Проверка одного адреса идёт тем же путём, что и скан подсети,
+	// поэтому и пометка о добавлении нужна здесь: страница сканера
+	// умеет проверять один адрес, и без этого камера в результатах
+	// выглядела бы новой, хотя она давно заведена.
+	result := &domain.ScanResult{Cameras: []domain.DiscoveredCamera{*cam}, Found: 1}
+	s.markAlreadyAdded(ctx, result)
+	return &result.Cameras[0], nil
 }
 
 func strVal(m map[string]interface{}, key string) string {

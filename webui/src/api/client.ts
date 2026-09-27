@@ -191,16 +191,36 @@ export interface DiscoveredCamera {
    * Используется для выбора правильных RTSP-адресов потоков.
    */
   vendor?: string
+  /** Название производителя для показа: «Hikvision», «Vivotek». */
+  vendor_name?: string
+  /**
+   * На чём основан вывод о производителе: «по ONVIF», «по MAC-адресу»,
+   * «по заголовкам HTTP». Нужно для спорных случаев: оператор видит,
+   * какому признаку верить, а не принимает вывод вслепую.
+   */
+  how_found?: string
   main_stream: string
   sub_stream: string
   snapshot?: string
   online: boolean
+  /**
+   * Устройство уже заведено в системе.
+   *
+   * Сверку делает сервер по MAC и адресу: интерфейс видит только
+   * текущий список и не может определить, добавляли камеру раньше
+   * или нет.
+   */
+  already_added?: boolean
+  /** Идентификатор заведённой камеры — если already_added = true. */
+  added_id?: string
 }
 
 export interface ScanResult {
   subnet: string
   total: number
   found: number
+  /** Сколько из найденных устройств уже заведено в системе. */
+  added: number
   cameras: DiscoveredCamera[]
 }
 
