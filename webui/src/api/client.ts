@@ -156,6 +156,50 @@ export interface LogRemoteState {
   reachable: boolean
 }
 
+/** Настройки присмотра за стримером. */
+export interface MajesticWatchConfig {
+  enabled: boolean
+  /** Как часто проверять состояние стримера, секунды. */
+  check_seconds: number
+  /** Сколько перезапусков за окно считать поводом для перезагрузки камеры. */
+  restart_threshold: number
+  /** За какой период считать перезапуски, часы. */
+  window_hours: number
+  /** Перезагружать ли камеру при превышении порога. */
+  reboot_enabled: boolean
+  /** Пауза после перезапуска, секунды. */
+  restart_cooldown_seconds: number
+}
+
+/**
+ * Состояние присмотра по камере.
+ *
+ * Отдельно от самой камеры: оно меняется постоянно, а карточка — редко.
+ */
+export interface MajesticWatchState {
+  camera_id: string
+  /** Перезапусков за текущее окно. */
+  restart_count: number
+  window_started_at: string
+  last_restart_at: string | null
+  last_reboot_at: string | null
+  /**
+   * ok — стример отвечает; fallen — упал; unknown — камеру не удалось
+   * проверить (нет связи или другой вендор).
+   */
+  last_state: 'ok' | 'fallen' | 'unknown' | ''
+  last_check_at: string | null
+  last_error: string
+  cooldown_until: string | null
+  /**
+   * Последняя значимая строка из логов камеры.
+   *
+   * Показывается рядом с падением: причина почти всегда видна здесь,
+   * и искать её отдельно не приходится.
+   */
+  last_log_hint: string
+}
+
 /** Условия выборки логов. */
 export interface LogFilter {
   camera_id?: string
@@ -685,6 +729,45 @@ export const logsAPI = {
       `/cameras/${cameraId}/logs/remote`,
       { enabled },
     ),
+}
+
+export const majesticAPI = {
+  /**
+   * Состояние присмотра по всем камерам вместе с настройками.
+   *
+   * Настройки идут вместе с состоянием намеренно: без порога счётчик
+   * «перезапусков: 2» ничего не говорит — много это или ещё нет.
+   */
+  list: () =>
+    api.get<{ cameras: MajesticWatchState[]; config: MajesticWatchConfig }>('/majestic'),
+
+  /** Состояние присмотра по одной камере. */
+  get: (cameraId: string) =>
+    api.get<{ state: MajesticWatchState; config: MajesticWatchConfig }>(
+      `/cameras/${cameraId}/majestic`,
+    ),
+
+  /**
+   * Проверить камеру немедленно.
+   *
+   * Нужно, когда оператор видит, что камера не работает, и не должен
+   * ждать минуту до следующей проверки, чтобы узнать, в стримере ли дело.
+   */
+  check: (cameraId: string) =>
+    api.post<MajesticWatchState>(`/cameras/${cameraId}/majestic/check`, {}),
+
+  /**
+   * Сбросить счётчики по камере.
+   *
+   * Нужно после ручного вмешательства: оператор сам перезагрузил камеру
+   * или заменил её, и старая история падений к новой не относится.
+   */
+  reset: (cameraId: string) =>
+    api.post<MajesticWatchState>(`/cameras/${cameraId}/majestic/reset`, {}),
+
+  /** Сохранить настройки присмотра. */
+  updateConfig: (patch: Partial<MajesticWatchConfig>) =>
+    api.patch<MajesticWatchConfig>('/majestic/config', patch),
 }
 
 export const audioAPI = {

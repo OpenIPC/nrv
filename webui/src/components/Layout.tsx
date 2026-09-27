@@ -3,7 +3,7 @@ import { useAuth } from '../hooks/useApi'
 import {
   LayoutDashboard, Video, AlertTriangle, HardDrive,
   Shield, LogOut, Camera, Search, Settings, ScanFace, Volume2, Share2,
-  LayoutGrid, Bell, Server, ScrollText
+  LayoutGrid, Bell, Server, ScrollText, Activity
 } from 'lucide-react'
 
 const navItems = [
@@ -19,6 +19,9 @@ const navItems = [
   // Логи стоят после архива: и то, и другое нужно при разборе
   // происшествия — сначала смотрят запись, потом объяснение к ней.
   { to: '/logs', icon: ScrollText, label: 'Логи' },
+  // Присмотр стоит рядом с логами: обе страницы нужны при разборе
+  // одной и той же ситуации — сначала смотрят логи, потом стример.
+  { to: '/majestic', icon: Activity, label: 'Стример' },
   { to: '/recognition', icon: ScanFace, label: 'Распознавание' },
   { to: '/acs', icon: Shield, label: 'СКУД' },
   { to: '/external-access', icon: Share2, label: 'Внешний доступ' },

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { camerasAPI, logsAPI, eventsAPI, type Camera, type DetectionEvent, type StreamInfo, type NTPStatus, type LogRemoteState } from '../api/client'
+import { camerasAPI, logsAPI, majesticAPI, eventsAPI, type Camera, type DetectionEvent, type StreamInfo, type NTPStatus, type LogRemoteState, type MajesticWatchState } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import LivePlayer from '../components/LivePlayer'
@@ -12,7 +12,7 @@ import CameraSettingsPanel from '../components/CameraSettingsPanel'
 import {
   ArrowLeft, RefreshCw, Wifi, WifiOff, Radio, Info,
   Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, Loader2, Crosshair, Volume2, Sliders,
-  Clock, ScrollText,
+  Clock, ScrollText, Activity,
 } from 'lucide-react'
 
 /** URL снимка события. Токен в query: <img> не передаёт заголовок Authorization. */
@@ -32,7 +32,7 @@ export default function CameraDetailPage() {
   const [activeStream, setActiveStream] = useState<'main' | 'sub'>('main')
   // Какая из команд выполняется сейчас (для индикации на кнопке).
   // Какая команда выполняется сейчас: блокируем все кнопки, пока идёт одна.
-  const [busy, setBusy] = useState<'restart' | 'reboot' | 'recreate' | 'ntp' | 'logs' | null>(null)
+  const [busy, setBusy] = useState<'restart' | 'reboot' | 'recreate' | 'ntp' | 'logs' | 'majestic' | null>(null)
 
   // Состояние времени камеры. Читаем сразу при открытии карточки: если
   // камера ходит за временем в интернет, это лучше увидеть сразу, а не
@@ -41,6 +41,10 @@ export default function CameraDetailPage() {
   // Состояние отправки логов: включена ли она и идут ли они на наш сервер.
   // Без этого нельзя отличить «камера молчит» от «приёмник не получает».
   const [logRemote, setLogRemote] = useState<LogRemoteState | null>(null)
+  // Состояние присмотра за стримером: отвечает ли он и сколько раз
+  // его поднимали. Без этих данных непонятно, камера сломана или
+  // перезапуск уже помог и надо просто подождать.
+  const [majestic, setMajestic] = useState<MajesticWatchState | null>(null)
 
   // Снапшот для рисования линии детекции. Токен в query, т.к. <img>
   // не умеет передавать заголовок Authorization (как в списке камер).
@@ -89,10 +93,19 @@ export default function CameraDetailPage() {
       .catch(() => setLogRemote(null))
   }
 
+  // Состояние присмотра за стримером.
+  const loadMajestic = () => {
+    if (!id) return
+    majesticAPI.get(id)
+      .then(res => setMajestic(res.data.state))
+      .catch(() => setMajestic(null))
+  }
+
   useEffect(() => {
     loadStream()
     loadNTP()
     loadLogRemote()
+    loadMajestic()
   }, [id])
 
   const events: DetectionEvent[] = eventsData?.events || []
@@ -102,7 +115,48 @@ export default function CameraDetailPage() {
     loadStream()
     loadNTP()
     loadLogRemote()
+    loadMajestic()
     toast.success('Данные обновлены')
+  }
+
+  // Проверка стримера по требованию. Нужна, когда камера не показывает
+  // картинку: по ней сразу видно, упал процесс или дело в другом.
+  const handleCheckMajestic = async () => {
+    setBusy('majestic')
+    try {
+      const res = await majesticAPI.check(id!)
+      setMajestic(res.data)
+      switch (res.data.last_state) {
+        case 'ok':
+          toast.success('Стример отвечает')
+          break
+        case 'fallen':
+          toast.error('Стример не отвечает — цикл присмотра поднимет его в течение минуты')
+          break
+        default:
+          toast.info('Камера недоступна: проверьте питание и связь')
+      }
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || 'Не удалось проверить стример')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Сброс счётчиков: после ручной перезагрузки или замены камеры старая
+  // история падений к новой уже не относится.
+  const handleResetMajestic = async () => {
+    if (!confirm('Сбросить счётчик перезапусков? Автоматическая перезагрузка начнёт отсчёт заново.')) return
+    setBusy('majestic')
+    try {
+      const res = await majesticAPI.reset(id!)
+      setMajestic(res.data)
+      toast.success('Счётчик сброшен')
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || 'Не удалось сбросить счётчик')
+    } finally {
+      setBusy(null)
+    }
   }
 
   // Включение и выключение отправки логов с камеры на наш сервер.
@@ -708,6 +762,123 @@ export default function CameraDetailPage() {
               в журнале на сервере. Без этого причину сбоя установить нечем.
             </p>
           </div>
+
+          {/* Состояние стримера.
+              Веб-интерфейс встроен в сам Majestic, поэтому при его падении
+              пропадает и страница камеры. Здесь видно, что стример упал,
+              что сервер его уже поднимает и сколько раз это случалось —
+              то есть понятно, ждать или ехать к камере. */}
+          {majestic && majestic.last_state && (
+            <div className="card" style={{ marginTop: 16 }}>
+              <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 15 }}>
+                <Activity size={18} style={{ color: 'var(--primary)' }} />
+                Стример
+              </h3>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Состояние</span>
+                  {majestic.last_state === 'ok' && (
+                    <span style={{ color: 'var(--success)' }}>отвечает</span>
+                  )}
+                  {majestic.last_state === 'fallen' && (
+                    <span style={{ color: 'var(--danger)' }}>не отвечает — поднимаю</span>
+                  )}
+                  {majestic.last_state === 'unknown' && (
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      не удалось проверить
+                    </span>
+                  )}
+                </div>
+
+                {/* «Не удалось проверить» — это НЕ падение: возможно, камера
+                    выключена, а возможно, это камера другого вендора, где
+                    стримера Majestic нет вовсе. Перезапускать там нечего,
+                    и важно не путать эти случаи. */}
+                {majestic.last_state === 'unknown' && (
+                  <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '2px 0 0', lineHeight: 1.5 }}>
+                    Возможно, камера выключена или недоступна по сети.
+                    Если это камера другого производителя, присмотр к ней
+                    не применяется — стримера Majestic там нет.
+                  </p>
+                )}
+
+                {majestic.restart_count > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Перезапусков за сутки</span>
+                    <span style={{
+                      color: majestic.restart_count >= 3 ? 'var(--warning)' : 'inherit',
+                    }}>
+                      {majestic.restart_count}
+                    </span>
+                  </div>
+                )}
+
+                {majestic.last_restart_at && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Последний перезапуск</span>
+                    <span>
+                      {new Date(majestic.last_restart_at).toLocaleString('ru-RU', {
+                        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                )}
+
+                {majestic.last_reboot_at && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Перезагрузка камеры</span>
+                    <span style={{ color: 'var(--warning)' }}>
+                      {new Date(majestic.last_reboot_at).toLocaleString('ru-RU', {
+                        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                )}
+
+                {/* Причина из логов — самое ценное здесь: при падении
+                    стримера она почти всегда объясняет, что случилось. */}
+                {majestic.last_log_hint && majestic.last_state !== 'ok' && (
+                  <div style={{
+                    marginTop: 4, padding: '6px 8px', borderRadius: 4,
+                    background: 'var(--bg-tertiary, #161b22)',
+                    fontSize: 11, fontFamily: 'monospace',
+                    color: 'var(--text-secondary)', wordBreak: 'break-word',
+                  }}>
+                    {majestic.last_log_hint}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <button
+                  className="btn btn-outline btn-sm"
+                  style={{ flex: 1 }}
+                  onClick={handleCheckMajestic}
+                  disabled={busy !== null || !camera.ip}
+                >
+                  {busy === 'majestic' ? <Loader2 size={14} className="spin" /> : <Activity size={14} />}
+                  Проверить
+                </button>
+                {majestic.restart_count > 0 && (
+                  <button
+                    className="btn btn-outline btn-sm"
+                    style={{ flex: 1 }}
+                    onClick={handleResetMajestic}
+                    disabled={busy !== null}
+                    title="Сбросить историю перезапусков после ручного вмешательства"
+                  >
+                    Сбросить счётчик
+                  </button>
+                )}
+              </div>
+
+              <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 10, lineHeight: 1.5 }}>
+                Сервер сам поднимает упавший стример и перезагружает камеру,
+                если тот падает слишком часто. Причину смотрите в журнале логов.
+              </p>
+            </div>
+          )}
 
           {/* PTZ-пульт: показываем только для поворотных камер */}
           {camera.ptz && isOnline && <PTZPanel cameraId={camera.id} />}
