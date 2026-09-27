@@ -577,6 +577,31 @@ func (m *MajesticClient) GetConfig(ctx context.Context) (map[string]any, error) 
 	return cfg, nil
 }
 
+// GetConfigSchema читает схему настроек — описание того, что вообще
+// можно менять на этой камере.
+//
+// Схему отдаёт сама камера, и она различается от сборки к сборке:
+// проверено, что у 192.168.1.59 в ней 124 поля, а у 192.168.1.41 — 385.
+// Поэтому интерфейс настроек строится по этому ответу, а не по нашему
+// списку полей.
+//
+// Эндпоинт именно `/api/v1/config.schema.json`: без префикса `/api/v1`
+// камера отвечает 404, это проверено.
+func (m *MajesticClient) GetConfigSchema(ctx context.Context) (map[string]any, error) {
+	// Таймаут больше обычного: документ крупный — на живой камере
+	// он занимает до 86 КБ, и слабый процессор отдаёт его не мгновенно.
+	data, err := m.get(ctx, "/api/v1/config.schema.json", 2*majesticTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	var schema map[string]any
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return nil, fmt.Errorf("разобрать схему настроек: %w", err)
+	}
+	return schema, nil
+}
+
 // SetConfig записывает часть конфигурации камеры.
 //
 // Прошивка принимает запись только методом POST или PUT на /api/v1/config;
