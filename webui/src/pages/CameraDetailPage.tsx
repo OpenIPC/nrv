@@ -10,6 +10,7 @@ import DetectionSettingsPanel from '../components/DetectionSettingsPanel'
 import AudioSettingsPanel from '../components/AudioSettingsPanel'
 import CameraSettingsPanel from '../components/CameraSettingsPanel'
 import CameraConfigPanel from '../components/CameraConfigPanel'
+import CameraImageProfilePanel from '../components/CameraImageProfilePanel'
 import {
   ArrowLeft, RefreshCw, Wifi, WifiOff, Radio, Info,
   Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, Loader2, Crosshair, Volume2, Sliders,
@@ -505,7 +506,17 @@ export default function CameraDetailPage() {
             )}
 
             {tab === 'detection' && (
-              <DetectionSettingsPanel cameraId={camera.id} snapshotUrl={snapshotUrl} />
+              <div>
+                <DetectionSettingsPanel cameraId={camera.id} snapshotUrl={snapshotUrl} />
+                <div style={{ marginTop: 24, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
+                  {/* Режим съёмки стоит рядом с зоной детекции намеренно:
+                      зона говорит, ГДЕ искать, а режим — чтобы номер был
+                      различим. По отдельности они бесполезны: зона по
+                      смазанной картинке номер не прочитает, а резкая
+                      картинка вне зоны номера не покажет. */}
+                  <CameraImageProfilePanel cameraId={camera.id} />
+                </div>
+              </div>
             )}
 
             {tab === 'audio' && <AudioSettingsPanel cameraId={camera.id} />}

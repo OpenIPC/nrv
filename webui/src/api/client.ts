@@ -875,6 +875,85 @@ export const configAPI = {
     api.patch<CameraConfigView>(`/cameras/${cameraId}/config`, patch),
 }
 
+/** Режим съёмки: что важнее на этой точке — обстановка или номер. */
+export interface ImageProfile {
+  id: string
+  title: string
+  purpose: string
+  /**
+   * Предупреждение о цене режима.
+   *
+   * У профиля «номера» цена своя: короткая выдержка не смазывает номер,
+   * но в темноте картинка становится почти чёрной. Оператор должен
+   * узнать это до нажатия, а не после.
+   */
+  warning?: string
+  values: Record<string, unknown>
+  required_keys?: string[]
+}
+
+/** Одно изменение, которое принесёт профиль. */
+export interface ProfileChange {
+  path: string
+  title: string
+  from: string
+  to: string
+}
+
+/** Профиль вместе с оценкой, сработает ли он на этой камере. */
+export interface ProfileAvailability {
+  profile: ImageProfile
+  /** Сколько полей профиля камера реально знает. */
+  applicable: number
+  /** Ключи, которых у камеры нет: их значения применить не получится. */
+  missing?: string[]
+  /**
+   * Камера знает не всё, но главное знает — профиль сработает.
+   *
+   * Считается по альтернативам: на прошивке 1.48 есть `exposure`, но нет
+   * `slowShutter`; на 1.28 — наоборот. Для «номеров» достаточно любого,
+   * поэтому профиль обязан показываться применимым на обеих ветках.
+   */
+  partial: boolean
+  usable: boolean
+  unsupported_reason?: string
+  changes?: ProfileChange[]
+}
+
+export interface CameraImageProfiles {
+  camera_id: string
+  /** Текущий профиль камеры: `custom`, если ничего не выбирали. */
+  current: string
+  profiles: ProfileAvailability[]
+}
+
+export const imageProfileAPI = {
+  /**
+   * Профили с оценкой применимости к конкретной камере.
+   *
+   * Оценка считается на сервере, а не в браузере: она требует схемы
+   * этой камеры, а браузер её не знает и знать не должен.
+   */
+  list: (cameraId: string) =>
+    api.get<CameraImageProfiles>(`/cameras/${cameraId}/image-profiles`),
+
+  /** Предпросмотр: что именно изменится, если применить. */
+  preview: (cameraId: string, profile: string) =>
+    api.get<ProfileAvailability>(`/cameras/${cameraId}/image-profiles/${profile}`),
+
+  /**
+   * Применить профиль.
+   *
+   * Часть ключей требует перезапуска служб, поэтому поток может
+   * оборваться на несколько секунд — предупреждаем до нажатия.
+   */
+  apply: (cameraId: string, profile: string) =>
+    api.post<{ current: string; applied: ProfileChange[]; skipped?: string[] }>(
+      `/cameras/${cameraId}/image-profiles/${profile}`,
+      {},
+    ),
+}
+
 export const audioAPI = {
   // Настройки звука конкретной камеры
   getSettings: (cameraId: string) =>
