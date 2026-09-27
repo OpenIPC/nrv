@@ -73,6 +73,33 @@ export interface StreamRecreateResult {
   elapsed_ms: number
 }
 
+/**
+ * Состояние времени камеры.
+ *
+ * Камеры OpenIPC по умолчанию берут время у публичных серверов в интернете.
+ * Для закрытого контура это лишний выход наружу, поэтому их переводят
+ * на наш сервер — и важно видеть, получилось ли это.
+ */
+export interface NTPStatus {
+  /** Серверы времени в порядке предпочтения, как они прописаны на камере. */
+  configured: string[]
+  /**
+   * Первым в списке стоит наш сервер.
+   *
+   * Именно порядок определяет выбор: ntpd предпочитает первые серверы,
+   * и наш в конце списка означает, что камера берёт время у другого.
+   */
+  uses_our_server: boolean
+  /** Часовой пояс камеры, например MSK-3. */
+  timezone: string
+  /** Время камеры в её поясе. */
+  camera_time: string
+  /** Расхождение с сервером в секундах. */
+  drift_seconds: number
+  /** Расхождение вышло за допустимый предел. */
+  drift_too_large: boolean
+}
+
 // Сведения о камере со страницы дашборда OpenIPC.
 export interface CameraDeviceInfo {
   soc?: string
@@ -505,6 +532,13 @@ export const camerasAPI = {
   // существует, но остался без источника.
   recreateStream: (id: string) =>
     api.post<StreamRecreateResult>(`/cameras/${id}/recreate-stream`, {}),
+  // Состояние времени камеры: какие серверы прописаны и есть ли расхождение.
+  ntpStatus: (id: string) => api.get<NTPStatus>(`/cameras/${id}/ntp`),
+  // Перевод камеры на наш сервер времени. Без списка серверов
+  // применяются значения по умолчанию — так оператору не нужно вводить
+  // их руками для каждой камеры.
+  applyNTP: (id: string, servers?: string[]) =>
+    api.post<NTPStatus>(`/cameras/${id}/ntp`, servers ? { servers } : {}),
   // Перезагрузка камеры целиком
   reboot: (id: string) =>
     api.post<CameraCommandResult>(`/cameras/${id}/reboot`, {}),

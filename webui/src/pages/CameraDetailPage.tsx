@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { camerasAPI, eventsAPI, type Camera, type DetectionEvent, type StreamInfo } from '../api/client'
+import { camerasAPI, eventsAPI, type Camera, type DetectionEvent, type StreamInfo, type NTPStatus } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import LivePlayer from '../components/LivePlayer'
@@ -12,6 +12,7 @@ import CameraSettingsPanel from '../components/CameraSettingsPanel'
 import {
   ArrowLeft, RefreshCw, Wifi, WifiOff, Radio, Info,
   Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, Loader2, Crosshair, Volume2, Sliders,
+  Clock,
 } from 'lucide-react'
 
 /** URL снимка события. Токен в query: <img> не передаёт заголовок Authorization. */
@@ -31,7 +32,12 @@ export default function CameraDetailPage() {
   const [activeStream, setActiveStream] = useState<'main' | 'sub'>('main')
   // Какая из команд выполняется сейчас (для индикации на кнопке).
   // Какая команда выполняется сейчас: блокируем все кнопки, пока идёт одна.
-  const [busy, setBusy] = useState<'restart' | 'reboot' | 'recreate' | null>(null)
+  const [busy, setBusy] = useState<'restart' | 'reboot' | 'recreate' | 'ntp' | null>(null)
+
+  // Состояние времени камеры. Читаем сразу при открытии карточки: если
+  // камера ходит за временем в интернет, это лучше увидеть сразу, а не
+  // когда в архиве обнаружится неверная дата.
+  const [ntp, setNtp] = useState<NTPStatus | null>(null)
 
   // Снапшот для рисования линии детекции. Токен в query, т.к. <img>
   // не умеет передавать заголовок Authorization (как в списке камер).
@@ -61,8 +67,19 @@ export default function CameraDetailPage() {
       .catch(() => {})
   }
 
+  // Состояние времени камеры. Ошибку тут глушим сознательно: камера может
+  // быть недоступна, а карточка при этом должна открыться — остальное
+  // в ней полезно и без сведений о времени.
+  const loadNTP = () => {
+    if (!id) return
+    camerasAPI.ntpStatus(id)
+      .then(res => setNtp(res.data))
+      .catch(() => setNtp(null))
+  }
+
   useEffect(() => {
     loadStream()
+    loadNTP()
   }, [id])
 
   const events: DetectionEvent[] = eventsData?.events || []
@@ -70,7 +87,32 @@ export default function CameraDetailPage() {
   const handleRefresh = async () => {
     await Promise.all([refetch(), refetchEvents()])
     loadStream()
+    loadNTP()
     toast.success('Данные обновлены')
+  }
+
+  // Перевод камеры на наш сервер времени.
+  //
+  // Камеры OpenIPC по умолчанию берут время у публичных серверов
+  // в интернете. Для закрытого контура это лишний выход наружу, поэтому
+  // камеру переводим на наш сервер, оставляя локальный и публичный
+  // резервом: полный отказ от резерва опасен — при недоступности нашего
+  // камера останется без времени, а архив без верных дат.
+  const handleApplyNTP = async () => {
+    setBusy('ntp')
+    try {
+      const res = await camerasAPI.applyNTP(id!)
+      setNtp(res.data)
+      if (res.data.uses_our_server) {
+        toast.success('Камера переведена на наш сервер времени')
+      } else {
+        toast.error('Серверы прописаны, но наш не первый в списке')
+      }
+    } catch (e: any) {
+      toast.error(e?.response?.data?.details || 'Не удалось применить настройки времени')
+    } finally {
+      setBusy(null)
+    }
   }
 
   // Перезапуск стримера камеры (Majestic). Поток поднимается не сразу,
@@ -461,6 +503,90 @@ export default function CameraDetailPage() {
             {!camera.ip && (
               <p style={{ fontSize: 11, color: 'var(--warning)', marginTop: 8 }}>
                 Нужен IP-адрес камеры для отправки команд.
+              </p>
+            )}
+          </div>
+
+          {/* Время камеры.
+              Камера ставит время в OSD и метки кадров: если оно уходит,
+              в архиве оказывается неверная дата. По умолчанию камеры
+              OpenIPC берут время у публичных серверов в интернете —
+              здесь видно, так ли это, и можно перевести на наш сервер. */}
+          <div className="card" style={{ marginTop: 16 }}>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 15 }}>
+              <Clock size={18} style={{ color: 'var(--primary)' }} />
+              Время
+            </h3>
+
+            {ntp ? (
+              <>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Время камеры</span>
+                    <span style={{ fontFamily: 'monospace' }}>{ntp.camera_time || '—'}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Часовой пояс</span>
+                    <span style={{ fontFamily: 'monospace' }}>{ntp.timezone || '—'}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Серверы</span>
+                    <span style={{ textAlign: 'right', wordBreak: 'break-all' }}>
+                      {ntp.configured?.length ? ntp.configured.join(', ') : '—'}
+                    </span>
+                  </div>
+
+                  {/* Два независимых признака. Первый — откуда камера берёт
+                      время, второй — не разошлось ли оно. Камера может
+                      ходить к нам и при этом отставать, если синхронизация
+                      не проходит: это разные проблемы и лечатся по-разному. */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Источник времени</span>
+                    {ntp.uses_our_server ? (
+                      <span style={{ color: 'var(--success)' }}>наш сервер</span>
+                    ) : (
+                      <span style={{ color: 'var(--warning)' }}>
+                        не наш — камера ходит в интернет
+                      </span>
+                    )}
+                  </div>
+
+                  {ntp.camera_time && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>Расхождение</span>
+                      {ntp.drift_too_large ? (
+                        <span style={{ color: 'var(--danger)' }}>
+                          {ntp.drift_seconds} с — время не синхронизировано
+                        </span>
+                      ) : (
+                        <span style={{ color: 'var(--success)' }}>{ntp.drift_seconds} с — норма</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {!ntp.uses_our_server && (
+                  <button
+                    className="btn btn-outline btn-sm"
+                    style={{ marginTop: 12, width: '100%' }}
+                    onClick={handleApplyNTP}
+                    disabled={busy !== null || !camera.ip}
+                  >
+                    {busy === 'ntp' ? <Loader2 size={14} className="spin" /> : <Clock size={14} />}
+                    {busy === 'ntp' ? 'Применяю...' : 'Перевести на наш сервер времени'}
+                  </button>
+                )}
+              </>
+            ) : (
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
+                Не удалось прочитать время камеры. Это бывает, когда камера
+                недоступна по SSH — проверьте связь.
+              </p>
+            )}
+
+            {!camera.ip && (
+              <p style={{ fontSize: 11, color: 'var(--warning)', marginTop: 8 }}>
+                Нужен IP-адрес камеры для чтения времени.
               </p>
             )}
           </div>

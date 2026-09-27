@@ -172,6 +172,62 @@ func (h *CameraHandler) RecreateStream(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// GetNTPTime возвращает состояние времени камеры: какие серверы прописаны,
+// берёт ли она время у нас, совпадает ли время с серверным.
+//
+// GET /api/v1/cameras/{id}/ntp
+func (h *CameraHandler) GetNTPTime(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+
+	st, err := h.svc.NTPStatus(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error":   "failed to read camera time",
+			"details": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// ApplyNTPTime переводит камеру на наш сервер времени.
+//
+// POST /api/v1/cameras/{id}/ntp
+func (h *CameraHandler) ApplyNTPTime(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+
+	// Тело может быть пустым: тогда применяются серверы по умолчанию,
+	// и оператору не нужно вводить их руками для каждой камеры.
+	var req service.NTPConfig
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+			return
+		}
+	}
+	if len(req.Servers) == 0 {
+		req = service.DefaultNTPConfig(h.svc.ServerIP())
+	}
+
+	st, err := h.svc.ApplyNTP(r.Context(), id, req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error":   "failed to apply time settings",
+			"details": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
 // Reboot перезагружает камеру.// POST /api/v1/cameras/{id}/reboot
 func (h *CameraHandler) Reboot(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))

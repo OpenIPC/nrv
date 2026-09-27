@@ -218,6 +218,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// Пересоздание пути в медиасервере: поднимает поток, когда
 			// камера в сети, но путь в MediaMTX остался без источника.
 			r.Post("/cameras/{id}/recreate-stream", cameraH.RecreateStream)
+			// Время камеры: перевод на наш NTP-сервер и чтение состояния.
+			r.Get("/cameras/{id}/ntp", cameraH.GetNTPTime)
+			r.Post("/cameras/{id}/ntp", cameraH.ApplyNTPTime)
 			r.Post("/cameras/{id}/reboot", cameraH.Reboot)
 
 			// Настройки AI-детекции для камеры

@@ -88,6 +88,21 @@ func (c *CameraSSH) run(ctx context.Context, ip, username, password, command str
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "ConnectTimeout=8",
 		"-o", "LogLevel=ERROR",
+		// Совместимость со старыми камерами.
+		//
+		// Часть камер использует устаревшие алгоритмы SSH: при попытке
+		// подключения современный OpenSSH отвечает «no matching host key
+		// type» или «no matching cipher», и камера становится недоступна
+		// для управления. Нашли на камере 192.168.1.18 (3des-cbc и ssh-rsa).
+		//
+		// Знак «+» ДОБАВЛЯЕТ алгоритмы к списку по умолчанию, а не заменяет
+		// его: безопасные современные остаются, и для новых камер ничего
+		// не меняется. Заменять список целиком нельзя — это ослабило бы
+		// защиту там, где в ней нет нужды.
+		"-o", "HostKeyAlgorithms=+ssh-rsa",
+		"-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
+		"-o", "Ciphers=+3des-cbc,aes128-cbc",
+		"-o", "KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group1-sha1",
 	}
 	sshArgs = append(sshArgs, fmt.Sprintf("%s@%s", username, ip), command)
 
