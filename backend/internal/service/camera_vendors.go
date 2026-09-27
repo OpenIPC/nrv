@@ -106,6 +106,7 @@ var vendorNames = map[string]string{
 	"axis":      "Axis",
 	"uniview":   "Uniview",
 	"reolink":   "Reolink",
+	"beward":    "Beward",
 	"xiongmai":  "Xiongmai",
 	"tvt":       "TVT",
 	"bosch":     "Bosch",
@@ -149,11 +150,14 @@ func vendorByMAC(mac string) string {
 // vendorByModel определяет производителя по модели устройства.
 //
 // Нужно для случаев, когда ONVIF вернул пустого производителя, а модель
-// узнаваема: так вышло с домофоном Hikvision DS07P-LP.
+// узнаваема. Проверять приходится по конкретным началам серий, потому
+// что линейки у производителей разные.
 //
-// Проверять модель приходится по нескольким шаблонам сразу, потому что
-// линейки у производителей разные: камеры Hikvision начинаются с «DS-2CD»,
-// а домофоны — с «DS-KD», «DS07» и других сочетаний серии DS.
+// Это резервный способ, и он требует осторожности: совпадение шаблона
+// ещё не доказывает бренд. Домофон Beward DS07P-LP сначала попадал
+// сюда по общему шаблону «ds-» и записывался в Hikvision, хотя ONVIF
+// честно называл производителя. Поэтому шаблоны максимально узкие,
+// а имена производителей проверяются раньше моделей.
 func vendorByModel(model string) string {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
@@ -161,10 +165,24 @@ func vendorByModel(model string) string {
 	}
 
 	switch {
-	// Hikvision: серия DS. Домофоны DS07P-LP, DS-KD8003, камеры DS-2CD.
-	// Проверяем по началу строки: «ds-» и «ds0» — узнаваемые начала,
-	// тогда как «ds» в середине слова может встретиться случайно.
-	case strings.HasPrefix(m, "ds-"), strings.HasPrefix(m, "ds0"):
+	// Beward проверяется первым: у этого производителя тоже есть модели
+	// серии DS, и они не должны попасть в правило Hikvision ниже.
+	// Домофон Beward DS07P-LP — ровно такой случай.
+	case strings.Contains(m, "beward"), strings.Contains(m, "бевард"):
+		return "beward"
+
+	// Hikvision: серия DS у камер и домофонов.
+	//
+	// Проверяем по конкретным началам серии, а не по общему «ds-»:
+	// общий шаблон ловил домофон Beward DS07P-LP и приписывал его
+	// Hikvision. У настоящих Hikvision модели выглядят так:
+	//   DS-2CD... (камеры), DS-2DE... (PTZ), DS-2CE... (аналоговые),
+	//   DS-KD... (домофоны), DS-7600/DS-9600 (регистраторы).
+	// Совпадение именно по началу серии исключает чужие модели.
+	case strings.HasPrefix(m, "ds-2c"), strings.HasPrefix(m, "ds-2d"),
+		strings.HasPrefix(m, "ds-2e"), strings.HasPrefix(m, "ds-kd"),
+		strings.HasPrefix(m, "ds-76"), strings.HasPrefix(m, "ds-96"),
+		strings.HasPrefix(m, "ds-1"), strings.HasPrefix(m, "ds-k"):
 		return "hikvision"
 
 	// Vivotek: серии начинаются с букв модели и цифр: SD9364, FD8365, IP9165.
@@ -212,8 +230,15 @@ func vendorByRealm(header string) string {
 	h := strings.ToLower(header)
 
 	switch {
-	case strings.Contains(h, "ds-"), strings.Contains(h, "door station"),
-		strings.Contains(h, "hikvision"):
+	// Beward подставляет в область авторизации свою модель и серийник:
+	// «DS07P-LP SIP Door Station - 186882347977». Ищем по словам
+	// «door station» и «beward», а НЕ по «ds-»: серия DS есть и у
+	// Hikvision, и совпадение по ней привело бы к ошибке.
+	case strings.Contains(h, "beward"),
+		strings.Contains(h, "door station"),
+		strings.Contains(h, "ipcamera-webs"):
+		return "beward"
+	case strings.Contains(h, "hikvision"):
 		return "hikvision"
 	case strings.Contains(h, "dahua"), strings.Contains(h, "amcrest"):
 		return "dahua"

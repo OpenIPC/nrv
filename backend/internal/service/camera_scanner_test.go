@@ -119,6 +119,14 @@ func TestNormalizeVendor(t *testing.T) {
 		{"UNV", "uniview"},
 		{"Axis", "axis"},
 		{"Reolink", "reolink"},
+		// Beward — российский производитель домофонов и камер.
+		// Добавлен после ошибки: домофон DS07P-LP определялся как
+		// Hikvision, потому что имя «Beward R&D Co., Ltd» не было
+		// в списке, и код откатывался на определение по модели,
+		// где совпадал общий шаблон серии DS.
+		{"Beward R&D Co., Ltd", "beward"},
+		{"Beward", "beward"},
+		{"BEWARD", "beward"},
 		{"TVT", "tvt"},
 		{"XiongMai", "xiongmai"},
 		{"Bosch", "bosch"},

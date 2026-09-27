@@ -1096,6 +1096,23 @@ func normalizeVendor(manufacturer string) string {
 	switch {
 	case m == "":
 		return "onvif"
+
+	// Beward проверяется ДО Hikvision — и это важно.
+	//
+	// Домофон Beward DS07P-LP по ONVIF честно называет себя
+	// «Beward R&D Co., Ltd», но раньше имени не было в списке,
+	// и код откатывался на «onvif». После этого в дело вступало
+	// определение по модели, которое видит «DS07P-LP» и решает,
+	// что это Hikvision (серия DS). Ошибка была двойная:
+	// незнакомое имя плюс совпадение шаблона модели.
+	//
+	// Beward — российский производитель, выпускает домофоны и камеры
+	// на модулях Hi3516 (это видно в HardwareId этого домофона).
+	// Модели серии DS встречаются и у него, поэтому сначала надо
+	// проверить имя, и только при его отсутствии — модель.
+	case strings.Contains(m, "beward"), strings.Contains(m, "бевард"):
+		return "beward"
+
 	case strings.Contains(m, "hikvision"), strings.Contains(m, "hik"):
 		return "hikvision"
 	case strings.Contains(m, "dahua"), strings.Contains(m, "amcrest"):
