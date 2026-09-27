@@ -292,6 +292,13 @@ type NotificationSettings struct {
 	// потому что это сообщения о самом сервере, а не о событиях
 	// на камерах, и пороги у них свои.
 	System SystemConfig `json:"system"`
+	// Majestic — присмотр за стримером и его перезапуск.
+	//
+	// Отдельная секция, а не часть System: присмотр не только сообщает,
+	// но и действует на камеру, и выключается он отдельно. Оператор, которому
+	// мешают перезапуски, должен иметь возможность отключить только их,
+	// не теряя уведомления о пропавших камерах.
+	Majestic MajesticWatchConfig `json:"majestic"`
 }
 
 // CommonChannelConfig — поля, общие для каналов уведомлений.
@@ -704,6 +711,10 @@ type UpdateServerSettingsRequest struct {
 	// полем, а не внутри Notifications: у них свои пороги, и страница
 	// сохраняет их отдельно от каналов.
 	System *SystemConfig `json:"system,omitempty"`
+	// Majestic — настройки присмотра за стримером. Отдельным полем,
+	// а не внутри System: присмотр не только сообщает, но и действует
+	// на камеру, и выключается отдельно от уведомлений о сервере.
+	Majestic *MajesticWatchConfig `json:"majestic,omitempty"`
 }
 
 // CreateCameraRequest — запрос на создание камеры

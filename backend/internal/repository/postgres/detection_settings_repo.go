@@ -255,6 +255,11 @@ func (r *DetectionSettingsRepo) GetServerSettings(ctx context.Context) (*domain.
 	// неработающим.
 	applySystemDefaults(&out.Notifications.System)
 
+	// То же для присмотра за Majestic: секция появилась позже самих
+	// настроек, и у обновлённых установок она пуста. Без подстановки
+	// присмотр оказался бы выключен с нулевым периодом проверки.
+	applyMajesticDefaults(&out.Notifications.Majestic)
+
 	return out, rows.Err()
 }
 
@@ -299,6 +304,12 @@ func applySetting(out *domain.ServerSettings, key string, raw []byte) error {
 		if err := json.Unmarshal(raw, &out.Notifications.System); err != nil {
 			return fmt.Errorf("decode system notification settings: %w", err)
 		}
+	case "majestic_watch":
+		// Присмотр за Majestic: у него свои пороги и своё включение,
+		// потому что он не только сообщает, но и действует на камеру.
+		if err := json.Unmarshal(raw, &out.Notifications.Majestic); err != nil {
+			return fmt.Errorf("decode majestic watch settings: %w", err)
+		}
 	}
 	return nil
 }
@@ -312,6 +323,27 @@ func applySetting(out *domain.ServerSettings, key string, raw []byte) error {
 func applySystemDefaults(cfg *domain.SystemConfig) {
 	if cfg.Thresholds == (domain.SystemThresholds{}) {
 		cfg.Thresholds = domain.DefaultSystemThresholds()
+	}
+}
+
+// applyMajesticDefaults заполняет незаданные настройки присмотра.
+//
+// Признак «секцию ещё не сохраняли» — нулевой период проверки: осмысленно
+// нулевым он быть не может, а выключенность задаётся полем Enabled.
+func applyMajesticDefaults(cfg *domain.MajesticWatchConfig) {
+	if cfg.CheckSeconds <= 0 {
+		*cfg = domain.DefaultMajesticWatchConfig()
+		return
+	}
+	def := domain.DefaultMajesticWatchConfig()
+	if cfg.RestartThreshold <= 0 {
+		cfg.RestartThreshold = def.RestartThreshold
+	}
+	if cfg.WindowHours <= 0 {
+		cfg.WindowHours = def.WindowHours
+	}
+	if cfg.RestartCooldownSeconds <= 0 {
+		cfg.RestartCooldownSeconds = def.RestartCooldownSeconds
 	}
 }
 
@@ -349,6 +381,13 @@ func (r *DetectionSettingsRepo) UpdateServerSettings(ctx context.Context, req do
 		// каналам, а каналы доставки берутся из настроек Telegram и MAX.
 		if err := save("notifications_system", req.System); err != nil {
 			return nil, fmt.Errorf("save system notification settings: %w", err)
+		}
+	}
+	if req.Majestic != nil {
+		// Присмотр за Majestic — своим ключом: он не только сообщает,
+		// но и действует на камеру, и выключается отдельно от уведомлений.
+		if err := save("majestic_watch", req.Majestic); err != nil {
+			return nil, fmt.Errorf("save majestic watch settings: %w", err)
 		}
 	}
 	return r.GetServerSettings(ctx)

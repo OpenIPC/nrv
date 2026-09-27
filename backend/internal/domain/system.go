@@ -27,6 +27,19 @@ const (
 	SystemTriggerTemperature = "system_temperature"
 	// SystemTriggerGPU — проблема с видеокартой.
 	SystemTriggerGPU = "system_gpu"
+	// SystemTriggerMajestic — Majestic упал и был перезапущен.
+	//
+	// Отдельный тип, а не «пропала камера»: камера при этом в сети,
+	// и перезапуск стримера уже выполнен. Оператору важно это различать —
+	// в первом случае надо ехать к камере, во втором она уже работает.
+	SystemTriggerMajestic = "system_majestic"
+	// SystemTriggerMajesticReboot — камера перезагружена, потому что
+	// Majestic падал слишком часто.
+	//
+	// Отдельный тип, потому что это уже не мелкая неполадка: частые
+	// падения означают, что камере не хватает памяти или она деградирует,
+	// и одной перезагрузкой дело не решается.
+	SystemTriggerMajesticReboot = "system_majestic_reboot"
 )
 
 // SystemEvents — все системные типы в порядке отображения в интерфейсе.
@@ -42,6 +55,8 @@ var SystemEvents = []string{
 	SystemTriggerDisk,
 	SystemTriggerTemperature,
 	SystemTriggerGPU,
+	SystemTriggerMajestic,
+	SystemTriggerMajesticReboot,
 }
 
 // IsSystemEvent сообщает, относится ли тип к состоянию сервера.

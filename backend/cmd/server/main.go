@@ -333,6 +333,22 @@ func main() {
 	}()
 	defer syslogSrv.Stop()
 
+	// Присмотр за Majestic: следит за стримером на слабых камерах и
+	// поднимает его, когда тот падает сам по себе.
+	//
+	// Зачем это нужно: веб-интерфейс встроен в сам Majestic, поэтому
+	// вместе с ним пропадает и страница камеры — остаётся только SSH.
+	// Раньше ничто не поднимало упавший процесс, и камера лежала до
+	// ручного вмешательства.
+	majesticStore := postgres.NewMajesticWatchRepo(db)
+	majesticSettings := service.NewMajesticSettingsProvider(detectionSettingsRepo)
+	majesticWatcher := service.NewMajesticDeviceWatcher()
+	majesticSvc := service.NewMajesticWatchService(
+		cameraSvc, majesticStore, majesticSettings, majesticWatcher,
+		service.NewMajesticNotifierAdapter(majesticNotifierAdapter{svc: notifier}),
+	).WithLogHint(majesticStore)
+	go majesticSvc.Start(context.Background())
+
 	// Автоочистка старых логов: они нужны для разбора свежих происшествий,
 	// а старая история только занимает место и замедляет поиск.
 	go func() {
@@ -384,6 +400,8 @@ func main() {
 		ExternalRTSPSvc:    externalRTSPSvc,
 		LogsSvc:            logSvc,
 		SyslogSrv:          syslogSrv,
+		MajesticSvc:        majesticSvc,
+		MajesticSettings:   majesticSettings,
 		// Сервис создан выше — по нему работает страница уведомлений:
 		// проверка связи и журнал отправок.
 		Notifier:  notifier,

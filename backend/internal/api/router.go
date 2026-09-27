@@ -48,6 +48,10 @@ type RouterConfig struct {
 	LogsSvc *service.CameraLogService
 	// SyslogSrv — сам приёмник, нужен для счётчиков состояния
 	SyslogSrv *service.SyslogServer
+	// MajesticSvc следит за стримером и перезапускает его
+	MajesticSvc *service.MajesticWatchService
+	// MajesticSettings настраивает присмотр и хранит его пороги
+	MajesticSettings *service.MajesticSettingsProvider
 	// ExternalRTSPSvc публикует потоки для внешних систем
 	ExternalRTSPSvc *service.ExternalRTSPService
 	// Notifier отправляет уведомления о событиях (Telegram)
@@ -85,6 +89,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	camSettingsH := handlers.NewCameraSettingsHandler(cfg.SettingsSvc)
 	camPreviewH := handlers.NewCameraPreviewHandler(cfg.PreviewSvc, tokenAuth)
 	logsH := handlers.NewLogsHandler(cfg.SyslogSrv, cfg.LogsSvc)
+	majesticH := handlers.NewMajesticHandler(cfg.MajesticSvc, cfg.MajesticSettings)
 	extRTSPH := handlers.NewExternalRTSPHandler(cfg.ExternalRTSPSvc, cfg.CameraSvc)
 	ptzH := handlers.NewPTZHandler(cfg.CameraSvc)
 	docsH := handlers.NewAPIDocHandler()
@@ -238,6 +243,15 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/logs/status", logsH.Status)
 			r.Get("/cameras/{id}/logs/remote", logsH.GetRemote)
 			r.Post("/cameras/{id}/logs/remote", logsH.SetRemote)
+
+			// Присмотр за Majestic: состояние, ручная проверка,
+			// сброс счётчиков и настройки порогов.
+			r.Get("/majestic", majesticH.List)
+			r.Patch("/majestic/config", majesticH.UpdateConfig)
+			r.Get("/cameras/{id}/majestic", majesticH.Get)
+			r.Post("/cameras/{id}/majestic/check", majesticH.CheckNow)
+			r.Post("/cameras/{id}/majestic/reset", majesticH.Reset)
+
 			r.Patch("/cameras/{id}/detection", detH.UpdateSettings)
 
 			// Глобальные настройки сервера (хранилище записей и снимков)
