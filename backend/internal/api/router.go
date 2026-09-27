@@ -272,6 +272,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/cameras/{id}/image-profiles/{profile}", imageProfileH.Preview)
 			r.Post("/cameras/{id}/image-profiles/{profile}", imageProfileH.Apply)
 
+			// Настройки детекции: зона, линия, классы объектов.
+			//
+			// GET обязателен и не менее важен, чем PATCH: без него
+			// панель детекции в карточке не может прочитать текущие
+			// настройки и остаётся пустой. Один раз эта строка уже
+			// потерялась при правке соседних маршрутов, и пропажу
+			// заметили только глазами — раздел просто исчез из карточки.
+			r.Get("/cameras/{id}/detection", detH.GetSettings)
 			r.Patch("/cameras/{id}/detection", detH.UpdateSettings)
 
 			// Глобальные настройки сервера (хранилище записей и снимков)

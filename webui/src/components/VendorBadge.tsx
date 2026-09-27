@@ -47,36 +47,43 @@ export default function VendorBadge({ vendor, verbose = false }: {
  * какие разделы карточки доступны.
  */
 function vendorInfo(vendor?: CameraVendor): { label: string; color: string; hint: string } {
-  switch (vendor) {
-    case 'openipc':
-      return {
-        label: 'OpenIPC',
-        color: '#4ade80',
-        hint: 'прошивка OpenIPC: доступны схема настроек, логи, NTP, присмотр и режимы съёмки',
-      }
-    case 'hikvision':
-      return {
-        label: 'Hikvision',
-        color: '#60a5fa',
-        hint: 'Hikvision: настройка только своим API, разделы OpenIPC недоступны',
-      }
-    case 'dahua':
-      return {
-        label: 'Dahua',
-        color: '#fbbf24',
-        hint: 'Dahua: настройка только своим API, разделы OpenIPC недоступны',
-      }
-    case 'beward':
-      return {
-        label: 'Beward',
-        color: '#c084fc',
-        hint: 'Beward: настройка только своим API, разделы OpenIPC недоступны',
-      }
-    default:
-      return {
-        label: 'вендор?',
-        color: '#94a3b8',
-        hint: 'производитель не определён: разделы OpenIPC скрыты, пока он не опознан',
-      }
+  // Названия совпадают с тем, что отдаёт сервер в VendorTitle, чтобы
+  // подпись и метка не расходились на разных страницах.
+  const titles: Record<string, string> = {
+    openipc: 'OpenIPC',
+    hikvision: 'Hikvision',
+    dahua: 'Dahua',
+    vivotek: 'Vivotek',
+    beward: 'Beward',
+    axis: 'Axis',
+    uniview: 'Uniview',
+    reolink: 'Reolink',
+    xiongmai: 'Xiongmai',
+  }
+
+  if (vendor === 'openipc') {
+    return {
+      label: 'OpenIPC',
+      color: '#4ade80',
+      hint: 'прошивка OpenIPC: доступны схема настроек, логи, NTP, присмотр и режимы съёмки',
+    }
+  }
+
+  const label = vendor ? titles[vendor] : undefined
+  if (label) {
+    return {
+      label,
+      color: '#60a5fa',
+      hint: `${label}: настройка только своим API, разделы OpenIPC недоступны`,
+    }
+  }
+
+  // Производитель не опознан. Метка нейтральная, а не как ошибка: причин
+  // может быть много, и это не поломка. Но и молчать нельзя — именно от
+  // вендора зависит, какие разделы карточки доступны.
+  return {
+    label: 'вендор?',
+    color: '#94a3b8',
+    hint: 'производитель не определён: разделы OpenIPC скрыты, пока он не опознан',
   }
 }

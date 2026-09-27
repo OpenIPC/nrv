@@ -70,14 +70,15 @@ export default function OpenIPCOnly({
 }
 
 function vendorTitle(vendor?: CameraVendor): string {
-  switch (vendor) {
-    case 'hikvision':
-      return 'Hikvision'
-    case 'dahua':
-      return 'Dahua'
-    case 'beward':
-      return 'Beward'
-    default:
-      return 'не OpenIPC'
+  const titles: Record<string, string> = {
+    hikvision: 'Hikvision',
+    dahua: 'Dahua',
+    vivotek: 'Vivotek',
+    beward: 'Beward',
+    axis: 'Axis',
+    uniview: 'Uniview',
+    reolink: 'Reolink',
+    xiongmai: 'Xiongmai',
   }
+  return (vendor && titles[vendor]) || 'не OpenIPC'
 }

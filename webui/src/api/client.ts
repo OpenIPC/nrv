@@ -36,7 +36,17 @@ export default api
  * тип, а не строка: по этому значению принимается решение о показе
  * разделов, и опечатка в сравнении приводила бы к показу чужих настроек.
  */
-export type CameraVendor = 'openipc' | 'hikvision' | 'dahua' | 'beward' | 'unknown'
+export type CameraVendor =
+  | 'openipc'
+  | 'hikvision'
+  | 'dahua'
+  | 'vivotek'
+  | 'beward'
+  | 'axis'
+  | 'uniview'
+  | 'reolink'
+  | 'xiongmai'
+  | 'unknown'
 
 export interface Camera {
   id: string

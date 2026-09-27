@@ -22,8 +22,18 @@ const (
 	VendorHikvision Vendor = "hikvision"
 	// VendorDahua — Dahua и её OEM-марки.
 	VendorDahua Vendor = "dahua"
+	// VendorVivotek — Vivotek: у неё своё CGI API, не сводимое к чужим.
+	VendorVivotek Vendor = "vivotek"
 	// VendorBeward — Beward: у него своё API, не сводимое к чужим.
 	VendorBeward Vendor = "beward"
+	// VendorAxis — Axis: своё VAPIX API.
+	VendorAxis Vendor = "axis"
+	// VendorUniview — Uniview (UNV).
+	VendorUniview Vendor = "uniview"
+	// VendorReolink — Reolink.
+	VendorReolink Vendor = "reolink"
+	// VendorXiongmai — Xiongmai и OEM-клоны на её модулях.
+	VendorXiongmai Vendor = "xiongmai"
 	// VendorUnknown — производитель не определён.
 	//
 	// Это не ошибка: по камере может быть нечего сказать. Но и показывать
@@ -41,11 +51,111 @@ func VendorTitle(v Vendor) string {
 		return "Hikvision"
 	case VendorDahua:
 		return "Dahua"
+	case VendorVivotek:
+		return "Vivotek"
 	case VendorBeward:
 		return "Beward"
+	case VendorAxis:
+		return "Axis"
+	case VendorUniview:
+		return "Uniview"
+	case VendorReolink:
+		return "Reolink"
+	case VendorXiongmai:
+		return "Xiongmai"
 	default:
 		return "не определён"
 	}
+}
+
+// macPrefixVendors — производители по первым трём байтам MAC-адреса (OUI).
+//
+// Это САМЫЙ надёжный признак, и порядок в ResolveVendor это учитывает.
+// Причина: MAC выдаёт производитель железа и он остаётся прежним, даже
+// если камеру перепрошили. Версия прошивки врёт — перешитая камера
+// назовёт чужую версию, — а адрес не врёт.
+//
+// Проверено на живом парке: по 00:02:d1 сразу видно Vivotek (три камеры
+// .44, .45, .8 с пустой прошивкой, которые первая версия определения
+// записала в OpenIPC), по 18:68:82 — Beward (.11), по c0:51:7e — Hikvision
+// (.164, тоже был записан в OpenIPC ошибочно).
+//
+// Ключ — три байта через двоеточие, в нижнем регистре. Список не претендует
+// на полноту: он покрывает то, что реально встречается в установках.
+var macPrefixVendors = map[string]Vendor{
+	// Hikvision и связанные марки: домофоны, регистраторы, камеры.
+	"44:19:b6": VendorHikvision,
+	"4c:bd:8f": VendorHikvision,
+	"54:c4:15": VendorHikvision,
+	"bc:ad:28": VendorHikvision,
+	"c0:51:7e": VendorHikvision, // проверено на 192.168.1.164
+	"c0:56:e3": VendorHikvision,
+	"c4:2f:90": VendorHikvision,
+	"e0:ca:3c": VendorHikvision,
+
+	// Beward. Префикс 18:68:82 ранее был записан как Hikvision — это была
+	// ошибка, и её вскрыла сама камера: в digest-заголовке она называет
+	// модель «DS07P-LP SIP Door Station». У Hikvision домофонов с таким
+	// именем нет, а у Beward это типовая серия. Вывод подтверждён ещё
+	// и заголовком сервера «IPCamera-Webs/2.5.0», который Hikvision
+	// не отдаёт.
+	"18:68:82": VendorBeward,
+
+	// Dahua
+	"00:1c:27": VendorDahua,
+	"3c:ef:8c": VendorDahua,
+	"4c:11:bf": VendorDahua,
+	"90:02:a9": VendorDahua,
+	"e0:50:8b": VendorDahua,
+
+	// Vivotek. Проверено на 192.168.1.44, .45, .8: SSH закрыт,
+	// HTTP отдаёт «streaming_server» — это её фирменный веб-сервер.
+	"00:02:d1": VendorVivotek,
+	"00:0d:f0": VendorVivotek,
+
+	// Axis
+	"00:40:8c": VendorAxis,
+	"ac:cc:8e": VendorAxis,
+	"b8:a4:4f": VendorAxis,
+
+	// Uniview (UNV)
+	"48:ea:63": VendorUniview,
+	"6c:4b:90": VendorUniview,
+
+	// Reolink
+	"ec:71:db": VendorReolink,
+
+	// Xiongmai — удешевлённые китайские камеры и их OEM-клоны
+	"00:12:12": VendorXiongmai,
+	"00:16:9e": VendorXiongmai,
+	"7c:47:99": VendorXiongmai,
+}
+
+// VendorByMAC определяет производителя по MAC-адресу.
+//
+// Возвращает VendorUnknown, если префикс неизвестен. Отдельно от
+// таблицы прошивок, потому что MAC надёжнее: см. ResolveVendor.
+func VendorByMAC(mac string) Vendor {
+	// Хвост MAC-адресов, которые начинаются на 00:12:34, — Goke
+	// Microelectronics. На их модулях обычно ставится OpenIPC, но это
+	// не обязательно: модуль мог остаться с заводской прошивкой.
+	// Поэтому здесь НЕ утверждается OpenIPC — решает определение по
+	// признакам прошивки, которое идёт позже. Иначе камера с модулем
+	// Goke и чужой прошивкой получила бы доступ к настройкам OpenIPC,
+	// которых у неё нет.
+	if v, ok := macPrefixVendors[normalizeMACTriple(mac)]; ok {
+		return v
+	}
+	return VendorUnknown
+}
+
+// normalizeMACTriple приводит MAC к трём байтам через двоеточие.
+func normalizeMACTriple(mac string) string {
+	clean := strings.NewReplacer(":", "", "-", "", ".", "", " ", "").Replace(strings.ToLower(mac))
+	if len(clean) < 6 {
+		return ""
+	}
+	return clean[0:2] + ":" + clean[2:4] + ":" + clean[4:6]
 }
 
 // SupportsOpenIPC — можно ли на этой камере пользоваться настройками
@@ -62,23 +172,36 @@ func SupportsOpenIPC(v Vendor) bool {
 // vendorByFirmware сопоставляет строку версии прошивки производителю.
 //
 // Способ опирается на то, что производители сами закладывают в версию:
-// Hikvision пишет V5.x.x, Dahua — свою нумерацию с указанием сборки.
-// Признаки намеренно узкие: лучше признать производителя неизвестным,
-// чем показать на камере чужие настройки.
+// Hikvision пишет V5.x.x. Признаки намеренно узкие: лучше признать
+// производителя неизвестным, чем показать на камере чужие настройки.
 var vendorByFirmware = []struct {
 	prefixes []string
 	vendor   Vendor
 }{
 	// Hikvision — V5.x.x. Сюда же попадают OEM-марки (HiWatch, RVI),
 	// потому что прошивка у них одна и API совпадает.
-	{prefixes: []string{"v5.", "v4.", "v3.", "v2."}, vendor: VendorHikvision},
+	//
+	// Ограничено мажорными версиями 4 и 5: более старые номера вроде
+	// «v2.» и «v3.» слишком похожи на версии посторонних прошивок,
+	// и по ним легко приписать камеру Hikvision ошибочно. Версия сама
+	// по себе — слабый признак, поэтому сужаем его достоверную часть.
+	{prefixes: []string{"v5.", "v4."}, vendor: VendorHikvision},
 }
 
 // DetectVendor определяет производителя по строке прошивки.
 //
-// Возвращает VendorUnknown, если признаков нет. Это осознанный результат:
-// неизвестный производитель означает «показывать только общие разделы»,
-// а не «показывать всё подряд».
+// САМЫЙ СЛАБЫЙ источник, и это важно понимать. Прошивку можно перешить,
+// и тогда строка перестанет соответствовать железу; поле может быть
+// пустым, потому что её не удалось прочитать. Поэтому DetectVendor не
+// должен возвращать OpenIPC по косвенным признакам — только по прямому
+// упоминанию в строке.
+//
+// Так было не всегда, и это стоило ошибки. Первая версия считала OpenIPC
+// камеру с пустой прошивкой и с признаком «sub:» — и записала в OpenIPC
+// камеры Vivotek (.44, .45, .8) и Hikvision (.164), у которых прошивку
+// прочитать не удалось. На них открылись бы разделы, которых нет.
+// Теперь OpenIPC по прошивке подтверждается только прямым упоминанием,
+// а всё остальное решает MAC-адрес — см. ResolveVendor.
 func DetectVendor(firmware string) Vendor {
 	fw := strings.ToLower(strings.TrimSpace(firmware))
 	if fw == "" {
@@ -95,80 +218,58 @@ func DetectVendor(firmware string) Vendor {
 	if strings.Contains(fw, "build date") && strings.Contains(fw, "r,") {
 		return VendorDahua
 	}
-	// Следы работы сканера на камерах OpenIPC.
+	// OpenIPC: только прямое упоминание прошивки в строке.
 	//
-	// Сканер складывал в поле прошивки то, что сумел прочитать у камеры:
-	// у OpenIPC это модель сенсора и разрешение — «imx415 3840x2160»,
-	// «os02g10_i2c_1080p 1920x1080 sub:704x576», — а также пустая строка,
-	// когда прочитать не удалось.
-	//
-	// Признак косвенный, поэтому проверяется последним и по строгим
-	// правилам: под него не должна попасть чужая камера. Если признаки
-	// не сойдутся, камера останется «неизвестной», и оператор задаст
-	// производителя вручную — это лучше, чем показать на Hikvision
-	// настройки, которых у неё нет.
-	if isOpenIPCFirmwareTrace(fw) {
+	// Косвенные признаки — размер кадра, «sub:», модель сенсора — сюда
+	// НЕ входят намеренно. Они говорят лишь о том, что сканер записал
+	// в поле прошивки что-то своё, но не о том, что установлена OpenIPC.
+	if strings.Contains(fw, "openipc") || strings.Contains(fw, "majestic") {
 		return VendorOpenIPC
 	}
 	return VendorUnknown
 }
 
-// sensorModelPrefixes — начала названий сенсоров, которые ставит OpenIPC.
-//
-// Список ограничен семействами, которые встречаются у таких камер. Расширять
-// его «на всякий случай» нельзя: каждое новое семейство — это шанс приписать
-// OpenIPC чужой камере, а цена такой ошибки — показанные настройки, которых
-// на камере нет.
-var sensorModelPrefixes = []string{"imx", "os", "sc", "gc", "ov"}
-
-// isOpenIPCFirmwareTrace ищет в строке прошивки следы сканера OpenIPC.
-func isOpenIPCFirmwareTrace(fw string) bool {
-	// Название прошивки прямо в строке.
-	if strings.Contains(fw, "openipc") || strings.Contains(fw, "majestic") {
-		return true
-	}
-	// Субпоток в описании: так OpenIPC-сканер записывает разрешения.
-	if strings.Contains(fw, "sub:") {
-		return true
-	}
-	// Модель сенсора первым словом — «imx415 3840x2160».
-	first, rest, found := strings.Cut(fw, " ")
-	if !found {
-		return false
-	}
-	for _, p := range sensorModelPrefixes {
-		// После префикса должны идти цифры: «imx415», «os02g10», «sc3336».
-		if !strings.HasPrefix(first, p) {
-			continue
-		}
-		tail := strings.TrimPrefix(first, p)
-		if tail != "" && tail[0] >= '0' && tail[0] <= '9' {
-			// И дальше — разрешение: «3840x2160».
-			return strings.Contains(rest, "x")
-		}
-	}
-	return false
-}
-
 // ResolveVendor — производитель камеры.
 //
-// Порядок источников не случаен. Поле vendor заполняется при обнаружении
-// камеры и остаётся пустым, если камера добавлена вручную: в этом случае
-// единственное, что о ней известно, — версия прошивки. Поэтому сначала
-// берём явный признак, и лишь потом пробуем угадать по прошивке.
+// Порядок источников — это и есть суть функции, и он не случаен:
 //
-// Отдельно: камеры OpenIPC часто имеют пустую прошивку или в поле
-// прошивки лежит размер кадра вида «1920x1080 sub:704x576» — это следы
-// работы сканера, который складывал туда всё подряд. Поэтому вендор
-// OpenIPC приходит только явным полем, а пустая прошивка означает
-// «неизвестно», а не «OpenIPC»: приписать камере доступ по SSH, которого
-// у неё нет, хуже, чем показать меньше разделов.
+//  1. Явное поле. Заполняется сканером, который опросил камеру по её
+//     собственному API. Это прямое свидетельство, сильнее быть не может.
+//     Если поле заполнено — проверять что-либо ещё бессмысленно.
+//
+//  2. MAC-адрес. Выдаётся производителем железа и не меняется при
+//     перепрошивке, поэтому он надёжнее версии прошивки. Именно этот
+//     шаг исправил ошибку: камеры Vivotek (.44, .45, .8) и Hikvision
+//     (.164) с пустой прошивкой были записаны в OpenIPC, хотя их
+//     MAC с самого начала говорил обратное.
+//
+//  3. Версия прошивки. Самый слабый источник: её можно перешить, и тогда
+//     версия перестанет соответствовать железу. Идёт последним.
+//
+// Отдельно про OpenIPC. У этой прошивки нет своего производителя железа:
+// она ставится на разные модули, и префикс MAC остаётся от модуля. Раньше
+// пустая прошивка трактовалась как OpenIPC — и это было ошибкой: пустое
+// поле означает «мы ничего не прочитали», а не «там OpenIPC». Камеры
+// Vivotek и Beward попали в OpenIPC именно так, и на них открылись бы
+// разделы, которых у них нет.
+//
+// Поэтому OpenIPC подтверждается только явным полем от сканера или
+// признаком в самой прошивке, но не пустотой.
 func ResolveVendor(camera *Camera) Vendor {
 	if camera == nil {
 		return VendorUnknown
 	}
 	if camera.Vendor != "" && camera.Vendor != VendorUnknown {
 		return camera.Vendor
+	}
+	// MAC надёжнее прошивки — проверяем раньше.
+	if v := VendorByMAC(camera.MAC); v != VendorUnknown {
+		return v
+	}
+	// Подстраховка: MAC в поле камеры может быть пустым, хотя в самой
+	// строке он есть. Так бывает у камер, заведённых до появления поля.
+	if v := VendorByMAC(camera.RTSPUrl); v != VendorUnknown {
+		return v
 	}
 	return DetectVendor(camera.Firmware)
 }

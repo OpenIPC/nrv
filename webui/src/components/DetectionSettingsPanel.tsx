@@ -52,13 +52,25 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState<ReturnType<typeof toForm> | null>(null)
   const [dirty, setDirty] = useState(false)
+  // loadError отдельно от toast: при неудаче надо показать это НА МЕСТЕ
+  // панели, а не одно всплывающее сообщение, которое уйдёт через пару
+  // секунд и оставит после себя пустоту без объяснения.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  // Счётчик повторов: меняется по кнопке «Повторить» и перезапускает
+  // загрузку. Отдельное число, а не функция, потому что эффект должен
+  // зависеть от значения — функция снова зациклила бы его.
+  const [retryToken, setRetryToken] = useState(0)
   // Какая точка линии ставится следующей: 0 — первая, 1 — вторая
   const [nextPoint, setNextPoint] = useState<0 | 1>(0)
   const imgRef = useRef<HTMLImageElement>(null)
 
   useEffect(() => {
     let cancelled = false
+    // Сбрасываем прежнее состояние при смене камеры: без этого на новой
+    // камере сначала мелькали бы настройки предыдущей.
     setLoading(true)
+    setLoadError(null)
+    setForm(null)
     detectionAPI.get(cameraId)
       .then((res) => {
         if (cancelled) return
@@ -68,18 +80,47 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       })
       .catch((e) => {
         if (!cancelled) {
-          error(e.response?.data?.error || 'Не удалось загрузить настройки детекции')
+          const msg = e.response?.data?.error || 'Не удалось загрузить настройки детекции'
+          setLoadError(msg)
+          error(msg)
         }
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [cameraId, error])
+    // error НЕ ставим в зависимости намеренно. Функция из useToast
+    // создаётся заново при каждом рендере, поэтому зависимость от неё
+    // зацикливала эффект: запрос → setState → рендер → новый error →
+    // снова запрос. Панель бесконечно показывала «Загрузка» и сыпала
+    // запросами, а раздел детекции выглядел пропавшим из карточки.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraId, retryToken])
 
-  if (loading || !form) {
+  if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 20, color: 'var(--text-secondary)' }}>
         <Loader2 size={16} className="spin" />
         Загрузка настроек детекции...
+      </div>
+    )
+  }
+
+  // Ошибку показываем вместо формы, с понятным текстом и кнопкой повтора.
+  // Раньше здесь оставалась вечная «Загрузка», и отличить сбой от
+  // медленной сети было невозможно.
+  if (loadError || !form) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)' }}>
+          <AlertCircle size={16} />
+          {loadError || 'Настройки детекции недоступны'}
+        </div>
+        <button
+          className="btn btn-outline btn-sm"
+          style={{ alignSelf: 'flex-start' }}
+          onClick={() => setRetryToken((n) => n + 1)}
+        >
+          Повторить
+        </button>
       </div>
     )
   }
