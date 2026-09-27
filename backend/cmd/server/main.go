@@ -294,6 +294,14 @@ func main() {
 	// тоже отличаются.
 	schemaSettingsSvc := service.NewSchemaSettingsService(settingsSvc)
 
+	// Профили изображения: наборы настроек под условия съёмки.
+	//
+	// Профиль — набор ПОЖЕЛАНИЙ, а не готовый список ключей: проверено,
+	// что у 192.168.1.48 шесть ключей `isp`, а у 192.168.1.41 — двадцать
+	// шесть, поэтому применяется только то, что камера умеет.
+	imageProfileSvc := service.NewImageProfileService(
+		schemaSettingsSvc, postgres.NewImageProfileRepo(db))
+
 	// Мониторинг состояния сервера и камер: пропавшие камеры, перегрузка
 	// процессора, нехватка памяти, заполненный диск, перегрев, видеокарта.
 	//
@@ -409,6 +417,7 @@ func main() {
 		MajesticSvc:        majesticSvc,
 		MajesticSettings:   majesticSettings,
 		SchemaSettings:     schemaSettingsSvc,
+		ImageProfile:       imageProfileSvc,
 		// Сервис создан выше — по нему работает страница уведомлений:
 		// проверка связи и журнал отправок.
 		Notifier:  notifier,

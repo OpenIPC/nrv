@@ -54,6 +54,8 @@ type RouterConfig struct {
 	MajesticSettings *service.MajesticSettingsProvider
 	// SchemaSettings отдаёт и меняет настройки по схеме самой камеры
 	SchemaSettings *service.SchemaSettingsService
+	// ImageProfile применяет профили изображения с оглядкой на камеру
+	ImageProfile *service.ImageProfileService
 	// ExternalRTSPSvc публикует потоки для внешних систем
 	ExternalRTSPSvc *service.ExternalRTSPService
 	// Notifier отправляет уведомления о событиях (Telegram)
@@ -93,6 +95,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	logsH := handlers.NewLogsHandler(cfg.SyslogSrv, cfg.LogsSvc)
 	majesticH := handlers.NewMajesticHandler(cfg.MajesticSvc, cfg.MajesticSettings)
 	schemaH := handlers.NewSchemaSettingsHandler(cfg.SchemaSettings)
+	imageProfileH := handlers.NewImageProfileHandler(cfg.ImageProfile)
 	extRTSPH := handlers.NewExternalRTSPHandler(cfg.ExternalRTSPSvc, cfg.CameraSvc)
 	ptzH := handlers.NewPTZHandler(cfg.CameraSvc)
 	docsH := handlers.NewAPIDocHandler()
@@ -262,6 +265,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/cameras/{id}/config", schemaH.Get)
 			r.Patch("/cameras/{id}/config", schemaH.Update)
 			r.Get("/cameras/{id}/config/schema", schemaH.Schema)
+
+			// Профили изображения: список с оценкой применимости,
+			// предпросмотр изменений и применение.
+			r.Get("/cameras/{id}/image-profiles", imageProfileH.List)
+			r.Get("/cameras/{id}/image-profiles/{profile}", imageProfileH.Preview)
+			r.Post("/cameras/{id}/image-profiles/{profile}", imageProfileH.Apply)
+
 			r.Patch("/cameras/{id}/detection", detH.UpdateSettings)
 
 			// Глобальные настройки сервера (хранилище записей и снимков)
