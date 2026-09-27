@@ -35,6 +35,16 @@ type Config struct {
 	// HostAgentSocket — сокет службы на хосте, через который меняются
 	// часовой пояс и сеть. Каталог монтируется из хоста.
 	HostAgentSocket string
+	// SyslogListen — адрес, на котором приёмник слушает логи с камер.
+	SyslogListen string
+	// SyslogAdvertise — адрес, который прописывается камерам как приёмник.
+	//
+	// Отличается от SyslogListen: сервер может слушать на всех интерфейсах
+	// (":514"), а камерам нужно назвать конкретный адрес, иначе они не
+	// поймут, куда отправлять. Обычно это адрес сервера в сети камер.
+	SyslogAdvertise string
+	// LogRetentionDays — сколько дней хранить логи с камер.
+	LogRetentionDays int
 }
 
 func Load() (*Config, error) {
@@ -66,6 +76,13 @@ func Load() (*Config, error) {
 		RecordBufferDir:     envStr("RECORD_BUFFER_DIR", "/var/lib/nvr/buffer"),
 		AudioClipDir:        envStr("AUDIO_CLIP_DIR", "/var/lib/nvr/audio"),
 		HostAgentSocket:     envStr("HOST_AGENT_SOCKET", "/run/nvr-agent/agent.sock"),
+		SyslogListen:        envStr("SYSLOG_LISTEN", ":514"),
+		// Пусто — значит адрес определяет сам сервис (первый не-loopback
+		// адрес хоста). Это разумное значение по умолчанию: в типовой
+		// установке камеры и сервер в одной сети, и подставлять что-то
+		// руками не нужно.
+		SyslogAdvertise:  envStr("SYSLOG_ADVERTISE", ""),
+		LogRetentionDays: envInt("LOG_RETENTION_DAYS", 30),
 	}
 
 	if cfg.JWTSecret == "change-me-in-production" {

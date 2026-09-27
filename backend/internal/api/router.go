@@ -44,6 +44,10 @@ type RouterConfig struct {
 	SettingsSvc *service.CameraSettingsService
 	// PreviewSvc отдаёт кадр с камеры для превью в интерфейсе
 	PreviewSvc *service.CameraPreviewService
+	// LogsSvc принимает логи с камер и настраивает их отправку
+	LogsSvc *service.CameraLogService
+	// SyslogSrv — сам приёмник, нужен для счётчиков состояния
+	SyslogSrv *service.SyslogServer
 	// ExternalRTSPSvc публикует потоки для внешних систем
 	ExternalRTSPSvc *service.ExternalRTSPService
 	// Notifier отправляет уведомления о событиях (Telegram)
@@ -80,6 +84,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	camHealthH := handlers.NewCameraHealthHandler(cfg.HealthSvc)
 	camSettingsH := handlers.NewCameraSettingsHandler(cfg.SettingsSvc)
 	camPreviewH := handlers.NewCameraPreviewHandler(cfg.PreviewSvc, tokenAuth)
+	logsH := handlers.NewLogsHandler(cfg.SyslogSrv, cfg.LogsSvc)
 	extRTSPH := handlers.NewExternalRTSPHandler(cfg.ExternalRTSPSvc, cfg.CameraSvc)
 	ptzH := handlers.NewPTZHandler(cfg.CameraSvc)
 	docsH := handlers.NewAPIDocHandler()
@@ -223,8 +228,16 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/cameras/{id}/ntp", cameraH.ApplyNTPTime)
 			r.Post("/cameras/{id}/reboot", cameraH.Reboot)
 
-			// Настройки AI-детекции для камеры
-			r.Get("/cameras/{id}/detection", detH.GetSettings)
+			// Логи с камер: просмотр, сводка и настройка отправки.
+			// Просмотр в защищённой группе: в логах видны адреса,
+			// учётные данные в текстах ошибок и внутренние пути
+			// камеры — это не та информация, что доступна всем.
+			r.Get("/logs", logsH.List)
+			r.Get("/logs/summary", logsH.Summary)
+			r.Get("/logs/apps", logsH.Apps)
+			r.Get("/logs/status", logsH.Status)
+			r.Get("/cameras/{id}/logs/remote", logsH.GetRemote)
+			r.Post("/cameras/{id}/logs/remote", logsH.SetRemote)
 			r.Patch("/cameras/{id}/detection", detH.UpdateSettings)
 
 			// Глобальные настройки сервера (хранилище записей и снимков)

@@ -100,6 +100,75 @@ export interface NTPStatus {
   drift_too_large: boolean
 }
 
+/** Одна строка лога с камеры. */
+export interface LogEntry {
+  id: number
+  camera_id: string | null
+  camera_name: string
+  camera_ip: string
+  source_ip: string
+  /** Имя программы: majestic, kernel, dropbear. */
+  app: string
+  /**
+   * Уровень важности 0..7. null означает, что устройство его не сообщило.
+   *
+   * Разница принципиальна: «точно сведения» и «устройство промолчало» —
+   * это разные вещи, и подставлять одно вместо другого значило бы
+   * выдумывать данные.
+   */
+  severity: number | null
+  message: string
+  /** Время на камере. Может быть неверным до настройки NTP. */
+  logged_at: string | null
+  /** Время приёма на сервере — ему можно верить всегда. */
+  received_at: string
+}
+
+/** Сводка по логам за период. */
+export interface LogSummary {
+  total: number
+  by_severity: Record<string, number>
+  by_camera: Record<string, number>
+  by_app: Record<string, number>
+}
+
+/** Состояние приёмника логов. */
+export interface LogStatus {
+  received: number
+  stored: number
+  /** Потеряно: при перегрузке или из-за ошибки хранилища. */
+  dropped: number
+  /** Отсечено как повторы одной и той же строки. */
+  duplicates: number
+  last_at: string | null
+  /** Названия уровней важности для интерфейса. */
+  levels: Record<string, string>
+}
+
+/** Куда камера отправляет логи сейчас. */
+export interface LogRemoteState {
+  enabled: boolean
+  /** Адрес приёмника, прописанный на камере. */
+  target: string
+  /** Логи идут именно на наш сервер, а не куда-то ещё. */
+  our_server: boolean
+  raw_value: string
+  reachable: boolean
+}
+
+/** Условия выборки логов. */
+export interface LogFilter {
+  camera_id?: string
+  app?: string
+  /** Уровень словами: «ошибка», «предупреждение». Разбор — на сервере. */
+  level?: string
+  from?: string
+  to?: string
+  q?: string
+  limit?: number
+  offset?: number
+}
+
 // Сведения о камере со страницы дашборда OpenIPC.
 export interface CameraDeviceInfo {
   soc?: string
@@ -568,6 +637,54 @@ export const camerasAPI = {
   // Перезапуск камеры через API прошивки вместо SSH.
   restartCamera: (id: string) =>
     api.post<CameraCommandResult>(`/cameras/${id}/restart`, {}),
+}
+
+export const logsAPI = {
+  /**
+   * Логи с фильтрами.
+   *
+   * Уровень передаётся словом, а не числом: оператор выбирает «ошибки»,
+   * а не «3». Разбор слова в число — забота сервера.
+   */
+  list: (filter: LogFilter = {}) =>
+    api.get<{ logs: LogEntry[]; count: number }>('/logs', {
+      params: {
+        ...filter,
+        // Пустые значения не отправляем: на сервере они всё равно
+        // означают «без фильтра», а лишние параметры засоряют запрос.
+        level: filter.level || undefined,
+        app: filter.app || undefined,
+        camera_id: filter.camera_id || undefined,
+        q: filter.q || undefined,
+        from: filter.from || undefined,
+        to: filter.to || undefined,
+      },
+    }),
+
+  /** Сводка за период: сколько строк, по уровням, камерам и программам. */
+  summary: (hours = 24) => api.get<LogSummary>('/logs/summary', { params: { hours } }),
+
+  /** Программы, встречающиеся в логах — для списка фильтра. */
+  apps: () => api.get<string[]>('/logs/apps'),
+
+  /**
+   * Состояние приёмника.
+   *
+   * Нужно, чтобы отличить «камеры молчат» от «приёмник не работает»:
+   * без этих счётчиков оба случая выглядят одинаково — пустой страницей.
+   */
+  status: () => api.get<LogStatus>('/logs/status'),
+
+  /** Куда конкретная камера отправляет логи сейчас. */
+  remoteState: (cameraId: string) =>
+    api.get<LogRemoteState>(`/cameras/${cameraId}/logs/remote`),
+
+  /** Включить или выключить отправку логов с камеры на наш сервер. */
+  setRemote: (cameraId: string, enabled: boolean) =>
+    api.post<{ enabled: boolean; target: string }>(
+      `/cameras/${cameraId}/logs/remote`,
+      { enabled },
+    ),
 }
 
 export const audioAPI = {

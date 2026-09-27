@@ -20,10 +20,31 @@ import (
 type CameraSSH struct {
 	// Timeout на подключение и выполнение команды.
 	timeout time.Duration
+	// password — пароль, заданный через WithPassword. Нужен потому, что
+	// разные части системы получают пароль в разном виде: где-то он уже
+	// есть рядом с адресом, а где-то приходит отдельно.
+	password string
 }
 
 func NewCameraSSH() *CameraSSH {
 	return &CameraSSH{timeout: 20 * time.Second}
+}
+
+// WithPassword возвращает копию с заданным паролем.
+//
+// Копия, а не изменение получателя: сервис создания общего объекта без
+// пароля может использоваться несколькими вызывающими одновременно, и
+// менять его состояние значило бы подмешивать пароль одной камеры
+// в запросы к другой.
+func (c *CameraSSH) WithPassword(password string) *CameraSSH {
+	cp := *c
+	cp.password = password
+	return &cp
+}
+
+// Run выполняет команду с паролем, заданным через WithPassword.
+func (c *CameraSSH) Run(ctx context.Context, ip, username, command string) (string, error) {
+	return c.run(ctx, ip, username, c.password, command)
 }
 
 // CommandResult — результат выполнения команды на камере.

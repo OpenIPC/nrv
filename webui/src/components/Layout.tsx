@@ -3,7 +3,7 @@ import { useAuth } from '../hooks/useApi'
 import {
   LayoutDashboard, Video, AlertTriangle, HardDrive,
   Shield, LogOut, Camera, Search, Settings, ScanFace, Volume2, Share2,
-  LayoutGrid, Bell, Server
+  LayoutGrid, Bell, Server, ScrollText
 } from 'lucide-react'
 
 const navItems = [
@@ -16,6 +16,9 @@ const navItems = [
   { to: '/events', icon: AlertTriangle, label: 'События' },
   { to: '/audio-events', icon: Volume2, label: 'Звуки' },
   { to: '/recordings', icon: HardDrive, label: 'Архив' },
+  // Логи стоят после архива: и то, и другое нужно при разборе
+  // происшествия — сначала смотрят запись, потом объяснение к ней.
+  { to: '/logs', icon: ScrollText, label: 'Логи' },
   { to: '/recognition', icon: ScanFace, label: 'Распознавание' },
   { to: '/acs', icon: Shield, label: 'СКУД' },
   { to: '/external-access', icon: Share2, label: 'Внешний доступ' },

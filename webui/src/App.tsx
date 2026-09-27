@@ -10,6 +10,7 @@ import ScannerPage from './pages/ScannerPage'
 import EventsPage from './pages/EventsPage'
 import AudioEventsPage from './pages/AudioEventsPage'
 import RecordingsPage from './pages/RecordingsPage'
+import LogsPage from './pages/LogsPage'
 import RecognitionPage from './pages/RecognitionPage'
 import ACSPage from './pages/ACSPage'
 import SettingsPage from './pages/SettingsPage'
@@ -45,6 +46,7 @@ export default function App() {
                 <Route path="/events" element={<EventsPage />} />
                 <Route path="/audio-events" element={<AudioEventsPage />} />
                 <Route path="/recordings" element={<RecordingsPage />} />
+                <Route path="/logs" element={<LogsPage />} />
                 <Route path="/recognition" element={<RecognitionPage />} />
                 <Route path="/acs" element={<ACSPage />} />
                 <Route path="/external-access" element={<ExternalAccessPage />} />

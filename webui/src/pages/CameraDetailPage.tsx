@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { camerasAPI, eventsAPI, type Camera, type DetectionEvent, type StreamInfo, type NTPStatus } from '../api/client'
+import { camerasAPI, logsAPI, eventsAPI, type Camera, type DetectionEvent, type StreamInfo, type NTPStatus, type LogRemoteState } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import LivePlayer from '../components/LivePlayer'
@@ -12,7 +12,7 @@ import CameraSettingsPanel from '../components/CameraSettingsPanel'
 import {
   ArrowLeft, RefreshCw, Wifi, WifiOff, Radio, Info,
   Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, Loader2, Crosshair, Volume2, Sliders,
-  Clock,
+  Clock, ScrollText,
 } from 'lucide-react'
 
 /** URL снимка события. Токен в query: <img> не передаёт заголовок Authorization. */
@@ -32,12 +32,15 @@ export default function CameraDetailPage() {
   const [activeStream, setActiveStream] = useState<'main' | 'sub'>('main')
   // Какая из команд выполняется сейчас (для индикации на кнопке).
   // Какая команда выполняется сейчас: блокируем все кнопки, пока идёт одна.
-  const [busy, setBusy] = useState<'restart' | 'reboot' | 'recreate' | 'ntp' | null>(null)
+  const [busy, setBusy] = useState<'restart' | 'reboot' | 'recreate' | 'ntp' | 'logs' | null>(null)
 
   // Состояние времени камеры. Читаем сразу при открытии карточки: если
   // камера ходит за временем в интернет, это лучше увидеть сразу, а не
   // когда в архиве обнаружится неверная дата.
   const [ntp, setNtp] = useState<NTPStatus | null>(null)
+  // Состояние отправки логов: включена ли она и идут ли они на наш сервер.
+  // Без этого нельзя отличить «камера молчит» от «приёмник не получает».
+  const [logRemote, setLogRemote] = useState<LogRemoteState | null>(null)
 
   // Снапшот для рисования линии детекции. Токен в query, т.к. <img>
   // не умеет передавать заголовок Authorization (как в списке камер).
@@ -77,9 +80,19 @@ export default function CameraDetailPage() {
       .catch(() => setNtp(null))
   }
 
+  // Состояние отправки логов. Ошибку глушим по той же причине, что и
+  // у времени: камера может быть недоступна, а карточка должна открыться.
+  const loadLogRemote = () => {
+    if (!id) return
+    logsAPI.remoteState(id)
+      .then(res => setLogRemote(res.data))
+      .catch(() => setLogRemote(null))
+  }
+
   useEffect(() => {
     loadStream()
     loadNTP()
+    loadLogRemote()
   }, [id])
 
   const events: DetectionEvent[] = eventsData?.events || []
@@ -88,7 +101,31 @@ export default function CameraDetailPage() {
     await Promise.all([refetch(), refetchEvents()])
     loadStream()
     loadNTP()
+    loadLogRemote()
     toast.success('Данные обновлены')
+  }
+
+  // Включение и выключение отправки логов с камеры на наш сервер.
+  //
+  // Зачем это нужно: лог в самой камере живёт в оперативной памяти и
+  // затирается по кругу. Когда камера виснет и её перезагружают,
+  // объяснение пропадает вместе с буфером — а именно оно и нужно,
+  // чтобы понять причину.
+  const handleToggleLogs = async (enabled: boolean) => {
+    setBusy('logs')
+    try {
+      await logsAPI.setRemote(id!, enabled)
+      toast.success(enabled
+        ? 'Камера будет отправлять логи на сервер'
+        : 'Отправка логов с камеры выключена')
+      // Перечитываем через небольшую паузу: камера перезапускает
+      // syslogd, и сразу после команды он ещё не успевает подняться.
+      setTimeout(loadLogRemote, 2500)
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || 'Не удалось изменить настройку')
+    } finally {
+      setBusy(null)
+    }
   }
 
   // Перевод камеры на наш сервер времени.
@@ -589,6 +626,87 @@ export default function CameraDetailPage() {
                 Нужен IP-адрес камеры для чтения времени.
               </p>
             )}
+          </div>
+
+          {/* Логи камеры.
+              Лог в самой камере живёт в оперативной памяти и затирается
+              по кругу: когда камера виснет и её перезагружают, объяснение
+              пропадает вместе с буфером. Здесь включается отправка логов
+              на сервер, где они переживут и перезагрузку, и саму камеру. */}
+          <div className="card" style={{ marginTop: 16 }}>
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 15 }}>
+              <ScrollText size={18} style={{ color: 'var(--primary)' }} />
+              Логи на сервере
+            </h3>
+
+            {logRemote ? (
+              <>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Отправка</span>
+                    {logRemote.enabled ? (
+                      <span style={{ color: 'var(--success)' }}>включена</span>
+                    ) : (
+                      <span style={{ color: 'var(--text-secondary)' }}>выключена</span>
+                    )}
+                  </div>
+
+                  {logRemote.enabled && (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>Приёмник</span>
+                        <span style={{ fontFamily: 'monospace', wordBreak: 'break-all', textAlign: 'right' }}>
+                          {logRemote.target || '—'}
+                        </span>
+                      </div>
+                      {/* Два случая, которые важно различать: логи идут
+                          нашему серверу или куда-то ещё. Во втором случае
+                          мы их не увидим, и это надо исправить — иначе
+                          при разборе происшествия логов просто не будет. */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>Куда идут</span>
+                        {logRemote.our_server ? (
+                          <span style={{ color: 'var(--success)' }}>на наш сервер</span>
+                        ) : (
+                          <span style={{ color: 'var(--warning)' }}>на сторонний адрес</span>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <button
+                  className="btn btn-outline btn-sm"
+                  style={{ marginTop: 12, width: '100%' }}
+                  onClick={() => handleToggleLogs(!logRemote.enabled)}
+                  disabled={busy !== null || !camera.ip}
+                >
+                  {busy === 'logs' ? <Loader2 size={14} className="spin" /> : <ScrollText size={14} />}
+                  {busy === 'logs'
+                    ? 'Применяю...'
+                    : logRemote.enabled
+                      ? 'Выключить отправку логов'
+                      : 'Отправлять логи на сервер'}
+                </button>
+
+                {logRemote.enabled && !logRemote.our_server && (
+                  <p style={{ fontSize: 11, color: 'var(--warning)', marginTop: 8 }}>
+                    Логи уходят по другому адресу. Включите отправку на наш
+                    сервер — иначе их не будет в общем журнале.
+                  </p>
+                )}
+              </>
+            ) : (
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
+                Не удалось прочитать настройку. Это бывает, когда камера
+                недоступна по SSH — проверьте связь.
+              </p>
+            )}
+
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 10, lineHeight: 1.5 }}>
+              Что успела записать камера до перезагрузки, видно только
+              в журнале на сервере. Без этого причину сбоя установить нечем.
+            </p>
           </div>
 
           {/* PTZ-пульт: показываем только для поворотных камер */}

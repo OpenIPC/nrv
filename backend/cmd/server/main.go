@@ -310,6 +310,44 @@ func main() {
 	// Превью камер: одиночный кадр по HTTP вместо видеопотока.
 	previewSvc := service.NewCameraPreviewService(cameraRepo)
 
+	// Приём логов с камер по syslog.
+	//
+	// Причина, по которой это нужно: лог в самой камере живёт в оперативной
+	// памяти и затирается по кругу. Когда камера виснет и её перезагружают,
+	// объяснение пропадает вместе с буфером — а именно оно и нужно, чтобы
+	// понять причину. Приёмник уводит логи на сервер, где они переживут
+	// и перезагрузку, и саму камеру.
+	logRepo := postgres.NewCameraLogRepo(db)
+	logSvc := service.NewCameraLogService(logRepo, cameraSvc, cfg.SyslogAdvertise)
+	syslogSrv := service.NewSyslogServer(cfg.SyslogListen, logRepo, logRepo)
+
+	// Запускаем приёмник в фоне: если порт занят, сервис продолжает
+	// работать без логов, а не отказывается стартовать целиком. Это
+	// правильный размен: логи нужны для разбора, но не для основной
+	// работы системы.
+	go func() {
+		if err := syslogSrv.Start(context.Background()); err != nil {
+			log.Error().Err(err).Str("addr", cfg.SyslogListen).
+				Msg("приём логов не запустился, логи с камер приниматься не будут")
+		}
+	}()
+	defer syslogSrv.Stop()
+
+	// Автоочистка старых логов: они нужны для разбора свежих происшествий,
+	// а старая история только занимает место и замедляет поиск.
+	go func() {
+		// Первый проход через пять минут после старта: раньше чистить
+		// нечего, а сервер в это время ещё разбирается со своими делами.
+		time.Sleep(5 * time.Minute)
+		for {
+			if n, err := logRepo.DeleteOlder(context.Background(),
+				time.Now().AddDate(0, 0, -cfg.LogRetentionDays)); err == nil && n > 0 {
+				log.Info().Int64("deleted", n).Msg("удалены старые логи с камер")
+			}
+			time.Sleep(6 * time.Hour)
+		}
+	}()
+
 	// Внешний RTSP-доступ: публикуем потоки камер под адресами
 	// /cameras/{N}/streaming/{main|sub}, чтобы сторонние системы брали
 	// поток у нас, а не подключались к камерам напрямую. Камеры слабые
@@ -344,6 +382,8 @@ func main() {
 		SettingsSvc:        settingsSvc,
 		PreviewSvc:         previewSvc,
 		ExternalRTSPSvc:    externalRTSPSvc,
+		LogsSvc:            logSvc,
+		SyslogSrv:          syslogSrv,
 		// Сервис создан выше — по нему работает страница уведомлений:
 		// проверка связи и журнал отправок.
 		Notifier:  notifier,
