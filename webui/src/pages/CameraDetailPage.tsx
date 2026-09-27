@@ -9,10 +9,11 @@ import PTZPanel from '../components/PTZPanel'
 import DetectionSettingsPanel from '../components/DetectionSettingsPanel'
 import AudioSettingsPanel from '../components/AudioSettingsPanel'
 import CameraSettingsPanel from '../components/CameraSettingsPanel'
+import CameraConfigPanel from '../components/CameraConfigPanel'
 import {
   ArrowLeft, RefreshCw, Wifi, WifiOff, Radio, Info,
   Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, Loader2, Crosshair, Volume2, Sliders,
-  Clock, ScrollText, Activity,
+  Clock, ScrollText, Activity, Layers,
 } from 'lucide-react'
 
 /** URL снимка события. Токен в query: <img> не передаёт заголовок Authorization. */
@@ -25,7 +26,7 @@ export default function CameraDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const toast = useToast()
-  const [tab, setTab] = useState<'live' | 'events' | 'detection' | 'audio' | 'settings'>('live')
+  const [tab, setTab] = useState<'live' | 'events' | 'detection' | 'audio' | 'settings' | 'advanced'>('live')
   const [streamInfo, setStreamInfo] = useState<StreamInfo | null>(null)
   const [showEdit, setShowEdit] = useState(false)
   // Какой поток показываем в плеере: основной или дополнительный.
@@ -419,6 +420,15 @@ export default function CameraDetailPage() {
                 <Sliders size={14} />
                 Настройки
               </button>
+              {/* Все настройки прошивки: состав полей приходит от самой
+                  камеры, поэтому здесь есть всё, что она поддерживает. */}
+              <button
+                className={`btn ${tab === 'advanced' ? 'btn-primary' : 'btn-outline'} btn-sm`}
+                onClick={() => setTab('advanced')}
+              >
+                <Layers size={14} />
+                Прошивка
+              </button>
             </div>
 
             {tab === 'live' && (
@@ -501,6 +511,11 @@ export default function CameraDetailPage() {
             {tab === 'audio' && <AudioSettingsPanel cameraId={camera.id} />}
 
             {tab === 'settings' && <CameraSettingsPanel cameraId={camera.id} />}
+
+            {/* Настройки по схеме камеры: состав полей приходит
+                с устройства, поэтому здесь есть всё, что поддерживает
+                эта прошивка — и ничего лишнего. */}
+            {tab === 'advanced' && <CameraConfigPanel cameraId={camera.id} />}
           </div>
         </div>
 

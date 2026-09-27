@@ -731,6 +731,81 @@ export const logsAPI = {
     ),
 }
 
+/** Режим применения значения после изменения. */
+export type SchemaReload =
+  | 'live'
+  | 'none'
+  | 'unknown'
+  | `service:${string}`
+  | 'pipeline'
+  | `channel:${number}`
+
+/**
+ * Одно поле настроек камеры.
+ *
+ * Описание приходит с самой камеры, а не задано у нас: схемы в парке
+ * различаются, и фиксированный список полей на части камер не работал бы.
+ */
+export interface SchemaField {
+  /** Путь поля, например `video0.fps`. */
+  path: string
+  id: string
+  title: string
+  /** Пояснение от разработчиков прошивки. */
+  hint: string
+  type: 'boolean' | 'integer' | 'number' | 'string' | 'enum'
+  enum?: string[]
+  /** Понятные названия значений перечисления. */
+  enum_titles?: Record<string, string>
+  default?: unknown
+  minimum?: number
+  maximum?: number
+  placeholder?: string
+  /** Значение не показывается в открытом виде. */
+  secret: boolean
+  /**
+   * Что нужно после изменения значения.
+   *
+   * Ключ ко всему: `live` применяется на ходу, `service:osd` требует
+   * перезапуска только службы OSD, и лишь `pipeline` роняет поток.
+   */
+  reload: SchemaReload
+  fps_max?: number
+  /** Условия, при которых поле не действует. */
+  requires?: string[]
+}
+
+/** Раздел настроек. */
+export interface SchemaSection {
+  id: string
+  title: string
+  fields: SchemaField[]
+}
+
+/** Группа разделов. */
+export interface SchemaGroup {
+  id: string
+  label: string
+  sections: string[]
+}
+
+/** Схема настроек камеры. */
+export interface ConfigSchema {
+  version: string
+  groups: SchemaGroup[]
+  sections: SchemaSection[]
+  /** Разделы вне групп: так устроены старые сборки без группировки. */
+  ungrouped: string[]
+}
+
+/** Схема и текущие значения настроек камеры. */
+export interface CameraConfigView {
+  schema: ConfigSchema
+  /** Значения по путям полей: `video0.fps` → 25. */
+  values: Record<string, unknown>
+  camera_id: string
+}
+
 export const majesticAPI = {
   /**
    * Состояние присмотра по всем камерам вместе с настройками.
@@ -768,6 +843,36 @@ export const majesticAPI = {
   /** Сохранить настройки присмотра. */
   updateConfig: (patch: Partial<MajesticWatchConfig>) =>
     api.patch<MajesticWatchConfig>('/majestic/config', patch),
+}
+
+export const configAPI = {
+  /**
+   * Схема и текущие значения настроек камеры.
+   *
+   * `force` перечитывает схему с камеры, минуя кэш сервера. Нужно после
+   * обновления прошивки: набор полей изменился, а в памяти лежит старое
+   * представление, и новых настроек не было бы видно.
+   */
+  get: (cameraId: string, force = false) =>
+    api.get<CameraConfigView>(`/cameras/${cameraId}/config`, {
+      params: force ? { force: 'true' } : undefined,
+    }),
+
+  /** Только схема, без значений. */
+  schema: (cameraId: string, force = false) =>
+    api.get<ConfigSchema>(`/cameras/${cameraId}/config/schema`, {
+      params: force ? { force: 'true' } : undefined,
+    }),
+
+  /**
+   * Записать изменения.
+   *
+   * Тело — плоский список путей и значений: `{"video0.fps": 25}`.
+   * Сервер сам собирает вложенный объект для камеры, поэтому форме
+   * не нужно строить дерево.
+   */
+  update: (cameraId: string, patch: Record<string, unknown>) =>
+    api.patch<CameraConfigView>(`/cameras/${cameraId}/config`, patch),
 }
 
 export const audioAPI = {
