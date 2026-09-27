@@ -288,6 +288,12 @@ func main() {
 	// настройки видео, изображения, ночного режима, OSD и перезапуск.
 	settingsSvc := service.NewCameraSettingsService(cameraRepo)
 
+	// Настройки по схеме самой камеры: состав полей и их границы
+	// приходят с устройства. Нужно потому, что схемы в парке разные —
+	// у одной камеры 106 полей, у другой 236, и наборы разделов
+	// тоже отличаются.
+	schemaSettingsSvc := service.NewSchemaSettingsService(settingsSvc)
+
 	// Мониторинг состояния сервера и камер: пропавшие камеры, перегрузка
 	// процессора, нехватка памяти, заполненный диск, перегрев, видеокарта.
 	//
@@ -402,6 +408,7 @@ func main() {
 		SyslogSrv:          syslogSrv,
 		MajesticSvc:        majesticSvc,
 		MajesticSettings:   majesticSettings,
+		SchemaSettings:     schemaSettingsSvc,
 		// Сервис создан выше — по нему работает страница уведомлений:
 		// проверка связи и журнал отправок.
 		Notifier:  notifier,

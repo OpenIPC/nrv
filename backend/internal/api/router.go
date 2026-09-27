@@ -52,6 +52,8 @@ type RouterConfig struct {
 	MajesticSvc *service.MajesticWatchService
 	// MajesticSettings настраивает присмотр и хранит его пороги
 	MajesticSettings *service.MajesticSettingsProvider
+	// SchemaSettings отдаёт и меняет настройки по схеме самой камеры
+	SchemaSettings *service.SchemaSettingsService
 	// ExternalRTSPSvc публикует потоки для внешних систем
 	ExternalRTSPSvc *service.ExternalRTSPService
 	// Notifier отправляет уведомления о событиях (Telegram)
@@ -90,6 +92,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	camPreviewH := handlers.NewCameraPreviewHandler(cfg.PreviewSvc, tokenAuth)
 	logsH := handlers.NewLogsHandler(cfg.SyslogSrv, cfg.LogsSvc)
 	majesticH := handlers.NewMajesticHandler(cfg.MajesticSvc, cfg.MajesticSettings)
+	schemaH := handlers.NewSchemaSettingsHandler(cfg.SchemaSettings)
 	extRTSPH := handlers.NewExternalRTSPHandler(cfg.ExternalRTSPSvc, cfg.CameraSvc)
 	ptzH := handlers.NewPTZHandler(cfg.CameraSvc)
 	docsH := handlers.NewAPIDocHandler()
@@ -252,6 +255,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/cameras/{id}/majestic/check", majesticH.CheckNow)
 			r.Post("/cameras/{id}/majestic/reset", majesticH.Reset)
 
+			// Настройки по схеме самой камеры: состав полей и их границы
+			// приходят с устройства, а не заданы у нас. Так новые
+			// ключи в прошивке появляются сами, а несуществующие
+			// не показываются.
+			r.Get("/cameras/{id}/config", schemaH.Get)
+			r.Patch("/cameras/{id}/config", schemaH.Update)
+			r.Get("/cameras/{id}/config/schema", schemaH.Schema)
 			r.Patch("/cameras/{id}/detection", detH.UpdateSettings)
 
 			// Глобальные настройки сервера (хранилище записей и снимков)
