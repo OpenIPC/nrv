@@ -24,8 +24,24 @@ func (h *ScannerHandler) Scan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Subnet == "" {
+	if req.Subnet == "" && len(req.Subnets) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "subnet is required"})
+		return
+	}
+
+	// Несколько подсетей сканируем по очереди и объединяем результат.
+	//
+	// Последовательно, а не параллельно: каждый скан сам по себе опрашивает
+	// сеть десятками потоков, и запускать несколько таких сразу — значит
+	// поднять нагрузку на канал и на камеры без пользы. Оператор всё равно
+	// ждёт один общий ответ.
+	if len(req.Subnets) > 0 {
+		merged, err := h.scanner.ScanMany(r.Context(), req)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, merged)
 		return
 	}
 

@@ -32,12 +32,28 @@ export default function ScannerPage() {
     )
 
     try {
-      const res = await scannerAPI.scan(subnet, username, password)
+      // Подсеть может быть указана как одна, так и списком через запятую,
+      // пробел или точку с запятой. Камеры часто стоят в разных сетях,
+      // и сканировать их по одной неудобно: приходится ждать окончания
+      // каждого скана, чтобы начать следующий.
+      const subnets = subnet
+        .split(/[,\s;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+
+      const res =
+        subnets.length > 1
+          ? await scannerAPI.scanMany(subnets, username, password)
+          : await scannerAPI.scan(subnets[0] ?? subnet, username, password)
       setResult(res.data)
       if (res.data.found === 0) {
-        // Отдельное сообщение для пустого результата: это не ошибка, и
-        // стоит подсказать, что делать дальше.
-        toast.info('Устройства не найдены — проверьте подсеть и учётные данные')
+        // Пустой результат — не всегда «камер нет». Сервер объясняет
+        // причину в примечании, и повторять общий совет незачем.
+        if (res.data.reachable === false) {
+          toast.error('Подсеть недоступна с сервера — нужен маршрут')
+        } else {
+          toast.info('Устройства не найдены — проверьте подсеть и учётные данные')
+        }
       } else {
         toast.success(`Найдено устройств: ${res.data.found}`)
       }
@@ -122,7 +138,7 @@ export default function ScannerPage() {
       <div className="page-header">
         <div>
           <h1>Сканер камер</h1>
-          <p>Поиск камер в локальной сети — OpenIPC, Hikvision, Dahua, ONVIF</p>
+          <p>Поиск камер в локальной сети и в подключённых подсетях — OpenIPC, Hikvision, Dahua, Vivotek, ONVIF</p>
         </div>
       </div>
 
@@ -131,13 +147,19 @@ export default function ScannerPage() {
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 180 }}>
             <label style={{ display: 'block', marginBottom: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
-              Подсеть
+              Подсеть или несколько через запятую
             </label>
             <input
               value={subnet}
               onChange={(e) => setSubnet(e.target.value)}
-              placeholder="192.168.1.0/24"
+              placeholder="192.168.1.0/24, 192.168.2.0/24"
             />
+            {/* Поясняем требование к чужим сетям сразу, а не после пустого
+                скана: без маршрута сервер до них не дойдёт, и оператор
+                потратит время на поиск причины в другом месте. */}
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+              Чужие подсети сканируются только при наличии маршрута у сервера.
+            </div>
           </div>
           <div style={{ width: 140 }}>
             <label style={{ display: 'block', marginBottom: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
@@ -200,12 +222,34 @@ export default function ScannerPage() {
 
           {(!result.cameras || result.cameras.length === 0) ? (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
-              <Wifi size={48} style={{ marginBottom: 16, opacity: 0.3 }} />
-              <p>Устройства не найдены в подсети {subnet}</p>
-              <p style={{ fontSize: 13, marginTop: 8 }}>
-                Проверьте подсеть и учётные данные. Если камеры в другой
-                подсети, укажите её — поддерживается любая маска, включая /16.
-              </p>
+              {/* Разный значок для разных причин: недоступная сеть и пустая
+                  сеть требуют совершенно разных действий, и одинаковый
+                  вид заставит искать не там. */}
+              {result.reachable === false ? (
+                <>
+                  <XCircle size={48} style={{ marginBottom: 16, color: 'var(--danger)', opacity: 0.7 }} />
+                  <p style={{ color: 'var(--danger)', fontSize: 15 }}>
+                    Подсеть недоступна с сервера
+                  </p>
+                  <p style={{ fontSize: 13, marginTop: 8, maxWidth: 560, margin: '8px auto 0' }}>
+                    {result.note ||
+                      `Ни один адрес в ${subnet} не отвечает. Сканирование чужой подсети возможно только при наличии маршрута: проверьте, что у сервера есть путь в эту сеть.`}
+                  </p>
+                  <p style={{ fontSize: 12, marginTop: 12, opacity: 0.8 }}>
+                    Маршрут добавляется на роутере или на сервере командой{' '}
+                    <code style={{ fontFamily: 'monospace' }}>ip route add &lt;сеть&gt; via &lt;шлюз&gt;</code>
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Wifi size={48} style={{ marginBottom: 16, opacity: 0.3 }} />
+                  <p>Устройства не найдены в подсети {subnet}</p>
+                  <p style={{ fontSize: 13, marginTop: 8, maxWidth: 560, margin: '8px auto 0' }}>
+                    {result.note ||
+                      'Проверьте подсеть и учётные данные. Если камеры в другой подсети, укажите её — поддерживается любая маска, включая /16.'}
+                  </p>
+                </>
+              )}
             </div>
           ) : (
             <div className="table-wrap">

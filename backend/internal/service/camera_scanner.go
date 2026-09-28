@@ -171,6 +171,19 @@ func (s *CameraScanner) Scan(ctx context.Context, req domain.ScanRequest) (*doma
 		Total:  len(ips),
 	}
 
+	// Проверяем, доходим ли до этой подсети вообще.
+	//
+	// Сканер умеет работать с любой сетью, но дойти до чужой можно только
+	// при наличии маршрута. Без этой проверки недоступная подсеть давала
+	// пустой список без объяснения, и отличить «камер нет» от «сеть
+	// недостижима» было невозможно: оператор проверял настройки камер и
+	// учётные данные, тогда как дело было в маршрутизации.
+	//
+	// Проверяем по первому адресу диапазона (шлюзу) и по самому адресу
+	// сервера, если он попадает в эту же подсеть: своя сеть доступна
+	// всегда, и на ней проверка не должна ничего менять.
+	result.Reachable = s.subnetReachable(ctx, ipnet, ips)
+
 	// Этап 1: быстрый отбор живых адресов.
 	//
 	// Опрашивать HTTP-API всех 254 адресов нельзя: на каждый уходит до
@@ -182,7 +195,23 @@ func (s *CameraScanner) Scan(ctx context.Context, req domain.ScanRequest) (*doma
 		Msg("живые адреса отобраны — начинаю опрос протоколов")
 
 	if len(alive) == 0 {
-		log.Info().Str("subnet", req.Subnet).Msg("scan complete: нет отвечающих адресов")
+		// Подсеть не отвечает вовсе. Объясняем причину, потому что
+		// «ничего не найдено» без пояснения отправляет оператора искать
+		// не там: чаще всего дело не в камерах, а в отсутствии маршрута.
+		if !result.Reachable {
+			result.Note = fmt.Sprintf(
+				"Подсеть %s недоступна с сервера: ни один адрес в ней не отвечает. "+
+					"Проверьте, что у сервера есть маршрут в эту сеть — без него сканирование "+
+					"невозможно, сколько бы камер там ни было.",
+				req.Subnet)
+		} else {
+			result.Note = fmt.Sprintf(
+				"В подсети %s не отвечает ни один адрес. Если камеры там есть, "+
+					"проверьте, не блокирует ли их шлюз и включён ли на них ответ на ping.",
+				req.Subnet)
+		}
+		log.Info().Str("subnet", req.Subnet).Bool("reachable", result.Reachable).
+			Msg("scan complete: нет отвечающих адресов")
 		return result, nil
 	}
 
@@ -238,8 +267,146 @@ func (s *CameraScanner) Scan(ctx context.Context, req domain.ScanRequest) (*doma
 	return result, nil
 }
 
-// markAlreadyAdded помечает камеры, которые уже заведены в системе.
+// subnetReachable проверяет, доходит ли сервер до подсети.
 //
+// Сканер умеет работать с любой сетью в формате CIDR, но дойти до чужой
+// подсети можно только при наличии маршрута. Проверка нужна, чтобы
+// объяснить оператору причину пустого результата: «камер нет» и «сеть
+// недоступна» требуют совершенно разных действий, а выглядят одинаково.
+//
+// Устроена проверка так:
+//
+//  1. Если адрес самого сервера попадает в эту же подсеть — она доступна
+//     по определению, проверять нечего. Так отсекается случай своей сети,
+//     которая обязана работать.
+//  2. Иначе пробуем адрес шлюза (первый в диапазоне). В большинстве
+//     домашних и офисных сетей роутер отвечает на ping и стоит именно
+//     там. Если он молчит, это ещё не приговор: шлюз может быть скрыт.
+//  3. Тогда пробуем несколько первых адресов диапазона. Живой адрес
+//     означает, что маршрут есть, даже если сам шлюз не отвечает.
+//
+// Проверка намеренно не строгая: её задача — не отсеять недоступные сети,
+// а не соврать про доступные. Поэтому сомнение трактуется в пользу
+// «доступна»: пусть скан выполнится и вернёт пусто, чем мы откажем
+// оператору из-за того, что роутер не ответил на ping.
+func (s *CameraScanner) subnetReachable(ctx context.Context, ipnet *net.IPNet, ips []net.IP) bool {
+	// Шаг 1: наша собственная подсеть.
+	if local, err := localIPInSubnet(ipnet); err == nil && local {
+		return true
+	}
+
+	check := func(ip net.IP) bool {
+		// Короткий таймаут: проверка не должна удлинять скан.
+		probeCtx, cancel := context.WithTimeout(ctx, 700*time.Millisecond)
+		defer cancel()
+		return s.checkTCPContext(probeCtx, ip.String(), 80) ||
+			s.checkTCPContext(probeCtx, ip.String(), 22)
+	}
+
+	// Шаг 2: шлюз — первый адрес диапазона.
+	if len(ips) > 0 && check(ips[0]) {
+		return true
+	}
+
+	// Шаг 3: несколько первых адресов. Смотрим не все 254, чтобы не
+	// тратить время: живой адрес в начале диапазона встречается часто,
+	// а полный перебор — это уже сам скан.
+	limit := len(ips)
+	if limit > 5 {
+		limit = 5
+	}
+	for _, ip := range ips[1:limit] {
+		if check(ip) {
+			return true
+		}
+	}
+
+	// Ни один адрес не отозвался. Для своей сети это было бы странно,
+	// но проверка выше её уже отсеяла.
+	return false
+}
+
+// localIPInSubnet сообщает, принадлежит ли адрес сервера этой подсети.
+//
+// Нужно, чтобы не проверять доступность своей же сети: она доступна
+// всегда, и лишние запросы только удлинили бы скан.
+func localIPInSubnet(ipnet *net.IPNet) (bool, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false, err
+	}
+	for _, addr := range addrs {
+		ipn, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ipnet.Contains(ipn.IP) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ScanMany сканирует несколько подсетей и объединяет результат.
+//
+// Нужно, потому что камеры часто стоят в разных сетях: часть в основной,
+// часть за другим шлюзом. Сканировать их по одной неудобно — приходится
+// ждать окончания каждого скана, чтобы начать следующий, а найденные
+// камеры собирать вручную.
+//
+// Сети обрабатываются последовательно. Параллельный запуск нескольких
+// сканов поднял бы нагрузку на канал и на камеры: каждый скан сам по себе
+// опрашивает сеть двумя десятками потоков. Складывать их значило бы
+// получить больше отказов от камер, а не более быстрый результат.
+func (s *CameraScanner) ScanMany(ctx context.Context, req domain.ScanRequest) (*domain.ScanResult, error) {
+	merged := &domain.ScanResult{Cameras: []domain.DiscoveredCamera{}}
+	var notes []string
+	anyReachable := false
+
+	for _, subnet := range req.Subnets {
+		subnet = strings.TrimSpace(subnet)
+		if subnet == "" {
+			continue
+		}
+
+		one, err := s.Scan(ctx, domain.ScanRequest{
+			Subnet:   subnet,
+			Username: req.Username,
+			Password: req.Password,
+		})
+		if err != nil {
+			// Одна непонятная сеть не должна отменять весь скан: остальные
+			// могут быть доступны и содержать камеры. Запоминаем причину
+			// и продолжаем — оператор увидит её в примечании.
+			notes = append(notes, fmt.Sprintf("%s — ошибка: %v", subnet, err))
+			continue
+		}
+
+		merged.Total += one.Total
+		merged.Cameras = append(merged.Cameras, one.Cameras...)
+		if one.Reachable {
+			anyReachable = true
+		}
+		if one.Note != "" {
+			notes = append(notes, one.Note)
+		}
+	}
+
+	merged.Subnet = strings.Join(req.Subnets, ", ")
+	merged.Found = len(merged.Cameras)
+	// Пометку «уже заведена» и счётчик Added пересчитываем заново:
+	// до объединения они считались по каждой подсети отдельно, а список
+	// камер после слияния стал другим.
+	s.markAlreadyAdded(ctx, merged)
+	merged.Reachable = anyReachable
+	merged.Note = strings.Join(notes, " ")
+
+	log.Info().Int("found", merged.Found).Int("subnets", len(req.Subnets)).
+		Msg("сканирование нескольких подсетей завершено")
+	return merged, nil
+}
+
+// markAlreadyAdded помечает камеры, которые уже заведены в системе.
 // Нужно, чтобы оператор не добавлял устройство второй раз: повторное
 // добавление создаёт дубль в базе и второй путь в медиасервере, а камера
 // ограничивает число одновременных RTSP-сессий. На слабых моделях это
@@ -540,6 +707,23 @@ func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint 
 func (s *CameraScanner) checkTCP(ip string, port int) bool {
 	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// checkTCPContext проверяет порт с учётом внешнего контекста.
+//
+// Отличие от checkTCP принципиально для проверки доступности подсети:
+// там важен общий предел времени на всю проверку, а не отдельный таймаут
+// на каждое соединение. Иначе пять адресов по секунде каждый дают пять
+// секунд ожидания, и скан удлиняется на пустом месте.
+func (s *CameraScanner) checkTCPContext(ctx context.Context, ip string, port int) bool {
+	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return false
 	}

@@ -766,11 +766,21 @@ type UpdateCameraRequest struct {
 	ChannelNumber *int `json:"channel_number,omitempty"`
 }
 
-// ScanRequest — запрос на сканирование подсети для поиска OpenIPC-камер
+// ScanRequest — запрос на сканирование подсети для поиска камер
 type ScanRequest struct {
-	Subnet   string `json:"subnet" validate:"required"` // "192.168.1.0/24"
-	Username string `json:"username"`                   // для Majestic API
-	Password string `json:"password"`
+	Subnet string `json:"subnet" validate:"required"` // "192.168.1.0/24"
+	// Subnets — несколько подсетей сразу, через запятую или пробел.
+	//
+	// Нужно, потому что камеры часто стоят в разных сетях: часть в основной,
+	// часть за другим шлюзом или в подсети провайдера. Сканировать их по
+	// одной неудобно — приходится ждать окончания каждого скана, чтобы
+	// начать следующий.
+	//
+	// Если поле заполнено, оно используется вместо Subnet; список сетей
+	// сканируется последовательно, а результат собирается в один.
+	Subnets  []string `json:"subnets,omitempty"`
+	Username string   `json:"username"` // для Majestic API
+	Password string   `json:"password"`
 }
 
 // DiscoveredCamera — камера, найденная при сканировании
@@ -810,6 +820,16 @@ type ScanResult struct {
 	Found   int                `json:"found"` // найдено камер
 	Added   int                `json:"added"` // из них уже заведено в системе
 	Cameras []DiscoveredCamera `json:"cameras"`
+	// Reachable — отвечает ли подсеть с нашего сервера вообще.
+	//
+	// Нужен, когда подсеть чужая: сканер умеет работать с любой сетью,
+	// но дойти до неё можно только при наличии маршрута. Раньше в таком
+	// случае возвращался пустой список без объяснения, и отличить
+	// «камер нет» от «сеть недоступна» было невозможно — оператор
+	// проверял настройки камер, а дело было в маршрутизации.
+	Reachable bool `json:"reachable"`
+	// Note — объяснение, когда камер не нашлось, но должна была быть сеть.
+	Note string `json:"note,omitempty"`
 }
 
 type CreateACSControllerRequest struct {

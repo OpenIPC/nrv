@@ -393,6 +393,16 @@ export interface ScanResult {
   /** Сколько из найденных устройств уже заведено в системе. */
   added: number
   cameras: DiscoveredCamera[]
+  /**
+   * Доходит ли сервер до этой подсети.
+   *
+   * Нужно при сканировании чужих сетей: без маршрута скан вернёт пустой
+   * результат, и без этого признака непонятно, почему — камер нет или
+   * до сети не дойти. Требуют совершенно разных действий.
+   */
+  reachable: boolean
+  /** Объяснение, когда камер не нашлось. */
+  note?: string
 }
 
 export interface DetectionEvent {
@@ -1038,6 +1048,17 @@ export const scannerAPI = {
   // большой лимит.
   scan: (subnet: string, username?: string, password?: string) =>
     api.post<ScanResult>('/scanner/scan', { subnet, username, password }, { timeout: 300000 }),
+
+  /**
+   * Сканирование нескольких подсетей сразу.
+   *
+   * Камеры часто стоят в разных сетях: часть в основной, часть за другим
+   * шлюзом. Сканировать их по одной неудобно — приходится ждать окончания
+   * каждого скана, чтобы начать следующий. Сервер обходит сети по очереди
+   * и отдаёт один общий результат.
+   */
+  scanMany: (subnets: string[], username?: string, password?: string) =>
+    api.post<ScanResult>('/scanner/scan', { subnets, username, password }, { timeout: 600000 }),
   // Опрос одной камеры быстрый, но перебор учётных данных может занять
   // несколько секунд — общего лимита здесь мало.
   probe: (ip: string, username?: string, password?: string) =>
