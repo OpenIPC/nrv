@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"sync"
 	"time"
@@ -218,6 +219,23 @@ func (s *CameraHealthService) collectOne(ctx context.Context, cam domain.Camera)
 		h.Error = err.Error()
 		h.Level = "unknown"
 
+		// Отличаем «камера выключена» от «камера в сети, но не отвечает».
+		//
+		// Это разные случаи, и путать их нельзя: в первом надо ехать
+		// к камере или проверить питание, во втором камера на месте и
+		// отвечает по сети, но её стример не справляется. Проверено на
+		// 192.168.1.48: ping и SSH работают, а API Majestic не отвечает
+		// вовсе — камера в устойчивой перегрузке, load average 11 при
+		// одном ядре, и процесс обработки кадров висит в непрерываемом
+		// ожидании. Сообщение «камера недоступна» в этом случае уводит
+		// в сторону: оператор идёт проверять сеть, которой всё в порядке.
+		if !errors.Is(err, ErrNotMajestic) && s.reachable(ctx, cam) {
+			h.Online = true
+			h.Error = "камера в сети, но стример не отвечает: " +
+				"устройство перегружено или зависла обработка кадров"
+			return h
+		}
+
 		// Сборки Majestic различаются набором эндпоинтов: на части камер
 		// нет /api/v1/sources, но конфигурация читается. Такие камеры
 		// управляются и опрашиваются, поэтому помечаем их отдельно,
@@ -288,10 +306,32 @@ func (s *CameraHealthService) collectOne(ctx context.Context, cam domain.Camera)
 	return h
 }
 
-// evaluate выставляет оценку и перечисляет проблемы.
+// reachable проверяет, отвечает ли камера по сети вообще.
 //
-// Пороги подобраны под однопроцессорные камеры OpenIPC: они не абсолютные,
-// а отражают то, что реально мешает работе — нехватку CPU и памяти.
+// Проверяем порт SSH (22), а не веб-интерфейс или RTSP. Причина в том,
+// что эти порты открывает сам Majestic, и вместе с его зависанием они
+// перестают отвечать — тогда как SSH обслуживает ядро и работает, пока
+// камера жива. Проверено на 192.168.1.48: при полностью не отвечающем
+// API Majestic порт 22 отвечает нормально.
+//
+// Это и позволяет отличить «камера выключена» от «камера в сети, но
+// стример не справляется» — разницу, которая определяет, что делать.
+func (s *CameraHealthService) reachable(ctx context.Context, cam domain.Camera) bool {
+	if cam.IP == "" {
+		return false
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", net.JoinHostPort(cam.IP, "22"))
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// evaluate выставляет оценку и перечисляет проблемы.
 func (s *CameraHealthService) evaluate(h *CameraHealth) {
 	h.Issues = h.Issues[:0]
 

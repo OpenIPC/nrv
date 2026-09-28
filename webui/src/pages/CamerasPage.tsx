@@ -421,12 +421,38 @@ function CameraThumb({ id, name }: { id: string; name: string }) {
   // Признак занятости в ref: таймер должен видеть актуальное значение,
   // но не перезапускаться при каждом изменении состояния.
   const busyRef = useRef(false)
+  // Таймер принудительного освобождения слота. Нужен на случай, когда
+  // браузер не сообщает о завершении запроса: тогда слот остался бы
+  // занятым навсегда, и очередь перестала бы двигаться целиком.
+  const slotTimer = useRef<number | null>(null)
 
   const buildSrc = () => {
     const token = localStorage.getItem('token')
     const params = new URLSearchParams({ w: String(THUMB_WIDTH), t: String(Date.now()) })
     if (token) params.set('jwt', token)
     return `/api/v1/cameras/${id}/preview?${params.toString()}`
+  }
+
+  // Занимает слот очереди и ставит страховку на освобождение.
+  //
+  // Страховка важна не меньше самой очереди. Слот освобождается по
+  // событиям картинки (onLoad или onError), но событие может не прийти
+  // вовсе: запрос отменён при уходе со страницы, соединение повисло без
+  // ответа, браузер молча выбросил запрос. Тогда слот остаётся занятым
+  // навсегда, и очередь перестаёт двигаться — плитки не грузятся, и
+  // список камер выглядит пустым, хотя камеры есть.
+  const startFrame = async () => {
+    await acquirePreviewSlot()
+    busyRef.current = true
+    setBusy(true)
+    setSrc(buildSrc())
+    if (slotTimer.current !== null) window.clearTimeout(slotTimer.current)
+    slotTimer.current = window.setTimeout(() => {
+      // Время вышло, а события не было — освобождаем слот сами.
+      // Кадр мог прийти позже; если так, следующий тик увидит его
+      // и запросит новый.
+      finish()
+    }, THUMB_SLOT_TIMEOUT_MS)
   }
 
   // Первый кадр: ждём очередь, чтобы не заваливать камеры одновременными
@@ -443,26 +469,27 @@ function CameraThumb({ id, name }: { id: string; name: string }) {
       busyRef.current = true
       setBusy(true)
       setSrc(buildSrc())
+      if (slotTimer.current !== null) window.clearTimeout(slotTimer.current)
+      slotTimer.current = window.setTimeout(() => finish(), THUMB_SLOT_TIMEOUT_MS)
     }
     load()
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      if (slotTimer.current !== null) window.clearTimeout(slotTimer.current)
+    }
   }, [id])
 
   // Обновление кадра по таймеру. Эффект зависит только от id: если
   // завязать его на src, каждое обновление адреса сбрасывало бы таймер
   // и порождало новые запросы поверх идущих.
   useEffect(() => {
-    const timer = window.setInterval(async () => {
+    const timer = window.setInterval(() => {
       // В фоновой вкладке кадры не нужны — не нагружаем камеры зря.
       if (document.visibilityState !== 'visible') return
       // Предыдущий кадр ещё не пришёл — ждём его, не создавая второй запрос.
       if (busyRef.current) return
-
-      await acquirePreviewSlot()
-      busyRef.current = true
-      setBusy(true)
-      setSrc(buildSrc())
+      void startFrame()
     }, THUMB_REFRESH_MS)
 
     return () => window.clearInterval(timer)
@@ -475,6 +502,10 @@ function CameraThumb({ id, name }: { id: string; name: string }) {
     if (!busyRef.current) return
     busyRef.current = false
     setBusy(false)
+    if (slotTimer.current !== null) {
+      window.clearTimeout(slotTimer.current)
+      slotTimer.current = null
+    }
     releasePreviewSlot()
   }
 
@@ -499,5 +530,20 @@ function CameraThumb({ id, name }: { id: string; name: string }) {
 // Десять секунд дают свежую картинку и не заставляют камеры работать
 // на пределе — поток в списке обновлять чаще смысла нет.
 const THUMB_REFRESH_MS = 10000
+
+/**
+ * Предел удержания слота очереди для одного кадра.
+ *
+ * Должен быть больше, чем самое долгое ожидание кадра на сервере, иначе
+ * слот будет освобождаться раньше, чем придёт ответ, и очередь перестанет
+ * сдерживать нагрузку. Сервер ограничивает свой ответ несколькими
+ * секундами, поэтому с запасом берём пятнадцать.
+ *
+ * Нужен как страховка: слот освобождается по событиям картинки, но
+ * событие может не прийти вовсе — запрос отменён, соединение повисло,
+ * браузер молча выбросил ответ. Тогда слот остался бы занятым навсегда,
+ * очередь встала бы, и список камер выглядел бы пустым, хотя камеры есть.
+ */
+const THUMB_SLOT_TIMEOUT_MS = 15000
 // THUMB_WIDTH — ширина кадра для карточки в сетке.
 const THUMB_WIDTH = 480
