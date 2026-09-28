@@ -229,8 +229,31 @@ func (m *CameraStatusMonitor) deletePath(ctx context.Context, name string) error
 }
 
 // fetchPaths возвращает карту "имя пути -> ready" для всех путей MediaMTX.
+//
+// Запрашивает большой размер страницы, чтобы получить всё сразу.
+//
+// Про параметры этого API стоит помнить отдельно, потому что ошибки тут
+// незаметны и дороги. Параметр `itemsPerPage` работает и увеличивает
+// страницу. А вот `page` использовать НЕЛЬЗЯ: с ним MediaMTX возвращает
+// НОЛЬ записей — запрос успешен, ответ корректен по форме, а список пуст.
+// Проверено: `?itemsPerPage=500&page=1` даёт 0 записей, а
+// `?itemsPerPage=500` — все 89. Из-за этого все камеры разом получили
+// статус «офлайн», и ни одного сообщения об ошибке при этом не было.
+//
+// Исходная ошибка была другой: без всяких параметров API отдаёт 100
+// записей, а путей у нас 103 — путь 192.168.1.83 всегда попадал на
+// вторую страницу и камера навсегда оставалась «офлайн». Снаружи это
+// выглядело как пропавшая из системы камера, хотя она работала.
+//
+// Вывод на будущее: при работе с пагинацией проверять, что пришло
+// ненулевое число записей, а не только код ответа.
 func (m *CameraStatusMonitor) fetchPaths(ctx context.Context) (map[string]bool, error) {
-	url := fmt.Sprintf("%s/v3/paths/list", m.mediamtxAPI)
+	// Достаточно большой размер страницы, чтобы хватило на любую
+	// разумную установку. Если путей окажется больше, они просто не
+	// попадут в ответ — но это уже видно по сравнению с числом камер.
+	const perPage = 10000
+
+	url := fmt.Sprintf("%s/v3/paths/list?itemsPerPage=%d", m.mediamtxAPI, perPage)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -251,9 +274,19 @@ func (m *CameraStatusMonitor) fetchPaths(ctx context.Context) (map[string]bool, 
 			Name  string `json:"name"`
 			Ready bool   `json:"ready"`
 		} `json:"items"`
+		ItemCount int `json:"itemCount"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, err
+	}
+
+	// Пустой ответ при ненулевом счётчике означает, что запрос собран
+	// неверно. Молча вернуть пустую карту нельзя: монитор тогда сочтёт
+	// все камеры выключенными. Лучше ошибка — статусы останутся как есть.
+	if len(payload.Items) == 0 && payload.ItemCount > 0 {
+		return nil, fmt.Errorf(
+			"MediaMTX отдал %d путей, но ни одного в ответе — проверьте параметры запроса",
+			payload.ItemCount)
 	}
 
 	paths := make(map[string]bool, len(payload.Items))

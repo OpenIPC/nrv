@@ -360,8 +360,17 @@ func (s *ExternalRTSPService) waitForInternalPaths(ctx context.Context, cameras 
 }
 
 // listPathNames возвращает имена всех путей MediaMTX.
+//
+// Запрашивает большой размер страницы, чтобы получить всё сразу.
+// Параметр `page` использовать НЕЛЬЗЯ: с ним MediaMTX возвращает ноль
+// записей при успешном ответе. Подробнее — в fetchPaths
+// (camera_status_monitor.go). Здесь это особенно опасно: функция
+// применяется при чистке висячих путей, и пустой список означает, что
+// чистка не увидит ни одного пути.
 func (s *ExternalRTSPService) listPathNames(ctx context.Context) ([]string, error) {
-	url := fmt.Sprintf("%s/v3/config/paths/list", s.mediamtxAPI)
+	const perPage = 10000
+
+	url := fmt.Sprintf("%s/v3/config/paths/list?itemsPerPage=%d", s.mediamtxAPI, perPage)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
