@@ -119,6 +119,9 @@ func (h *ACSHandler) CreateCard(w http.ResponseWriter, r *http.Request) {
 		Group:        req.Group,
 		Access:       req.Access,
 		Active:       active,
+		Position:     req.Position,
+		AccessLevel:  req.AccessLevel,
+		KeyType:      domain.NormalizeKeyType(req.KeyType),
 	}
 
 	created, err := h.svc.CreateCard(r.Context(), card)
@@ -173,6 +176,9 @@ func (h *ACSHandler) UpdateCard(w http.ResponseWriter, r *http.Request) {
 		Group:        req.Group,
 		Access:       req.Access,
 		Active:       active,
+		Position:     req.Position,
+		AccessLevel:  req.AccessLevel,
+		KeyType:      domain.NormalizeKeyType(req.KeyType),
 	})
 	if err != nil {
 		if updated != nil {

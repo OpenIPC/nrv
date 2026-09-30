@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/go-chi/jwtauth/v5"
 )
 
 // maxRequestBody — предел размера тела запроса.
@@ -63,4 +66,24 @@ func clientIP(r *http.Request) string {
 		return strings.Trim(host[:i], "[]")
 	}
 	return host
+}
+
+// userNameFromToken достаёт имя пользователя из JWT.
+//
+// Нужно там, где важно записать автора действия: включение режима Accept
+// открывает дверь всем, и если это случилось в нерабочее время, по журналу
+// должно быть видно, кто его включил.
+//
+// Если имя получить не удалось, возвращается пустая строка. Это не ошибка:
+// действие важнее подписи, и отказывать в нём из-за отсутствия имени
+// в токене было бы хуже, чем записать его без автора.
+func userNameFromToken(ctx context.Context) string {
+	_, claims, err := jwtauth.FromContext(ctx)
+	if err != nil || claims == nil {
+		return ""
+	}
+	if name, ok := claims["username"].(string); ok {
+		return name
+	}
+	return ""
 }

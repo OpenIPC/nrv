@@ -5,6 +5,25 @@ import { Plus, Shield, DoorOpen, Unlock, RefreshCw, Pencil, CreditCard, Trash2, 
 import { CardsModal } from '../components/CardsModal'
 import { EditControllerModal } from '../components/EditControllerModal'
 import { FirmwareModal } from '../components/FirmwareModal'
+import Z5RModePanel from '../components/Z5RModePanel'
+
+/**
+ * Названия производителей для показа.
+ *
+ * Код вендора хранится в базе и нужен для ветвлений, а оператору нужно
+ * человеческое название: «z5r» ему ничего не говорит, а «Z5R WEB BT» он
+ * увидит на корпусе устройства.
+ */
+function vendorLabel(vendor: string): string {
+  const titles: Record<string, string> = {
+    skud: 'SKUD (ESP32-P4)',
+    z5r: 'Z5R WEB BT (IronLogic)',
+    hikvision: 'Hikvision',
+    dahua: 'Dahua',
+    promwad: 'Promwad',
+  }
+  return titles[vendor] || vendor
+}
 
 export default function ACSPage() {
   const [tab, setTab] = useState<'controllers' | 'events'>('controllers')
@@ -134,10 +153,23 @@ export default function ACSPage() {
                     </span>
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-                    <div>Производитель: <strong>{ctrl.vendor}</strong></div>
+                    <div>Производитель: <strong>{vendorLabel(ctrl.vendor)}</strong></div>
                     <div>IP: {ctrl.ip}:{ctrl.port}</div>
                     <div>Добавлен: {new Date(ctrl.created_at).toLocaleDateString('ru')}</div>
                   </div>
+
+                  {/*
+                    Панель режима — только для Z5R. У этого контроллера
+                    четыре режима работы, и от выбранного зависит, приходят
+                    ли события: из коробки он настроен на чужое облако.
+                    Показывать панель для других вендоров нельзя — там
+                    такого понятия нет.
+                  */}
+                  {ctrl.vendor === 'z5r' && (
+                    <div style={{ marginBottom: 12 }}>
+                      <Z5RModePanel controllerID={ctrl.id} />
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     <button
                       className="btn btn-outline btn-sm"
@@ -281,6 +313,7 @@ export default function ACSPage() {
               <label>Производитель</label>
               <select value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })}>
                 <option value="skud">SKUD (ESP32-P4)</option>
+                <option value="z5r">Z5R WEB BT (IronLogic)</option>
                 <option value="hikvision">Hikvision</option>
                 <option value="dahua">Dahua</option>
                 <option value="promwad">Promwad</option>

@@ -91,7 +91,7 @@ func (s *ACSService) CreateCard(ctx context.Context, card domain.ACSCard) (*doma
 		}
 	}
 
-	log.Info().Int("facility", card.Facility).Int("card", card.CardNumber).
+	log.Info().Int("facility", card.Facility).Int64("card", card.CardNumber).
 		Str("имя", card.Name).Msg("карта СКУД добавлена")
 	return &card, nil
 }
@@ -127,7 +127,7 @@ func (s *ACSService) UpdateCard(ctx context.Context, card domain.ACSCard) (*doma
 	if numberChanged {
 		if err := adapter.RemoveCard(ctx, old.Facility, old.CardNumber); err != nil {
 			log.Warn().Err(err).Int("facility", old.Facility).
-				Int("card", old.CardNumber).
+				Int64("card", old.CardNumber).
 				Msg("не удалось удалить прежний номер карты с контроллера")
 		}
 	}
@@ -264,13 +264,30 @@ func (s *ACSService) ListDoors(ctx context.Context, ctrl *domain.ACSController) 
 	return adapter.ListDoors(ctx)
 }
 
+// Пределы полей карты.
+//
+// Значения взяты из формата контроллера Z5R WEB BT: он работает с
+// шестибайтовым кодом, где два старших байта — facility, четыре младших —
+// номер карты. Прежние пределы Wiegand-26 (facility 8 бит, номер 16 бит)
+// отсекали почти все реальные карты: на живом парке из 21 карты ни одна
+// не помещалась в 16 бит.
+const (
+	maxCardFacility = 65535
+	maxCardNumber   = 4294967295
+)
+
 // validateCard проверяет карту до обращения к хранилищу.
+//
+// Проверка общая для всех контроллеров: она отсекает значения, которые
+// не примет ни одно устройство. Свои, более узкие пределы проверяет
+// адаптер конкретного вендора — например, SKUD работает по Wiegand-26
+// и откажет в карте с большим номером сам.
 func validateCard(card domain.ACSCard) error {
-	if card.Facility < 0 || card.Facility > 255 {
-		return fmt.Errorf("facility должен быть от 0 до 255")
+	if card.Facility < 0 || card.Facility > maxCardFacility {
+		return fmt.Errorf("facility должен быть от 0 до %d", maxCardFacility)
 	}
-	if card.CardNumber < 0 || card.CardNumber > 65535 {
-		return fmt.Errorf("номер карты должен быть от 0 до 65535")
+	if card.CardNumber < 0 || card.CardNumber > maxCardNumber {
+		return fmt.Errorf("номер карты должен быть от 0 до %d", maxCardNumber)
 	}
 	if card.ControllerID == uuid.Nil {
 		return fmt.Errorf("не указан контроллер")

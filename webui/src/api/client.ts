@@ -472,6 +472,161 @@ export interface ACSCaptureEvent {
   label: string
 }
 
+// AcceptState — состояние режима записи карт на контроллере.
+//
+// Режим означает «дверь открывается всем, поднесённые карты записываются».
+// Он опасен, поэтому включается на срок и выключается сам: оператор
+// на объекте не должен помнить о выключении.
+export interface AcceptState {
+  active: boolean
+  /** Границы срока приходят с сервера: форма строит выбор из них,
+   *  а не повторяет числа у себя. */
+  min_minutes: number
+  max_minutes: number
+  until?: string
+  minutes_left?: number
+  /** Кто включил режим. Нужно для разбора: если проём окажется открытым
+   *  в нерабочее время, по журналу видно автора. */
+  started_by?: string
+  /** Сколько карт записано за время действия. Если счётчик не растёт,
+   *  значит карты не считываются. */
+  cards_written?: number
+}
+
+// ACSHolderDoor — итоговое право владельца на дверь.
+//
+// Это результат расчёта, а не хранимая запись: право приходит из группы
+// или задано лично. Поле source объясняет происхождение, чтобы оператор
+// знал, что править.
+export interface ACSHolderDoor {
+  door_id: string
+  door_name: string
+  controller_id?: string
+  controller_name?: string
+  location?: string
+  direction?: string
+  allowed: boolean
+  /** group — разрешено группой, personal — лично, denied — личный запрет
+   *  перекрыл групповое право. */
+  source: 'group' | 'personal' | 'denied'
+  /** Названия групп, которые дают доступ к этой двери. */
+  groups?: string[]
+  /** Значение личного правила, если оно задано. */
+  personal?: boolean
+}
+
+// ACSHolder — владелец карты: сотрудник, проходящий через двери.
+//
+// Отдельная сущность от карты: носителей у человека может быть несколько
+// (основная карта, брелок), а сведения о человеке одни. При увольнении
+// блокируется владелец, и доступ закрывается сразу по всем его картам.
+export interface ACSHolder {
+  id: string
+  full_name: string
+  position?: string
+  department?: string
+  photo_path?: string
+  phone?: string
+  note?: string
+  /** Доступ закрыт: увольнение, потеря карты. */
+  blocked: boolean
+  cards?: ACSCard[]
+  groups?: ACSGroup[]
+  /** Итоговые права по дверям. Заполняются в карточке. */
+  doors?: ACSHolderDoor[]
+  created_at: string
+  updated_at: string
+}
+
+// ACSHolderInput — данные формы владельца.
+export interface ACSHolderInput {
+  full_name: string
+  position?: string
+  department?: string
+  phone?: string
+  note?: string
+  blocked?: boolean
+  /** Группы владельца. Полная замена списка: не отмечено — значит убрать. */
+  group_ids: string[]
+  /** Личные правила по дверям: ключ — идентификатор двери, значение —
+   *  разрешить (true) или запретить (false). */
+  doors: Record<string, boolean>
+}
+
+// ACSGroupDoor — разрешение группе открывать дверь.
+export interface ACSGroupDoor {
+  door_id: string
+  door_name: string
+  controller_id?: string
+  controller_name?: string
+  location?: string
+  direction?: string
+}
+
+// ACSGroup — группа доступа: отдел, бригада, подрядчики.
+export interface ACSGroup {
+  id: string
+  name: string
+  description?: string
+  color?: string
+  doors?: ACSGroupDoor[]
+  /** Сколько человек в группе: по этому видно, кого затронет правка прав. */
+  holders_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ACSGroupInput {
+  name: string
+  description?: string
+  color?: string
+  /** Двери, которые открывает группа. Пустой список — прав нет. */
+  door_ids: string[]
+}
+
+// ACSDoor — дверь: проём контроллера, на который выдаются права.
+export interface ACSDoor {
+  id: string
+  controller_id: string
+  controller_name?: string
+  name: string
+  /** in — вход, out — выход, both — двусторонняя. */
+  direction: 'in' | 'out' | 'both'
+  location?: string
+  enabled: boolean
+  created_at: string
+}
+
+export interface ACSDoorInput {
+  controller_id: string
+  name: string
+  direction?: 'in' | 'out' | 'both'
+  location?: string
+  enabled?: boolean
+}
+
+// Z5RWorkmode — режим работы контроллера Z5R WEB BT.
+//
+// Режимов четыре, и от выбранного зависит, работают ли события вообще.
+// Из коробки контроллер настроен на облако производителя, и в этом режиме
+// журнал проходов уходит третьей стороне, а к нам не приходит.
+export interface Z5RWorkmode {
+  /** Числовой код режима (см. mode_name для расшифровки). */
+  mode: number
+  /** Название режима по-русски, как в веб-интерфейсе контроллера. */
+  mode_name: string
+  /** Адрес сервера, на который настроен контроллер в текущем режиме. */
+  server_url?: string
+  /**
+   * Правда ли, что контроллер смотрит на наш сервер.
+   *
+   * Отдельное поле, а не вывод из mode: контроллер может быть в режиме
+   * WEBJSON, но с адресом из примера (`http://server.local`). Тогда
+   * формально режим верный, а события всё равно уходят в никуда.
+   */
+  points_to_ours: boolean
+}
+
 // FirmwareImage — образ прошивки, загруженный на сервер.
 export interface FirmwareImage {
   name: string
@@ -519,6 +674,65 @@ export interface ACSEvent {
   card_name?: string
 }
 
+// KeyType — назначение ключа доступа.
+//
+// У контроллеров IronLogic ключ несёт не только «кому можно», но и «для
+// чего он». Это не украшение: мастер-ключом программируют контроллер,
+// и он не должен пускать в помещение, а ключ-переключатель меняет режим
+// работы устройства.
+//
+// Названия совпадают с веб-интерфейсом контроллера и вендорской
+// программой, чтобы оператор видел одни и те же слова.
+export type KeyType = 'simple' | 'master' | 'blocking'
+
+// KEY_TYPE_TITLES — названия типов для интерфейса.
+//
+// Отдельная карта, а не условие в каждом месте: список типов нужен и в
+// выпадающем списке карточки, и в подписи к уже сохранённому ключу.
+export const KEY_TYPE_TITLES: Record<KeyType, string> = {
+  simple: 'простой',
+  master: 'мастер',
+  blocking: 'блокирующий',
+}
+
+// KEY_TYPE_HINTS — пояснения к типам для оператора.
+//
+// Без пояснений разница между «мастер» и «блокирующий» неочевидна, и
+// ключ легко завести не тем типом: последствия проявятся только при
+// попытке записать его на контроллер.
+export const KEY_TYPE_HINTS: Record<KeyType, string> = {
+  simple: 'обычный пропуск: открывает дверь по правам владельца',
+  master: 'служебный: программирует контроллер, дверь не открывает',
+  blocking: 'переключатель режима: в обычном состоянии работает как пропуск',
+}
+
+// CardCapture — ожидание карты на считывателе контроллера.
+//
+// Нужно там, где номер карты негде прочитать: read_cards у Z5R не
+// отвечает, а на самой карте номер не напечатан. Оператор включает
+// ожидание, подносит карту к считывателю двери, и номер попадает сюда.
+export interface CardCapture {
+  active: boolean
+  /** Границы срока берём с сервера, а не повторяем у себя: иначе при
+   *  правке предела в коде форма предлагала бы недопустимое значение. */
+  min_minutes: number
+  max_minutes: number
+  /** Кто включил ожидание: за одним считывателем может стоять очередь. */
+  started_by?: string
+  minutes_left?: number
+  cards: CapturedCardInfo[]
+}
+
+// CapturedCardInfo — карта, пойманная со считывателя.
+export interface CapturedCardInfo {
+  facility: number
+  card: number
+  at: string
+  /** event_type важен для оператора: «доступ не разрешён» значит, что
+   *  карта для контроллера новая, а не что считыватель сломан. */
+  event_type: string
+}
+
 // ACSCard — карта доступа. Пара facility+card — это код Wiegand,
 // именно она идентифицирует карту на контроллере.
 export interface ACSCard {
@@ -533,6 +747,17 @@ export interface ACSCard {
   // access: 0 — постоянный доступ, 1 — только по расписанию.
   access: number
   active: boolean
+  // holder_id — владелец карты. Пусто, если карта ещё не назначена:
+  // такие карты видны в списке и ждут привязки к человеку.
+  holder_id?: string
+  // position — должность владельца, access_level — уровень доступа.
+  position?: string
+  access_level?: number
+  photo_path?: string
+  // sync_pending — карта изменена и ждёт выгрузки на контроллер.
+  sync_pending?: boolean
+  // key_type — назначение ключа: простой, мастер или блокирующий.
+  key_type?: KeyType
 }
 
 export interface Stats {
@@ -1201,6 +1426,102 @@ export const acsAPI = {
 
   // Список событий доступа, доступных для съёмки.
   captureEvents: () => api.get<ACSCaptureEvent[]>('/acs/capture-events'),
+
+  // --- Режим работы контроллера Z5R ---
+
+  // Текущий режим работы. Нужен, чтобы показать оператору, смотрит ли
+  // контроллер на наш сервер: он может отвечать по сети и при этом
+  // работать с чужим облаком, и тогда события не приходят вообще.
+  workmode: (id: string) => api.get<Z5RWorkmode>(`/acs/controllers/${id}/workmode`),
+  // Перевод контроллера в режим WEBJSON с адресом нашего сервера.
+  // Применяется только после перезапуска.
+  enableServerMode: (id: string) =>
+    api.post<Z5RWorkmode>(`/acs/controllers/${id}/workmode/server`, {}),
+  // Отвязка от облака производителя: очищаются только облачные настройки,
+  // режим работы и адрес нашего сервера не меняются.
+  unlinkCloud: (id: string) =>
+    api.post<Z5RWorkmode>(`/acs/controllers/${id}/workmode/unlink-cloud`, {}),
+  // Перезапуск контроллера. Нужен после смены режима, занимает около минуты.
+  restartController: (id: string) =>
+    api.post<{ status: string }>(`/acs/controllers/${id}/restart`, {}),
+
+  // --- Режим Accept ---
+
+  // Состояние режима записи карт. Режим означает «дверь открывается всем,
+  // поднесённые карты записываются», поэтому он включается на срок и
+  // выключается сам.
+  acceptState: (id: string) => api.get<AcceptState>(`/acs/controllers/${id}/accept`),
+  enableAccept: (id: string, minutes: number) =>
+    api.post<AcceptState>(`/acs/controllers/${id}/accept`, { minutes }),
+  disableAccept: (id: string) => api.delete(`/acs/controllers/${id}/accept`),
+
+  // --- Сбор карт со считывателя контроллера ---
+  //
+  // Отдельно от режима Accept: там дверь открывается всем и карты
+  // пишутся в память устройства. Здесь мы только слушаем события и
+  // забираем номер карты для назначения пропуска — дверь всем не
+  // открывается.
+
+  captureState: (id: string) => api.get<CardCapture>(`/acs/controllers/${id}/capture`),
+  enableCapture: (id: string, minutes: number) =>
+    api.post<CardCapture>(`/acs/controllers/${id}/capture`, { minutes }),
+  // Выключение возвращает пойманные карты: оператор должен увидеть
+  // результат, а не просто «ожидание выключено».
+  disableCapture: (id: string) =>
+    api.delete<{ cards: CapturedCardInfo[] }>(`/acs/controllers/${id}/capture`),
+
+  // --- Владельцы карт ---
+
+  listHolders: (search?: string) =>
+    api.get<ACSHolder[]>('/acs/holders', { params: search ? { search } : {} }),
+  getHolder: (id: string) => api.get<ACSHolder>(`/acs/holders/${id}`),
+  createHolder: (data: ACSHolderInput) => api.post<ACSHolder>('/acs/holders', data),
+  updateHolder: (id: string, data: ACSHolderInput) =>
+    api.put<ACSHolder>(`/acs/holders/${id}`, data),
+  deleteHolder: (id: string) => api.delete(`/acs/holders/${id}`),
+
+  // Фотография владельца: передаётся телом запроса, как образ прошивки.
+  uploadHolderPhoto: (id: string, file: File) =>
+    api.post<{ photo_path: string }>(`/acs/holders/${id}/photo`, file, {
+      headers: { 'Content-Type': 'application/octet-stream' },
+      timeout: 60000,
+    }),
+  // Прямая ссылка на снимок: показывается в теге img, поэтому токен
+  // передаётся параметром, а не заголовком.
+  holderPhotoURL: (id: string) => {
+    const token = localStorage.getItem('token')
+    return `/api/v1/acs/holders/${id}/photo?token=${token}`
+  },
+
+  assignHolderCard: (holderID: string, cardID: string) =>
+    api.post(`/acs/holders/${holderID}/cards`, { card_id: cardID }),
+  unassignHolderCard: (cardID: string) => api.delete(`/acs/holders/cards/${cardID}`),
+
+  // --- Группы доступа ---
+
+  listGroups: () => api.get<ACSGroup[]>('/acs/groups'),
+  getGroup: (id: string) => api.get<ACSGroup>(`/acs/groups/${id}`),
+  createGroup: (data: ACSGroupInput) => api.post<ACSGroup>('/acs/groups', data),
+  updateGroup: (id: string, data: ACSGroupInput) =>
+    api.put<ACSGroup>(`/acs/groups/${id}`, data),
+  deleteGroup: (id: string) => api.delete(`/acs/groups/${id}`),
+
+  // --- Двери ---
+
+  listAccessDoors: (controllerID?: string) =>
+    api.get<ACSDoor[]>('/acs/doors', {
+      params: controllerID ? { controller_id: controllerID } : {},
+    }),
+  createDoor: (data: ACSDoorInput) => api.post<ACSDoor>('/acs/doors', data),
+  updateDoor: (id: string, data: ACSDoorInput) => api.put<ACSDoor>(`/acs/doors/${id}`, data),
+  deleteDoor: (id: string) => api.delete(`/acs/doors/${id}`),
+
+  // Полная выдача базы на все контроллеры: нужно при заведении нового
+  // устройства, когда права у людей уже настроены.
+  syncAll: () => api.post<{ cards: number }>('/acs/sync-all', {}),
+  // Проверка доступа по карте: диагностика прав.
+  checkAccess: (data: { controller_id: string; card: number; facility: number }) =>
+    api.post<{ allowed: boolean; holder: string }>('/acs/check-access', data),
 
   // --- Прошивки и OTA ---
 

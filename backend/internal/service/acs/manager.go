@@ -41,7 +41,9 @@ type CardManager interface {
 	ListCards(ctx context.Context) ([]domain.ACSCard, error)
 	AddCard(ctx context.Context, card domain.ACSCard) error
 	UpdateCard(ctx context.Context, card domain.ACSCard) error
-	RemoveCard(ctx context.Context, facility, card int) error
+	// RemoveCard принимает номер карты как int64: у контроллеров Z5R он
+	// 32-битный, и int на 32-битной платформе такое значение не вместит.
+	RemoveCard(ctx context.Context, facility int, card int64) error
 	ClearCards(ctx context.Context) error
 	ImportCards(ctx context.Context, cards []domain.ACSCard) (int, error)
 	SetCardMode(ctx context.Context, name string) error
@@ -94,6 +96,10 @@ func NewManager(repo *postgres.ACSRepo) *Manager {
 	// Контроллер собственной разработки на ESP32-P4: простой REST API
 	// с Basic Auth вместо вендорских протоколов.
 	m.Register("skud", NewSkudAdapter)
+	// Контроллер Z5R WEB BT (IronLogic): дверь и настройки — по REST с
+	// Basic Auth, журнал проходов — по протоколу WEBJSON, в котором
+	// контроллер сам обращается к нашему серверу (см. z5r_webjson.go).
+	m.Register("z5r", NewZ5RAdapter)
 
 	return m
 }

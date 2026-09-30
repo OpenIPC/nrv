@@ -243,7 +243,12 @@ func (s *CameraScanner) Scan(ctx context.Context, req domain.ScanRequest) (*doma
 
 			// Дочерний контекст с бюджетом: по его истечении все запросы
 			// к камере прерываются, а уже найденные данные не теряются.
-			camCtx, cancel := context.WithTimeout(ctx, perCameraBudget)
+			//
+			// Учётные данные кладём в контекст: пробер контроллеров СКУД
+			// вызывается из глубины probeCamera и не принимает их отдельным
+			// параметром, а вводить одну пару на всю сеть удобнее оператору.
+			camCtx, cancel := context.WithTimeout(
+				withCredHint(ctx, req.Username, req.Password), perCameraBudget)
 			defer cancel()
 
 			cam := s.probeCamera(camCtx, ip.String(), req.Username, req.Password)
@@ -594,6 +599,15 @@ func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint 
 	// RTSP живёт на нестандартном порту, но такие мы увидим по
 	// признакам страницы устройства.
 	if !hasRTSP {
+		// Контроллеры СКУД — отдельный случай: у них есть веб-интерфейс,
+		// но нет RTSP, и без этой проверки контроллер либо отсеивался,
+		// либо показывался как камера. Оператору нужно обратное: он ищет
+		// контроллер именно затем, чтобы завести его в разделе СКУД,
+		// а не как камеру.
+		if ctrl := s.probeZ5R(ctx, ip); ctrl != nil {
+			return ctrl
+		}
+
 		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
 

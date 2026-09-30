@@ -45,6 +45,15 @@ type Config struct {
 	SyslogAdvertise string
 	// LogRetentionDays — сколько дней хранить логи с камер.
 	LogRetentionDays int
+	// PublicURL — адрес этого сервера, доступный из сети устройств.
+	//
+	// Нужен там, где устройство само обращается к серверу и адрес ему надо
+	// назвать явно: контроллер Z5R получает его в настройках режима, и
+	// угадать адрес нашего сервера в своей сети он не может.
+	//
+	// Не путать с адресом для браузера (MediamtxPublicHost): здесь нужен
+	// адрес, по которому сервер виден со стороны контроллеров и камер.
+	PublicURL string
 }
 
 func Load() (*Config, error) {
@@ -83,6 +92,8 @@ func Load() (*Config, error) {
 		// руками не нужно.
 		SyslogAdvertise:  envStr("SYSLOG_ADVERTISE", ""),
 		LogRetentionDays: envInt("LOG_RETENTION_DAYS", 30),
+		// Пусто — значит адрес определяет сам сервис по адресу запроса.
+		PublicURL: envStr("PUBLIC_URL", ""),
 	}
 
 	if cfg.JWTSecret == "change-me-in-production" {

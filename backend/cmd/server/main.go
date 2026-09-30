@@ -69,6 +69,7 @@ func main() {
 	eventRepo := postgres.NewEventRepo(db)
 	acsRepo := postgres.NewACSRepo(db)
 	acsCardRepo := postgres.NewACSCardRepo(db)
+	acsAccessRepo := postgres.NewACSAccessRepo(db)
 	userRepo := postgres.NewUserRepo(db)
 	// Настройки детекции и хранилища нужны и API, и подписчику событий.
 	detectionSettingsRepo := postgres.NewDetectionSettingsRepo(db)
@@ -81,7 +82,31 @@ func main() {
 
 	// СКУД-адаптеры
 	acsManager := acs.NewManager(acsRepo)
-	acsSvc := service.NewACSService(acsManager, acsCardRepo, cameraRepo, eventRepo)
+	acsSvc := service.NewACSService(acsManager, acsCardRepo, cameraRepo, eventRepo).
+		// Адрес сервера для устройств, которые сами к нам обращаются:
+		// контроллер Z5R получает его в настройках режима работы, и угадать
+		// адрес нашего сервера в своей сети он не может.
+		WithPublicURL(cfg.PublicURL)
+
+	// Сбор карт со считывателя контроллера.
+	//
+	// Нужен там, где номер карты негде прочитать: read_cards у Z5R не
+	// отвечает, а на самой карте номер не напечатан. Оператор включает
+	// ожидание, подносит карту к считывателю двери, и номер попадает в
+	// интерфейс. Слушаем события до сохранения в журнал, поэтому карта,
+	// поднесённая для назначения пропуска, не выглядит в журнале проходом.
+	cardCapture := service.NewCardCaptureManager()
+	cardCapture.StartAutoExpire(context.Background())
+	acsSvc.WithCardCapture(cardCapture)
+
+	// Подсистема доступа: владельцы карт, группы и двери.
+	//
+	// Права задаются здесь, а на контроллеры выдаётся результат. Служба
+	// связывается со СКУД через WithACS: выдача базы на устройства — её
+	// задача, но считать права она умеет без устройств, и связь задаётся
+	// отдельно, чтобы подсистема работала и до инициализации СКУД.
+	acsAccessSvc := service.NewACSAccessService(acsAccessRepo, acsCardRepo).
+		WithACS(acsSvc)
 
 	// Фоновый сбор событий СКУД: адаптеры отдают поток, но без подписки
 	// события никуда не сохранялись. Запускаем после старта БД.
@@ -400,6 +425,8 @@ func main() {
 		CameraSvc:          cameraSvc,
 		EventSvc:           eventSvc,
 		ACSSvc:             acsSvc,
+		ACSAccessSvc:       acsAccessSvc,
+		CardCapture:        cardCapture,
 		FirmwareSvc:        firmwareSvc,
 		UserRepo:           userRepo,
 		JWTSecret:          cfg.JWTSecret,

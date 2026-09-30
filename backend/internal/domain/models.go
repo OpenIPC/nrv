@@ -97,7 +97,7 @@ type ACSEvent struct {
 type ACSController struct {
 	ID          uuid.UUID      `json:"id"`
 	Name        string         `json:"name"`
-	Vendor      string         `json:"vendor"` // hikvision, dahua, promwad, skud
+	Vendor      string         `json:"vendor"` // hikvision, dahua, promwad, skud, z5r
 	IP          string         `json:"ip"`
 	Port        int            `json:"port"`
 	Credentials map[string]any `json:"-"`
@@ -119,11 +119,77 @@ type ACSController struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// KeyType — назначение ключа доступа.
+//
+// У контроллеров IronLogic ключ несёт не только «кому можно», но и «для
+// чего он». Это не украшение: мастер-ключом программируют контроллер,
+// и он не должен открывать дверь, а ключ-переключатель меняет режим
+// работы устройства.
+//
+// Значения совпадают с тем, как их называет веб-интерфейс контроллера
+// и вендорская программа, чтобы оператор видел одни и те же слова
+// в обоих местах.
+type KeyType string
+
+const (
+	// KeyTypeSimple — обычный пропуск. Открывает дверь по правам владельца.
+	KeyTypeSimple KeyType = "simple"
+	// KeyTypeMaster — служебный ключ программирования. Меняет настройки
+	// и записывает другие ключи; проход по нему не открывается.
+	KeyTypeMaster KeyType = "master"
+	// KeyTypeBlocking — ключ-переключатель режима (например блокировки).
+	// В обычном состоянии работает и как пропуск.
+	KeyTypeBlocking KeyType = "blocking"
+)
+
+// IsValid сообщает, известно ли такое назначение ключа.
+//
+// Проверка нужна на входе API: тип приходит строкой из интерфейса,
+// и опечатка в ней должна быть отклонена с понятной ошибкой, а не
+// превратиться в ключ, который контроллер откажется принять.
+func (t KeyType) IsValid() bool {
+	switch t {
+	case KeyTypeSimple, KeyTypeMaster, KeyTypeBlocking:
+		return true
+	}
+	return false
+}
+
+// NormalizeKeyType приводит пустое значение к обычному пропуску.
+//
+// Пусто приходит от старых клиентов и из запросов, где поле не заполнено.
+// Считать это ошибкой нельзя: раньше поля не было вовсе, и требовать его
+// теперь значило бы сломать работающие интеграции.
+func NormalizeKeyType(t KeyType) KeyType {
+	if t == "" {
+		return KeyTypeSimple
+	}
+	return t
+}
+
+// Title возвращает название типа по-русски для интерфейса.
+func (t KeyType) Title() string {
+	switch t {
+	case KeyTypeMaster:
+		return "мастер"
+	case KeyTypeBlocking:
+		return "блокирующий"
+	case KeyTypeSimple:
+		return "простой"
+	}
+	return string(t)
+}
+
 // ACSCard — карта доступа.
 //
-// Пара facility+card — это содержимое кода Wiegand: facility занимает
-// 8 бит, номер карты — 16 бит. Именно эта пара, а не отдельный id,
+// Пара facility+card — это содержимое кода карты: facility занимает
+// старшие байты, номер карты — младшие. Именно эта пара, а не отдельный id,
 // идентифицирует карту на контроллере.
+//
+// Размеры полей зависят от контроллера. Классический Wiegand-26 даёт
+// facility 8 бит и номер 16 бит, а Z5R WEB BT работает с шестибайтовым
+// кодом — facility 16 бит и номер 32 бита. Поэтому в базе поля шире:
+// сузить их значило бы отсечь карты, которые контроллер принимает.
 type ACSCard struct {
 	// ID заполнен только у карт, хранящихся на сервере. У карт, прочитанных
 	// прямо с контроллера, он пустой: там карта адресуется парой
@@ -131,12 +197,67 @@ type ACSCard struct {
 	ID           uuid.UUID `json:"id,omitempty"`
 	ControllerID uuid.UUID `json:"controller_id"`
 	Facility     int       `json:"facility"`
-	CardNumber   int       `json:"card"`
-	Name         string    `json:"name"`
-	Group        string    `json:"group,omitempty"`
+	CardNumber   int64     `json:"card"`
+	// Name — ФИО владельца карты. Хранится одной строкой, а не тремя
+	// полями: на проходной важно, как человека называть, а не из каких
+	// частей состоит его имя. Разделение фамилии и имени потребовало бы
+	// правил для отчеств и составных фамилий, а пользы не даёт.
+	//
+	// Оставлено для совместимости и как быстрый показ имени в списках.
+	// Источник истины — владелец карты (HolderID): у человека может быть
+	// несколько носителей, и сведения о нём живут в отдельной таблице.
+	Name  string `json:"name"`
+	Group string `json:"group,omitempty"`
+
+	// HolderID — владелец карты. Пусто, если карта ещё не назначена:
+	// такие карты видны в списке и ждут привязки к человеку.
+	HolderID *uuid.UUID `json:"holder_id,omitempty"`
+
+	// Position — должность владельца: «Электрик», «Бухгалтер».
+	Position string `json:"position,omitempty"`
+
+	// AccessLevel — уровень доступа. Номер права прохода, смысл задаёт
+	// оператор: в схеме нет списка значений, потому что на разных объектах
+	// уровни разные, и вписывать их в код значило бы привязать систему
+	// к одной установке.
+	AccessLevel int `json:"access_level"`
+
+	// PhotoPath — фотография владельца. Формат "minio:<key>" или
+	// "local:<абсолютный путь>", как у эталонных снимков лиц.
+	//
+	// Хранится путь, а не двоичные данные: снимки по 200–500 КБ на
+	// несколько сотен карт превратили бы базу в архив изображений.
+	PhotoPath string `json:"photo_path,omitempty"`
+
 	// Access: 0 — постоянный доступ, 1 — только по расписанию.
 	Access int  `json:"access"`
 	Active bool `json:"active"`
+
+	// KeyType — назначение ключа: обычный пропуск, служебный мастер-ключ
+	// или ключ-переключатель режима.
+	//
+	// Хранится отдельно от Active, потому что это разные вопросы.
+	// Active отвечает «пускать ли этого человека», а KeyType — «для чего
+	// этот ключ вообще». Мастер-ключ обязан быть активным, иначе им
+	// нельзя программировать контроллер, но дверь он при этом не открывает.
+	// Пока типа не было, такие ключи заводили обычными, и они либо не
+	// выполняли служебную роль, либо пускали в помещение.
+	KeyType KeyType `json:"key_type"`
+
+	// Index — смещение карты внутри пачки, прочитанной с контроллера.
+	//
+	// Служебное поле времени сборки, в базе не хранится и в JSON не
+	// выводится. Нужно потому, что контроллер отдаёт базу пачками по 11
+	// карт с указанием позиции только первой: без смещения карты из
+	// разных пачек не выстроить в исходном порядке.
+	Index int `json:"-"`
+
+	// SyncPending — карта изменена и ждёт выгрузки на контроллер.
+	//
+	// Нужен, чтобы не переписывать всю базу на устройстве при каждом
+	// изменении: контроллер подключён по Wi-Fi, и полная выгрузка сотен
+	// карт занимает время, в течение которого связь может пропасть.
+	SyncPending bool `json:"sync_pending"`
 }
 
 // Recording — запись видео
@@ -834,7 +955,7 @@ type ScanResult struct {
 
 type CreateACSControllerRequest struct {
 	Name     string `json:"name" validate:"required"`
-	Vendor   string `json:"vendor" validate:"required,oneof=hikvision dahua promwad skud"`
+	Vendor   string `json:"vendor" validate:"required,oneof=hikvision dahua promwad skud z5r"`
 	IP       string `json:"ip" validate:"required,ip"`
 	Port     int    `json:"port" validate:"min=1,max=65535"`
 	Login    string `json:"login"`
@@ -869,14 +990,31 @@ type UpdateACSControllerRequest struct {
 }
 
 // AddACSCardRequest — заведение карты доступа.
+//
+// Диапазоны полей шире Wiegand-26: контроллеры Z5R работают с шестибайтовым
+// кодом, где facility занимает 16 бит, а номер карты — 32 бита. Ограничение
+// проверяется ещё и в адаптере контроллера: у разных вендоров пределы свои,
+// и отказ должен приходить от того устройства, которому карта адресована.
 type AddACSCardRequest struct {
 	ControllerID string `json:"controller_id" validate:"required,uuid"`
-	Facility     int    `json:"facility" validate:"min=0,max=255"`
-	Card         int    `json:"card" validate:"min=0,max=65535"`
-	Name         string `json:"name"`
-	Group        string `json:"group"`
-	Access       int    `json:"access" validate:"min=0,max=1"`
-	Active       *bool  `json:"active,omitempty"`
+	Facility     int    `json:"facility" validate:"min=0,max=65535"`
+	// Card — int64: 32-битный номер не вмещается в int на 32-битной платформе.
+	Card   int64  `json:"card" validate:"min=0"`
+	Name   string `json:"name"`
+	Group  string `json:"group"`
+	Access int    `json:"access" validate:"min=0,max=1"`
+	Active *bool  `json:"active,omitempty"`
+
+	// Position — должность владельца карты.
+	Position string `json:"position"`
+	// AccessLevel — уровень доступа; смысл задаёт оператор.
+	AccessLevel int `json:"access_level" validate:"min=0"`
+
+	// KeyType — назначение ключа: простой, мастер или блокирующий.
+	//
+	// Пустое значение считается обычным пропуском: поле появилось позже
+	// самих карт, и требовать его от старых клиентов нельзя.
+	KeyType KeyType `json:"key_type" validate:"omitempty,oneof=simple master blocking"`
 }
 
 type LoginResponse struct {

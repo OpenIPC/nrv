@@ -41,12 +41,16 @@ const (
 // Проверка номера карты до отправки на контроллер: иначе контроллер
 // молча обрежет значение, и в базе окажется не та карта, что заводил
 // оператор. Лучше отказать сразу и явно.
-func validateSkudCard(facility, card int) error {
+//
+// card принимается как int64, а не int: в общей модели поле номера карты
+// расширено под 32-битный код контроллеров Z5R. Для SKUD это ничего не
+// меняет — пределы здесь всё равно свои, Wiegand-26.
+func validateSkudCard(facility int, card int64) error {
 	if facility < 0 || facility > skudCardFacilityMax {
 		return fmt.Errorf("facility должен быть от 0 до %d (получено %d)",
 			skudCardFacilityMax, facility)
 	}
-	if card < 0 || card > skudCardNumberMax {
+	if card < 0 || card > int64(skudCardNumberMax) {
 		return fmt.Errorf("номер карты должен быть от 0 до %d (получено %d)",
 			skudCardNumberMax, card)
 	}
@@ -58,7 +62,7 @@ func (a *SkudAdapter) toDomain(c skudCard) domain.ACSCard {
 	return domain.ACSCard{
 		ControllerID: a.ctrl.ID,
 		Facility:     c.Facility,
-		CardNumber:   c.Card,
+		CardNumber:   int64(c.Card),
 		Name:         strings.TrimSpace(c.Name),
 		Group:        strings.TrimSpace(c.Group),
 		Access:       c.Access,
@@ -126,7 +130,7 @@ func (a *SkudAdapter) AddCard(ctx context.Context, card domain.ACSCard) error {
 
 	data, err := a.call(ctx, http.MethodPost, "/api/cards/add", skudCard{
 		Facility: card.Facility,
-		Card:     card.CardNumber,
+		Card:     int(card.CardNumber),
 		Name:     card.Name,
 		Access:   card.Access,
 		Group:    card.Group,
@@ -147,7 +151,7 @@ func (a *SkudAdapter) UpdateCard(ctx context.Context, card domain.ACSCard) error
 
 	data, err := a.call(ctx, http.MethodPost, "/api/cards/update", skudCard{
 		Facility: card.Facility,
-		Card:     card.CardNumber,
+		Card:     int(card.CardNumber),
 		Name:     card.Name,
 		Access:   card.Access,
 		Group:    card.Group,
@@ -160,9 +164,9 @@ func (a *SkudAdapter) UpdateCard(ctx context.Context, card domain.ACSCard) error
 }
 
 // RemoveCard удаляет карту по facility+card.
-func (a *SkudAdapter) RemoveCard(ctx context.Context, facility, card int) error {
+func (a *SkudAdapter) RemoveCard(ctx context.Context, facility int, card int64) error {
 	data, err := a.call(ctx, http.MethodPost, "/api/cards/remove",
-		map[string]int{"facility": facility, "card": card})
+		map[string]int{"facility": facility, "card": int(card)})
 	if err != nil {
 		return err
 	}
@@ -198,7 +202,7 @@ func (a *SkudAdapter) ImportCards(ctx context.Context, cards []domain.ACSCard) (
 		}
 		payload = append(payload, skudCard{
 			Facility: c.Facility,
-			Card:     c.CardNumber,
+			Card:     int(c.CardNumber),
 			Name:     c.Name,
 			Access:   c.Access,
 			Group:    c.Group,

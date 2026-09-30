@@ -21,9 +21,16 @@ import (
 )
 
 type RouterConfig struct {
-	CameraSvc    *service.CameraService
-	EventSvc     *service.EventService
-	ACSSvc       *service.ACSService
+	CameraSvc *service.CameraService
+	EventSvc  *service.EventService
+	ACSSvc    *service.ACSService
+	// ACSAccessSvc — подсистема доступа: владельцы карт, группы, двери.
+	ACSAccessSvc *service.ACSAccessService
+	// CardCapture — сбор карт со считывателя контроллера.
+	//
+	// Нужен, когда номер карты негде прочитать: read_cards у Z5R не
+	// отвечает, а на карте номер не напечатан.
+	CardCapture  *service.CardCaptureManager
 	FirmwareSvc  *service.FirmwareService
 	UserRepo     *postgres.UserRepo
 	JWTSecret    string
@@ -101,6 +108,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	docsH := handlers.NewAPIDocHandler()
 	eventH := handlers.NewEventHandler(cfg.EventSvc)
 	acsH := handlers.NewACSHandler(cfg.ACSSvc)
+	// Подсистема доступа: владельцы карт, группы и двери.
+	// Отдельный обработчик, потому что это другая предметная область —
+	// люди и права, а не устройства и события.
+	acsAccessH := handlers.NewACSAccessHandler(cfg.ACSAccessSvc, cfg.StorageSvc).
+		WithCardCapture(cfg.CardCapture)
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
 	statsH := handlers.NewStatsHandler(cfg.DB)
@@ -151,6 +163,17 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		// Контроллер не умеет JWT и не имеет учётной записи на сервере:
 		// он опознаётся по IP отправителя, поэтому маршрут вне JWT-группы.
 		r.Post("/acs/ingest", acsH.IngestEvent)
+
+		// Приём документов от контроллера Z5R WEB BT (протокол WEBJSON).
+		//
+		// Отдельный маршрут, а не общий с /acs/ingest, потому что формат
+		// другой: контроллер присылает документ со своими операциями
+		// (power_on, events, ping) и ждёт в ответ документ с командами.
+		// Ответ обязателен — без него контроллер уходит в автономный режим.
+		//
+		// Маршрут вне JWT-группы по той же причине: контроллер не умеет
+		// JWT и опознаётся по IP отправителя.
+		r.Post("/acs/z5r/webjson", acsH.Z5RWebJSON)
 
 		// HLS-прокси: вне JWT-группы, т.к. hls.js в браузере
 		// не может передавать Authorization-заголовок для сегментов.
@@ -385,6 +408,70 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/acs/controllers/{id}/cards/learn", acsH.GetCardLearnState)
 			r.Post("/acs/controllers/{id}/cards/learn", acsH.StartCardLearn)
 			r.Post("/acs/controllers/{id}/cards/learn/cancel", acsH.CancelCardLearn)
+
+			// Режим работы контроллера Z5R.
+			//
+			// Отдельная группа, потому что у контроллера четыре режима,
+			// и от выбранного зависит, работают ли события вообще. Из
+			// коробки он настроен на облако производителя, и события
+			// уходят туда — поэтому оператору нужен и просмотр режима,
+			// и переключение, и отвязка от облака.
+			r.Get("/acs/controllers/{id}/workmode", acsH.Z5RWorkmode)
+			r.Post("/acs/controllers/{id}/workmode/server", acsH.Z5REnableServerMode)
+			r.Post("/acs/controllers/{id}/workmode/unlink-cloud", acsH.Z5RUnlinkCloud)
+			r.Post("/acs/controllers/{id}/restart", acsH.RestartController)
+
+			// Подсистема доступа: владельцы карт, группы, двери.
+			//
+			// Права задаются здесь, а на контроллеры выдаётся результат —
+			// какие коды карт пускать в какие зоны. Контроллер про группы
+			// и отделы не знает: так система остаётся масштабируемой,
+			// и новый контроллер достаточно завести и выдать ему базу.
+			r.Get("/acs/holders", acsAccessH.ListHolders)
+			r.Post("/acs/holders", acsAccessH.CreateHolder)
+			r.Get("/acs/holders/{id}", acsAccessH.GetHolder)
+			r.Put("/acs/holders/{id}", acsAccessH.UpdateHolder)
+			r.Delete("/acs/holders/{id}", acsAccessH.DeleteHolder)
+			// Фотография владельца: загрузка телом запроса и отдача через
+			// сервер (presigned-ссылка MinIO не работает снаружи).
+			r.Post("/acs/holders/{id}/photo", acsAccessH.UploadHolderPhoto)
+			r.Get("/acs/holders/{id}/photo", acsAccessH.HolderPhoto)
+			r.Post("/acs/holders/{id}/cards", acsAccessH.AssignCard)
+			r.Delete("/acs/holders/cards/{cardID}", acsAccessH.UnassignCard)
+
+			r.Get("/acs/groups", acsAccessH.ListGroups)
+			r.Post("/acs/groups", acsAccessH.CreateGroup)
+			r.Get("/acs/groups/{id}", acsAccessH.GetGroup)
+			r.Put("/acs/groups/{id}", acsAccessH.UpdateGroup)
+			r.Delete("/acs/groups/{id}", acsAccessH.DeleteGroup)
+
+			r.Get("/acs/doors", acsAccessH.ListDoors)
+			r.Post("/acs/doors", acsAccessH.CreateDoor)
+			r.Put("/acs/doors/{id}", acsAccessH.UpdateDoor)
+			r.Delete("/acs/doors/{id}", acsAccessH.DeleteDoor)
+
+			// Полная выдача базы на все контроллеры: нужно при заведении
+			// нового устройства, когда права у людей уже настроены.
+			r.Post("/acs/sync-all", acsAccessH.SyncAll)
+			// Проверка доступа: диагностика прав до того, как человек
+			// подойдёт к двери.
+			r.Post("/acs/check-access", acsAccessH.CheckAccess)
+
+			// Режим Accept: дверь открывается всем, поднесённые карты
+			// записываются. Опасен — включается на срок и выключается сам.
+			r.Get("/acs/controllers/{id}/accept", acsAccessH.AcceptState)
+			r.Post("/acs/controllers/{id}/accept", acsAccessH.EnableAccept)
+			r.Delete("/acs/controllers/{id}/accept", acsAccessH.DisableAccept)
+
+			// Ожидание карты на считывателе контроллера.
+			//
+			// Отдельно от режима Accept: там дверь открывается всем и
+			// карты пишутся в память устройства, а здесь мы только слушаем
+			// события и забираем номер карты для назначения пропуска.
+			// Дверь при этом не открывается всем.
+			r.Get("/acs/controllers/{id}/capture", acsAccessH.CaptureState)
+			r.Post("/acs/controllers/{id}/capture", acsAccessH.EnableCapture)
+			r.Delete("/acs/controllers/{id}/capture", acsAccessH.DisableCapture)
 
 			// Прошивки контроллеров СКУД: образы на сервере и OTA-обновление.
 			r.Get("/acs/firmwares", fwH.ListFirmwares)
