@@ -91,15 +91,21 @@ func (a *Z5RAdapter) EnableServerMode(ctx context.Context, cfg ServerModeConfig)
 }
 
 // WorkmodeState — состояние режима работы для показа оператору.
+//
+// Теги JSON написаны явно, в стиле остального API (snake_case). Без них
+// Go отдаёт поля как есть — ModeName, ServerURL, — а интерфейс читает
+// mode_name и server_url. Ошибка при этом молчаливая: поля приходят, но
+// под другими именами, и в панели режима оператор видел пустое название:
+// «Контроллер работает в режиме ****».
 type WorkmodeState struct {
 	// Mode — числовой код режима.
-	Mode int
+	Mode int `json:"mode"`
 	// ModeName — название режима по-русски (как в веб-интерфейсе контроллера).
-	ModeName string
+	ModeName string `json:"mode_name"`
 	// ServerURL — адрес сервера, на который настроен контроллер.
-	ServerURL string
+	ServerURL string `json:"server_url"`
 	// PointsToOurs — правда ли, что контроллер смотрит туда, куда нужно.
-	PointsToOurs bool
+	PointsToOurs bool `json:"points_to_ours"`
 }
 
 // Workmode читает текущий режим работы контроллера.
