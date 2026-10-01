@@ -489,65 +489,7 @@ func (w *WireGuardManager) GenerateConfig(siteID string) (*WGConfig, error)
 
 ---
 
-## 9. Мобильное приложение (Flutter)
 
-### 9.1 Архитектура
-
-```
-flutter_app/
-├── lib/
-│   ├── main.dart
-│   ├── app.dart                    # MaterialApp + роутинг
-│   ├── core/
-│   │   ├── api/
-│   │   │   ├── api_client.dart     # Dio HTTP-клиент
-│   │   │   ├── api_endpoints.dart
-│   │   │   └── auth_interceptor.dart
-│   │   ├── di/                     # GetIt DI
-│   │   ├── router/                 # GoRouter
-│   │   └── theme/
-│   ├── features/
-│   │   ├── auth/
-│   │   │   ├── login_screen.dart
-│   │   │   └── auth_bloc.dart      # flutter_bloc
-│   │   ├── cameras/
-│   │   │   ├── camera_list_screen.dart
-│   │   │   ├── camera_detail_screen.dart
-│   │   │   └── camera_bloc.dart
-│   │   ├── live/
-│   │   │   ├── live_player_screen.dart
-│   │   │   └── webrtc_service.dart  # flutter_webrtc
-│   │   ├── events/
-│   │   │   ├── events_list_screen.dart
-│   │   │   └── event_detail_screen.dart
-│   │   ├── recordings/
-│   │   │   ├── archive_screen.dart
-│   │   │   └── playback_screen.dart
-│   │   ├── acs/
-│   │   │   ├── doors_screen.dart
-│   │   │   └── acs_bloc.dart
-│   │   └── notifications/
-│   │       └── push_service.dart    # firebase_messaging
-│   ├── models/
-│   └── widgets/
-│       ├── camera_grid.dart
-│       └── video_player.dart
-├── pubspec.yaml
-```
-
-### 9.2 Ключевые Flutter-пакеты
-
-| Задача | Пакет |
-|--------|-------|
-| HTTP | `dio` |
-| WebRTC | `flutter_webrtc` |
-| HLS-плеер | `flutter_vlc_player` или `better_player` |
-| State | `flutter_bloc` |
-| Роутинг | `go_router` |
-| Push | `firebase_messaging` |
-| DI | `get_it` |
-| WebSocket | `web_socket_channel` |
-| Безопасное хранилище | `flutter_secure_storage` |
 
 ### 9.3 Стриминг на мобильное устройство
 
