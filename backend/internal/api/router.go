@@ -30,7 +30,9 @@ type RouterConfig struct {
 	//
 	// Нужен, когда номер карты негде прочитать: read_cards у Z5R не
 	// отвечает, а на карте номер не напечатан.
-	CardCapture  *service.CardCaptureManager
+	CardCapture *service.CardCaptureManager
+	// ACSPlanSvc — планы помещений: схемы этажей с расстановкой устройств.
+	ACSPlanSvc   *service.ACSPlanService
 	FirmwareSvc  *service.FirmwareService
 	UserRepo     *postgres.UserRepo
 	JWTSecret    string
@@ -113,6 +115,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// люди и права, а не устройства и события.
 	acsAccessH := handlers.NewACSAccessHandler(cfg.ACSAccessSvc, cfg.StorageSvc).
 		WithCardCapture(cfg.CardCapture)
+	// Планы помещений: схемы этажей. Отдельный обработчик, потому что
+	// предмет другой — не «кто куда может пройти», а «где это стоит».
+	acsPlanH := handlers.NewACSPlanHandler(cfg.ACSPlanSvc, tokenAuth)
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
 	statsH := handlers.NewStatsHandler(cfg.DB)
@@ -206,6 +211,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		// поэтому вынесены вне JWT-группы.
 		r.Get("/faces/{id}/photo", recogH.FacePhoto)
 		r.Get("/plates/{id}/photo", recogH.PlatePhoto)
+		// Фотографии владельцев карт и подложки планов помещений — тоже
+		// в теге <img>. Токен приходит в query-параметре, проверку
+		// выполняет обработчик.
+		r.Get("/acs/holders/{id}/photo", acsAccessH.HolderPhoto)
+		r.Get("/acs/plans/{id}/image", acsPlanH.PlanImage)
 
 		// Защищённые
 		r.Group(func(r chi.Router) {
@@ -432,10 +442,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/acs/holders/{id}", acsAccessH.GetHolder)
 			r.Put("/acs/holders/{id}", acsAccessH.UpdateHolder)
 			r.Delete("/acs/holders/{id}", acsAccessH.DeleteHolder)
-			// Фотография владельца: загрузка телом запроса и отдача через
-			// сервер (presigned-ссылка MinIO не работает снаружи).
+			// Фотография владельца: загрузка телом запроса. Отдача —
+			// в публичной группе выше: снимок показывается в теге <img>,
+			// который не умеет передавать заголовок Authorization.
 			r.Post("/acs/holders/{id}/photo", acsAccessH.UploadHolderPhoto)
-			r.Get("/acs/holders/{id}/photo", acsAccessH.HolderPhoto)
 			r.Post("/acs/holders/{id}/cards", acsAccessH.AssignCard)
 			r.Delete("/acs/holders/cards/{cardID}", acsAccessH.UnassignCard)
 
@@ -472,6 +482,23 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/acs/controllers/{id}/capture", acsAccessH.CaptureState)
 			r.Post("/acs/controllers/{id}/capture", acsAccessH.EnableCapture)
 			r.Delete("/acs/controllers/{id}/capture", acsAccessH.DisableCapture)
+
+			// Планы помещений: схемы этажей с расстановкой устройств.
+			//
+			// Отдельно от СКУД и камер: здесь предмет — место, а не
+			// права доступа и не настройки устройств. Точка на плане
+			// ссылается на камеру, дверь или контроллер, но ничего
+			// в них не меняет.
+			r.Get("/acs/plans", acsPlanH.ListPlans)
+			r.Post("/acs/plans", acsPlanH.CreatePlan)
+			r.Get("/acs/plans/{id}", acsPlanH.GetPlan)
+			r.Put("/acs/plans/{id}", acsPlanH.UpdatePlan)
+			r.Delete("/acs/plans/{id}", acsPlanH.DeletePlan)
+			// Подложка передаётся телом запроса, как фотографии владельцев:
+			// не нужно разбирать форму ни серверу, ни клиенту.
+			r.Post("/acs/plans/{id}/image", acsPlanH.UploadPlanImage)
+			r.Post("/acs/plans/{id}/points", acsPlanH.SavePoint)
+			r.Delete("/acs/plans/{id}/points/{pointID}", acsPlanH.DeletePoint)
 
 			// Прошивки контроллеров СКУД: образы на сервере и OTA-обновление.
 			r.Get("/acs/firmwares", fwH.ListFirmwares)

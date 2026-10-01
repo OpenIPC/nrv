@@ -99,6 +99,56 @@ func (r *CameraRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Camera,
 	return &c, nil
 }
 
+// ListByIDs читает камеры по списку идентификаторов.
+//
+// Нужен плану помещений: там состояние показывается сразу для десятков
+// камер, и запрос на каждую превратил бы открытие схемы в серию обращений
+// к базе. Возвращает только найденные записи: камера могла быть удалена,
+// а точка на плане осталась — это и есть признак «устройство удалено».
+func (r *CameraRepo) ListByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Camera, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT id, name, rtsp_url,
+			COALESCE(main_stream, '') as main_stream,
+			COALESCE(sub_stream, '') as sub_stream,
+			COALESCE(ip, '') as ip,
+			COALESCE(mac, '') as mac,
+			COALESCE(firmware, '') as firmware,
+			COALESCE(vendor, 'unknown') as vendor,
+			site_id, COALESCE(wg_ip::text, '') as wg_ip, status, hw_info, settings,
+			channel_number, created_at, updated_at
+		FROM cameras WHERE id = ANY($1)
+	`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	cameras := make([]domain.Camera, 0, len(ids))
+	for rows.Next() {
+		var c domain.Camera
+		var hwInfo, settings []byte
+		if err := rows.Scan(&c.ID, &c.Name, &c.RTSPUrl, &c.MainStream, &c.SubStream,
+			&c.IP, &c.MAC, &c.Firmware, &c.Vendor, &c.SiteID, &c.WGIP,
+			&c.Status, &hwInfo, &settings, &c.ChannelNumber,
+			&c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if hwInfo != nil {
+			json.Unmarshal(hwInfo, &c.HWInfo)
+		}
+		if settings != nil {
+			json.Unmarshal(settings, &c.Settings)
+		}
+		applySettings(&c)
+		cameras = append(cameras, c)
+	}
+	return cameras, rows.Err()
+}
+
 func (r *CameraRepo) Create(ctx context.Context, cam *domain.Camera) error {
 	hwInfo, _ := json.Marshal(cam.HWInfo)
 	settings, _ := json.Marshal(cam.Settings)

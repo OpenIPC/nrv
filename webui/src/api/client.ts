@@ -733,6 +733,80 @@ export interface CapturedCardInfo {
   event_type: string
 }
 
+// ACSPlanPointKind — вид устройства на плане помещения.
+//
+// Определяет, откуда берётся состояние и какой значок рисуется.
+// Считыватель отдельно от двери: они могут стоять в разных местах —
+// считыватель снаружи, замок на двери, и на плане это две точки.
+export type ACSPlanPointKind = 'camera' | 'door' | 'controller' | 'reader'
+
+// PLAN_POINT_TITLES — названия видов устройств для интерфейса.
+export const PLAN_POINT_TITLES: Record<ACSPlanPointKind, string> = {
+  camera: 'камера',
+  door: 'дверь',
+  controller: 'контроллер',
+  reader: 'считыватель',
+}
+
+// ACSPlanPoint — устройство, привязанное к месту на плане.
+export interface ACSPlanPoint {
+  id: string
+  plan_id: string
+  kind: ACSPlanPointKind
+  /** Пусто, если устройство удалено: точка показывается как «удалено»,
+   *  чтобы оператор видел, что схема устарела. */
+  device_id?: string
+  /** Координаты в долях от размера подложки: 0 — левый/верхний край.
+   *  Доли, а не пиксели: подложку могут заменить снимком другого размера,
+   *  и точки должны остаться на своих местах. */
+  x: number
+  y: number
+  rotation: number
+  /** Подпись на плане. Пусто — показываем имя устройства. */
+  label: string
+
+  // --- Заполняются сервером при чтении ---
+  device_name?: string
+  /** Работает ли устройство сейчас. Ключевое поле: ради него схема и нужна. */
+  online: boolean
+  /** Пояснение состояния словами: «нет связи с «Z5R WEB BT»». */
+  status_text?: string
+  /** Устройство удалено из системы, точка осталась. */
+  missing?: boolean
+}
+
+// ACSPlan — план помещения со схемой и расстановкой устройств.
+//
+// Нужен там, где списка недостаточно: в списке камер нет соседства, а при
+// обходе и разборе происшествия важно именно оно.
+export interface ACSPlan {
+  id: string
+  name: string
+  description: string
+  /** Подложка. Пусто, если изображение не загружено. */
+  image_path?: string
+  sort_order: number
+  /** Точки на плане. Заполняются при чтении плана, в списке пусто. */
+  points?: ACSPlanPoint[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ACSPlanInput {
+  name: string
+  description?: string
+  sort_order?: number
+}
+
+export interface ACSPlanPointInput {
+  kind: ACSPlanPointKind
+  device_id?: string
+  x: number
+  y: number
+  rotation?: number
+  label?: string
+}
+
 // ACSCard — карта доступа. Пара facility+card — это код Wiegand,
 // именно она идентифицирует карту на контроллере.
 export interface ACSCard {
@@ -1469,6 +1543,39 @@ export const acsAPI = {
   // результат, а не просто «ожидание выключено».
   disableCapture: (id: string) =>
     api.delete<{ cards: CapturedCardInfo[] }>(`/acs/controllers/${id}/capture`),
+
+  // --- Планы помещений ---
+  //
+  // Схемы этажей с расстановкой устройств. Состояние каждого устройства
+  // сервер подставляет при чтении плана: оно меняется каждую минуту,
+  // и хранить его в базе смысла нет.
+
+  listPlans: () => api.get<ACSPlan[]>('/acs/plans'),
+  getPlan: (id: string) => api.get<ACSPlan>(`/acs/plans/${id}`),
+  createPlan: (data: ACSPlanInput) => api.post<ACSPlan>('/acs/plans', data),
+  updatePlan: (id: string, data: ACSPlanInput) =>
+    api.put<ACSPlan>(`/acs/plans/${id}`, data),
+  deletePlan: (id: string) => api.delete(`/acs/plans/${id}`),
+
+  // Подложка передаётся телом запроса, как фотографии владельцев: не нужно
+  // разбирать форму ни серверу, ни клиенту.
+  uploadPlanImage: (id: string, file: File) =>
+    api.post<{ image_path: string }>(`/acs/plans/${id}/image`, file, {
+      headers: { 'Content-Type': file.type || 'image/png' },
+    }),
+  // Адрес подложки для тега img. Токен передаём в строке запроса: тег img
+  // не умеет слать заголовки, а отдавать схему этажа без авторизации нельзя.
+  planImageURL: (id: string) => {
+    const token = localStorage.getItem('token')
+    return `/api/v1/acs/plans/${id}/image?token=${token}`
+  },
+
+  // Точки: сохранение возвращает план целиком с уже подставленным
+  // состоянием — иначе интерфейс нарисовал бы новую точку как offline.
+  savePlanPoint: (planID: string, data: ACSPlanPointInput) =>
+    api.post<ACSPlan>(`/acs/plans/${planID}/points`, data),
+  deletePlanPoint: (planID: string, pointID: string) =>
+    api.delete(`/acs/plans/${planID}/points/${pointID}`),
 
   // --- Владельцы карт ---
 

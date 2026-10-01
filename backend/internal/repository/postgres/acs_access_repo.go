@@ -692,7 +692,9 @@ func (r *ACSAccessRepo) HolderIDsForDoor(ctx context.Context, doorID uuid.UUID) 
 
 // Errors
 var (
-	ErrHolderNotFound = errors.New("владелец карты не найден")
-	ErrGroupNotFound  = errors.New("группа доступа не найдена")
-	ErrDoorNotFound   = errors.New("дверь не найдена")
+	ErrHolderNotFound    = errors.New("владелец карты не найден")
+	ErrGroupNotFound     = errors.New("группа доступа не найдена")
+	ErrDoorNotFound      = errors.New("дверь не найдена")
+	ErrPlanNotFound      = errors.New("план помещения не найден")
+	ErrPlanPointNotFound = errors.New("точка на плане не найдена")
 )

@@ -3,7 +3,7 @@ import { useAuth } from '../hooks/useApi'
 import {
   LayoutDashboard, Video, AlertTriangle, HardDrive,
   Shield, LogOut, Camera, Search, Settings, ScanFace, Volume2, Share2,
-  LayoutGrid, Bell, Server, ScrollText, Activity, Users
+  LayoutGrid, Bell, Server, ScrollText, Activity, Users, Map
 } from 'lucide-react'
 
 const navItems = [
@@ -24,6 +24,9 @@ const navItems = [
   { to: '/majestic', icon: Activity, label: 'Стример' },
   { to: '/recognition', icon: ScanFace, label: 'Распознавание' },
   { to: '/acs', icon: Shield, label: 'СКУД' },
+  // Планы помещений: схемы этажей с расстановкой устройств. Отдельно от
+  // СКУД: там права и доступы, здесь место и состояние оборудования.
+  { to: '/plans', icon: Map, label: 'Планы' },
   // Доступ рядом со СКУД, но отдельно: там железо и события, здесь люди,
   // группы и права. Оператору, который выдаёт пропуск, не нужно
   // разбираться в настройках контроллеров.

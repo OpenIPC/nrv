@@ -70,6 +70,7 @@ func main() {
 	acsRepo := postgres.NewACSRepo(db)
 	acsCardRepo := postgres.NewACSCardRepo(db)
 	acsAccessRepo := postgres.NewACSAccessRepo(db)
+	acsPlanRepo := postgres.NewACSPlanRepo(db)
 	userRepo := postgres.NewUserRepo(db)
 	// Настройки детекции и хранилища нужны и API, и подписчику событий.
 	detectionSettingsRepo := postgres.NewDetectionSettingsRepo(db)
@@ -175,6 +176,18 @@ func main() {
 	if detSubscriber != nil {
 		detSubscriber.WithStorage(storageSvc)
 	}
+
+	// Планы помещений: схемы этажей с расстановкой устройств.
+	//
+	// Создаётся здесь, а не рядом с СКУД, потому что для подложек нужно
+	// хранилище: схемы лежат в MinIO или на диске рядом с фотографиями
+	// владельцев, и путь к ним ведёт через службу хранения.
+	//
+	// Состояние устройств подставляется при чтении плана, а не хранится:
+	// оно меняется каждую минуту, и устаревшее значение хуже отсутствующего —
+	// оператор примет его за текущее.
+	acsPlanSvc := service.NewACSPlanService(acsPlanRepo, storageSvc, cameraRepo, acsRepo, acsCardRepo).
+		WithACS(acsSvc)
 
 	// Распознавание лиц и автомобильных номеров: справочники сопоставляются
 	// с событиями, результат попадает в detection_events и в триггер записи.
@@ -427,6 +440,7 @@ func main() {
 		ACSSvc:             acsSvc,
 		ACSAccessSvc:       acsAccessSvc,
 		CardCapture:        cardCapture,
+		ACSPlanSvc:         acsPlanSvc,
 		FirmwareSvc:        firmwareSvc,
 		UserRepo:           userRepo,
 		JWTSecret:          cfg.JWTSecret,

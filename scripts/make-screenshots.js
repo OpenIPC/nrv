@@ -198,6 +198,15 @@ const SHOTS = [
       await maskSecrets(page)
     },
   },
+  {
+    file: '18-plans.png',
+    title: 'Планы помещений',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/plans`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(4000)
+      await maskSecrets(page)
+    },
+  },
 ]
 
 /**

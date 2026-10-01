@@ -15,6 +15,7 @@ import MajesticPage from './pages/MajesticPage'
 import RecognitionPage from './pages/RecognitionPage'
 import ACSPage from './pages/ACSPage'
 import AccessPage from './pages/AccessPage'
+import PlansPage from './pages/PlansPage'
 import SettingsPage from './pages/SettingsPage'
 import NotificationsPage from './pages/NotificationsPage'
 import ServerSettingsPage from './pages/ServerSettingsPage'
@@ -56,6 +57,7 @@ export default function App() {
                     здесь люди и права. Оператору, который выдаёт пропуск,
                     не нужно разбираться в настройках устройств. */}
                 <Route path="/access" element={<AccessPage />} />
+                <Route path="/plans" element={<PlansPage />} />
                 <Route path="/external-access" element={<ExternalAccessPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
