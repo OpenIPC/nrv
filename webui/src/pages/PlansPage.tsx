@@ -7,7 +7,7 @@ import { camerasAPI } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import {
-  Camera, Check, DoorOpen, KeyRound, Cpu, Layers, Map as MapIcon, Pencil,
+  Camera, DoorOpen, KeyRound, Cpu, Layers, Map as MapIcon, Maximize2, Pencil,
   Plus, RefreshCw, Trash2, Upload, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 
@@ -330,7 +330,17 @@ function PlanCanvas({ planID, onPlanChanged }: {
   // спросить, какое устройство поставить в это место.
   const [pending, setPending] = useState<{ x: number; y: number; kind: ACSPlanPointKind } | null>(null)
   const [picker, setPicker] = useState<{ title: string; items: { id: string; name: string }[] } | null>(null)
+  // Перетаскивание: либо точка (тогда её id), либо сам план.
+  //
+  // Одно состояние на два случая, потому что одновременно может быть
+  // только одно перетаскивание, а различать их всё равно приходится:
+  // у точки координаты меняются, у плана — прокрутка.
+  const [drag, setDrag] = useState<{ pointID?: string; startX: number; startY: number } | null>(null)
+  // Координаты точки во время перетаскивания. Держим отдельно от данных
+  // сервера, чтобы значок шёл за курсором без задержки на запрос.
+  const [dragPos, setDragPos] = useState<{ id: string; x: number; y: number } | null>(null)
   const imgRef = useRef<HTMLImageElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Состояние меняется каждую минуту, поэтому обновляем его само.
@@ -441,6 +451,189 @@ function PlanCanvas({ planID, onPlanChanged }: {
     }
   }
 
+  /**
+   * Зум колёсиком мыши.
+   *
+   * Масштаб меняется **к позиции курсора**, а не к центру: оператор наводит
+   * на нужный участок и приближает его. При зуме к центру участок уезжал бы
+   * из вида, и приходилось бы потом его искать прокруткой. Это особенно
+   * мешает на больших схемах, где план шире экрана.
+   *
+   * В зависимостях — `plan`, а не пустой список. Пока план грузится,
+   * компонент возвращает спиннер, и полотна в документе ещё нет: эффект
+   * с пустыми зависимостями выполнился бы раньше, чем появится контейнер,
+   * и обработчик не повесился бы вовсе — колесо не работало.
+   */
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const onWheel = (e: WheelEvent) => {
+      // Отменяем прокрутку страницы: иначе при зуме страница уезжает
+      // вниз, и оператор теряет план из вида.
+      e.preventDefault()
+
+      setZoom((prev) => {
+        // Шаг привязан к величине прокрутки колеса: у «мышки» и тачпада
+        // она разная, и фиксированный шаг на тачпаде проскакивал бы
+        // весь диапазон за одно движение.
+        const step = Math.exp(-e.deltaY * 0.0015)
+        const next = Math.min(4, Math.max(0.3, prev * step))
+        if (next === prev) return prev
+
+        // Точка под курсором до изменения масштаба — относительно области
+        // прокрутки с учётом уже прокрученного.
+        const rect = el.getBoundingClientRect()
+        const cx = e.clientX - rect.left + el.scrollLeft
+        const cy = e.clientY - rect.top + el.scrollTop
+        const k = next / prev
+
+        // После перерисовки возвращаем эту точку под курсор: прокрутку
+        // меняем в следующем кадре, когда размеры уже пересчитаны.
+        requestAnimationFrame(() => {
+          el.scrollLeft = cx * k - (e.clientX - rect.left)
+          el.scrollTop = cy * k - (e.clientY - rect.top)
+        })
+
+        return next
+      })
+    }
+
+    // passive: false — иначе preventDefault не сработает и страница
+    // будет прокручиваться вместе с зумом.
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [plan])
+
+  /** Переводит координаты мыши в доли от подложки. */
+  const toPlanCoords = (clientX: number, clientY: number): { x: number; y: number } | null => {
+    const img = imgRef.current
+    if (!img) return null
+    const rect = img.getBoundingClientRect()
+    const x = (clientX - rect.left) / rect.width
+    const y = (clientY - rect.top) / rect.height
+    return { x, y }
+  }
+
+  /** Начало перетаскивания точки. */
+  const startPointDrag = (e: React.MouseEvent, p: ACSPlanPoint) => {
+    // Останавливаем всплытие: иначе событие дойдёт до полотна, и точка
+    // начнёт двигаться вместе с панорамированием — она «убежит» вдвое.
+    e.stopPropagation()
+    // Запрещаем штатное перетаскивание картинки: при быстром движении
+    // браузер иначе начинает тащить саму подложку, и событие отпускания
+    // теряется — точка осталась бы «прилипшей» к курсору.
+    e.preventDefault()
+    setSelected(p)
+    setDrag({ pointID: p.id, startX: e.clientX, startY: e.clientY })
+    setDragPos({ id: p.id, x: p.x, y: p.y })
+  }
+
+  /** Начало панорамирования плана. */
+  const startPan = (e: React.MouseEvent) => {
+    // Панорамируем только фон или саму подложку: клик по точке уже
+    // перехвачен её обработчиком, и сюда не доходит.
+    if (placing) return
+    const el = scrollRef.current
+    if (!el) return
+    setDrag({ startX: e.clientX, startY: e.clientY })
+  }
+
+  /**
+   * Завершение перетаскивания: сохраняем позицию точки.
+   *
+   * Объявлено до эффекта, который его вызывает: `const` не поднимается
+   * наверх, и обращение к функции из замыкания эффекта, объявленной ниже,
+   * роняло бы обработчик с ошибкой обращения до инициализации.
+   */
+  const endDrag = async () => {
+    if (!drag) return
+    const pointID = drag.pointID
+    const pos = dragPos
+    setDrag(null)
+
+    // Позицию сохраняем только у точки и только если она изменилась:
+    // панорамирование и клик без движения не должны слать запрос.
+    if (!pointID || !pos) return
+
+    const original = (plan?.points || []).find((p) => p.id === pointID)
+    if (original && original.x === pos.x && original.y === pos.y) {
+      setDragPos(null)
+      return
+    }
+
+    try {
+      await acsAPI.savePlanPoint(planID, {
+        kind: original?.kind || 'camera',
+        device_id: original?.device_id,
+        x: Math.round(pos.x * 1000) / 1000,
+        y: Math.round(pos.y * 1000) / 1000,
+        rotation: original?.rotation,
+        label: original?.label,
+      })
+      toast.success('Положение сохранено')
+      setDragPos(null)
+      refetch()
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || 'Не удалось сохранить положение')
+      // Возвращаем точку на прежнее место: иначе на экране она осталась бы
+      // там, куда её перетащили, а на сервере — на старом месте, и после
+      // обновления страницы она бы «прыгнула» назад.
+      setDragPos(null)
+    }
+  }
+
+  /**
+   * Движение и отпускание мыши при перетаскивании.
+   *
+   * Слушаем на уровне окна, а не полотна: при быстром движении курсор
+   * выходит за пределы плана, и обработчик полотна перестал бы получать
+   * события — перетаскивание «залипло» бы на полпути.
+   *
+   * В зависимостях только `drag`: позиция точки читается из состояния
+   * через замыкание эффекта, и добавление её сюда пересоздавало бы
+   * обработчики на каждом движении мыши.
+   */
+  useEffect(() => {
+    if (!drag) return
+
+    const onMove = (e: MouseEvent) => {
+      if (drag.pointID) {
+        const coords = toPlanCoords(e.clientX, e.clientY)
+        if (!coords) return
+        // Ограничиваем долями: точка за пределами подложки не видна,
+        // и оператор решит, что она потерялась.
+        setDragPos({
+          id: drag.pointID,
+          // Координаты округляем до тысячных: точнее пиксель на экране
+          // всё равно не различить, а запрос получается короче.
+          x: Math.round(Math.min(1, Math.max(0, coords.x)) * 1000) / 1000,
+          y: Math.round(Math.min(1, Math.max(0, coords.y)) * 1000) / 1000,
+        })
+        return
+      }
+
+      // Панорамирование: сдвигаем прокрутку на движение мыши.
+      const el = scrollRef.current
+      if (!el) return
+      el.scrollLeft -= e.clientX - drag.startX
+      el.scrollTop -= e.clientY - drag.startY
+      // Начало отсчёта двигаем за курсором: иначе при следующем движении
+      // сдвиг посчитался бы от старой точки и прокрутка «прыгнула» бы.
+      drag.startX = e.clientX
+      drag.startY = e.clientY
+    }
+
+    const onUp = () => { void endDrag() }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [drag, plan])
+
   if (loading) return <div className="spinner" />
   if (!plan) return <div className="card">План не найден</div>
 
@@ -461,12 +654,27 @@ function PlanCanvas({ planID, onPlanChanged }: {
         </span>
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-          <button className="btn btn-outline btn-sm" onClick={() => setZoom((z) => Math.max(0.4, z - 0.2))} title="Уменьшить">
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => setZoom((z) => Math.max(0.3, z / 1.25))}
+            title="Уменьшить (или колесо мыши)"
+          >
             <ZoomOut size={13} />
           </button>
           <span style={{ fontSize: 11, width: 34, textAlign: 'center' }}>{Math.round(zoom * 100)}%</span>
-          <button className="btn btn-outline btn-sm" onClick={() => setZoom((z) => Math.min(3, z + 0.2))} title="Увеличить">
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => setZoom((z) => Math.min(4, z * 1.25))}
+            title="Увеличить (или колесо мыши)"
+          >
             <ZoomIn size={13} />
+          </button>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => setZoom(1)}
+            title="Сбросить масштаб"
+          >
+            <Maximize2 size={13} />
           </button>
         </div>
       </div>
@@ -513,9 +721,26 @@ function PlanCanvas({ planID, onPlanChanged }: {
         </div>
       )}
 
+      {/* Подсказка по управлению. Без неё про колесо и перетаскивание
+          никто не догадается: значок выглядит как картинка, а не как
+          элемент, который можно двигать. */}
+      <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8 }}>
+        Колесо мыши — масштаб · перетаскивание фона — сдвиг плана ·
+        перетаскивание значка — переместить устройство
+      </div>
+
       {/* Полотно. Прокрутка по обеим осям: при увеличении план не влезает
           в ширину, и без прокрутки часть схемы стала бы недоступна. */}
-      <div style={{ overflow: 'auto', maxHeight: '70vh', background: 'rgba(0,0,0,0.2)', borderRadius: 6 }}>
+      <div
+        ref={scrollRef}
+        style={{
+          overflow: 'auto', maxHeight: '70vh', background: 'rgba(0,0,0,0.2)', borderRadius: 6,
+          cursor: drag && !drag.pointID ? 'grabbing' : 'default',
+        }}
+        // Панорамирование начинается с нажатия на фон. Точка перехватывает
+        // своё нажатие и останавливает всплытие, поэтому сюда не доходит.
+        onMouseDown={startPan}
+      >
         <div
           style={{ position: 'relative', width: plan.image_path ? `${zoom * 100}%` : '100%', minWidth: 300 }}
           onClick={(e) => placing && placePoint(e, placing)}
@@ -525,7 +750,13 @@ function PlanCanvas({ planID, onPlanChanged }: {
               ref={imgRef}
               src={acsAPI.planImageURL(planID)}
               alt={plan.name}
-              style={{ width: '100%', display: 'block', cursor: placing ? 'crosshair' : 'default' }}
+              style={{
+                width: '100%', display: 'block',
+                cursor: placing ? 'crosshair' : 'default',
+                // Подложку не выделяем: при перетаскивании фона выделение
+                // текста и картинок мешает и выглядит как сбой.
+                userSelect: 'none',
+              }}
               draggable={false}
             />
           ) : (
@@ -541,15 +772,22 @@ function PlanCanvas({ planID, onPlanChanged }: {
           )}
 
           {/* Точки устройств. Позиционируем в процентах от полотна: так
-              они остаются на своих местах при любом размере окна. */}
-          {(plan.points || []).map((p) => (
-            <PointMarker
-              key={p.id}
-              point={p}
-              selected={selected?.id === p.id}
-              onClick={(e) => { e.stopPropagation(); setSelected(p) }}
-            />
-          ))}
+              они остаются на своих местах при любом размере окна.
+              Во время перетаскивания показываем позицию курсора, а не
+              данные сервера: иначе значок отставал бы на время запроса. */}
+          {(plan.points || []).map((p) => {
+            const shown = dragPos?.id === p.id ? { ...p, x: dragPos.x, y: dragPos.y } : p
+            return (
+              <PointMarker
+                key={p.id}
+                point={shown}
+                selected={selected?.id === p.id}
+                dragging={drag?.pointID === p.id}
+                onClick={(e) => { e.stopPropagation(); setSelected(p) }}
+                onDragStart={startPointDrag}
+              />
+            )
+          })}
         </div>
       </div>
 
@@ -588,11 +826,18 @@ function KindIcon({ kind, size = 14 }: { kind: ACSPlanPointKind; size?: number }
  * Цвет показывает состояние: зелёный — работает, красный — нет связи,
  * серый пунктир — устройство удалено. Форма значка различает вид
  * устройства: на схеме это быстрее, чем читать подписи.
+ *
+ * Значок можно перетаскивать: расстановка на плане делается на глаз,
+ * и попасть точно в нужное место с первого клика нереально. Позиция
+ * сохраняется по отпусканию кнопки, а не при каждом движении: иначе
+ * на каждое перемещение мыши уходил бы запрос к серверу.
  */
-function PointMarker({ point, selected, onClick }: {
+function PointMarker({ point, selected, dragging, onClick, onDragStart }: {
   point: ACSPlanPoint
   selected: boolean
+  dragging: boolean
   onClick: (e: React.MouseEvent) => void
+  onDragStart: (e: React.MouseEvent, p: ACSPlanPoint) => void
 }) {
   const label = point.label || point.device_name || PLAN_POINT_TITLES[point.kind]
 
@@ -604,7 +849,13 @@ function PointMarker({ point, selected, onClick }: {
   return (
     <div
       onClick={onClick}
-      title={`${label}\n${point.status_text || ''}`}
+      onMouseDown={(e) => {
+        // Только левой кнопкой: перетаскивание правой конфликтовало бы
+        // с контекстным меню браузера.
+        if (e.button !== 0) return
+        onDragStart(e, point)
+      }}
+      title={`${label}\n${point.status_text || ''}\n\nПеретащите, чтобы переместить`}
       style={{
         position: 'absolute',
         left: `${point.x * 100}%`,
@@ -614,11 +865,16 @@ function PointMarker({ point, selected, onClick }: {
         // процент от контейнера здесь не подошёл бы — контейнер нулевой.
         marginLeft: -14,
         marginTop: -14,
-        cursor: 'pointer',
+        cursor: dragging ? 'grabbing' : 'grab',
         // Значок должен перехватывать клики: иначе нажать на него нельзя,
         // и оператор не поймёт, почему карточка устройства не открывается.
         // zIndex выше полотна, чтобы значок не «провалился» под подложку.
-        zIndex: 10,
+        // При перетаскивании поднимаем ещё выше: он должен быть поверх
+        // остальных значков, иначе уйдёт под соседний.
+        zIndex: dragging ? 100 : 10,
+        // Во время перетаскивания не выделяем текст подписи: это мешает
+        // и выглядит как сбой.
+        userSelect: 'none',
       }}
     >
       <div
@@ -628,7 +884,9 @@ function PointMarker({ point, selected, onClick }: {
           background: 'rgba(20,20,20,0.85)',
           border: `2px solid ${color}`,
           color,
-          boxShadow: selected ? `0 0 0 3px rgba(74,144,217,0.5)` : '0 1px 4px rgba(0,0,0,0.5)',
+          boxShadow: dragging
+            ? `0 0 0 4px rgba(74,144,217,0.6), 0 4px 12px rgba(0,0,0,0.6)`
+            : selected ? `0 0 0 3px rgba(74,144,217,0.5)` : '0 1px 4px rgba(0,0,0,0.5)',
           transform: `rotate(${point.rotation}deg)`,
         }}
       >
