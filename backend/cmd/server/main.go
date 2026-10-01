@@ -189,6 +189,16 @@ func main() {
 	acsPlanSvc := service.NewACSPlanService(acsPlanRepo, storageSvc, cameraRepo, acsRepo, acsCardRepo).
 		WithACS(acsSvc)
 
+	// Коммутаторы: питание портов и мониторинг.
+	//
+	// Опрашиваются фоново, а не по запросу страницы: состояние портов нужно
+	// и без открытого интерфейса — по нему видно, пропала камера вместе с
+	// питанием или осталась без связи. Ответ устройства занимает секунды,
+	// и запрашивать его при каждом открытии страницы означало бы держать
+	// оператора в ожидании.
+	switchRepo := postgres.NewSwitchRepo(db)
+	switchSvc := service.NewSwitchService(switchRepo, "", 0)
+
 	// Распознавание лиц и автомобильных номеров: справочники сопоставляются
 	// с событиями, результат попадает в detection_events и в триггер записи.
 	recognitionRepo := postgres.NewRecognitionRepo(db)
@@ -441,6 +451,7 @@ func main() {
 		ACSAccessSvc:       acsAccessSvc,
 		CardCapture:        cardCapture,
 		ACSPlanSvc:         acsPlanSvc,
+		SwitchSvc:          switchSvc,
 		FirmwareSvc:        firmwareSvc,
 		UserRepo:           userRepo,
 		JWTSecret:          cfg.JWTSecret,
@@ -481,6 +492,16 @@ func main() {
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	// Периодический опрос коммутаторов.
+	//
+	// Работает всегда, а не только при открытой странице: по состоянию
+	// портов видно, пропала камера вместе с питанием или осталась без
+	// связи, — и это нужно в момент разбора инцидента, когда страницу ещё
+	// никто не открыл.
+	pollCtx, stopPolling := context.WithCancel(context.Background())
+	defer stopPolling()
+	go switchSvc.RunPolling(pollCtx)
 
 	go func() {
 		log.Info().Int("port", cfg.Port).Msg("server starting")

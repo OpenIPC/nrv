@@ -13,6 +13,7 @@ import CameraConfigPanel from '../components/CameraConfigPanel'
 import CameraImageProfilePanel from '../components/CameraImageProfilePanel'
 import OpenIPCOnly from '../components/OpenIPCOnly'
 import VendorBadge from '../components/VendorBadge'
+import CameraNetworkCard from '../components/CameraNetworkCard'
 import {
   ArrowLeft, RefreshCw, Wifi, WifiOff, Radio, Info,
   Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, Loader2, Crosshair, Volume2, Sliders,
@@ -577,6 +578,11 @@ export default function CameraDetailPage() {
             <InfoRow label="Обновлена" value={new Date(camera.updated_at).toLocaleDateString('ru')} />
             <InfoRow label="Объект" value={camera.site_id?.slice(0, 8) || '—'} />
           </div>
+
+          {/* Подключение к коммутатору: видно питание и связь на порту.
+              Стоит рядом со статусом, потому что отвечает на тот же вопрос
+              «камера работает?», но со стороны сети, а не устройства. */}
+          <CameraNetworkCard cameraID={camera.id} cameraOnline={isOnline} />
 
           {/* Действия */}
           <div className="card">

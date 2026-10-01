@@ -807,6 +807,141 @@ export interface ACSPlanPointInput {
   label?: string
 }
 
+// --- Коммутаторы PoE ---
+
+/**
+ * Действие над портом коммутатора.
+ *
+ * Значения совпадают с тем, что принимает сервер. Строковый набор, а не
+ * числовые коды устройства: клиент не должен уметь формировать опкоды —
+ * среди них есть опасные операции, и собирать их в браузере нельзя.
+ */
+export type PortAction =
+  | 'power_on'
+  | 'power_off'
+  | 'power_cycle'
+  | 'extend_on'
+  | 'extend_off'
+
+/** Названия действий для интерфейса. */
+export const PORT_ACTION_TITLES: Record<PortAction, string> = {
+  power_on: 'Включить питание',
+  power_off: 'Выключить питание',
+  power_cycle: 'Перезагрузить питанием',
+  extend_on: 'Режим удлинения',
+  extend_off: 'Обычный режим',
+}
+
+export interface SwitchPort {
+  id: string
+  switch_id: string
+  port_number: number
+  link_up: boolean
+  speed_mbps: number
+  poe_enabled: boolean
+  poe_watts: number
+  /**
+   * Порт умеет питать. У транзитных портов (uplink) — false: питание
+   * через них не отдаётся, и команда на них бессмысленна.
+   */
+  poe_capable: boolean
+  /**
+   * Через порт идёт восходящий канал. Питание на таком порту выключать
+   * нельзя: вместе с ним от сети отключится весь коммутатор — и связь с
+   * сервером, то есть возможность включить его обратно.
+   */
+  is_uplink: boolean
+  /** Можно ли управлять питанием. Считает сервер, чтобы правило не дублировалось. */
+  can_control_power: boolean
+  /** Почему управление недоступно — показывается вместо неактивной кнопки. */
+  power_control_note?: string
+  extend_mode: boolean
+  isolated: boolean
+  tx_mb: number
+  rx_mb: number
+  last_power_cycle_at?: string
+  updated_at: string
+  /** Камера, привязанная к порту. Пусто, если порт занят не камерой. */
+  camera_id?: string
+  camera_name?: string
+  camera_online?: boolean
+}
+
+export interface SwitchDevice {
+  id: string
+  sn: string
+  mac: string
+  ip: string
+  model: string
+  firmware: string
+  name: string
+  location: string
+  port_count: number
+  /**
+   * Модель нумерует порты в ответе в обратном порядке.
+   *
+   * Показывается в настройках и меняется вручную: правило определения
+   * порядка выведено по моделям парка и на новой модели может не
+   * сработать. Ошибка здесь означает перезагрузку не той камеры.
+   */
+  ports_reversed: boolean
+  online: boolean
+  last_seen_at?: string
+  /** Текст последней ошибки связи. Пусто, если связь есть. */
+  last_error: string
+  voltage: number
+  temperature: number
+  ports?: SwitchPort[]
+  camera_count: number
+  /** Задан ли пароль. Значение пароля сервер не отдаёт. */
+  has_password: boolean
+  created_at: string
+  updated_at: string
+}
+
+/** Коммутатор, найденный поиском в сети. */
+export interface SwitchFound {
+  sn: string
+  ip: string
+  mac: string
+  model: string
+  name: string
+  /** Устройство уже добавлено в систему. */
+  added: boolean
+  switch_id?: string
+}
+
+/** Подключение камеры к порту коммутатора. */
+export interface CameraPortLink {
+  switch_id: string
+  switch_name: string
+  switch_sn: string
+  switch_ip: string
+  switch_model: string
+  port_number: number
+  link_up: boolean
+  poe_enabled: boolean
+  poe_watts: number
+  poe_capable: boolean
+  speed_mbps: number
+  switch_online: boolean
+}
+
+/** Запись журнала действий с портами. */
+export interface SwitchPortEvent {
+  id: string
+  switch_id: string
+  switch_sn: string
+  switch_name?: string
+  port_number: number
+  camera_name?: string
+  action: PortAction
+  result: string
+  message: string
+  actor: string
+  created_at: string
+}
+
 // ACSCard — карта доступа. Пара facility+card — это код Wiegand,
 // именно она идентифицирует карту на контроллере.
 export interface ACSCard {
@@ -1454,6 +1589,70 @@ export interface TimelineItem {
 export interface TimelineData {
   date: string
   items: TimelineItem[]
+}
+
+// --- Коммутаторы PoE ---
+
+export const switchAPI = {
+  list: () => api.get<SwitchDevice[]>('/switches'),
+  get: (id: string) => api.get<SwitchDevice>(`/switches/${id}`),
+
+  /**
+   * Поиск коммутаторов в сети.
+   *
+   * Отдельный вызов, а не часть списка: поиск рассылает широковещательный
+   * запрос и ждёт ответа устройств несколько секунд. Отправлять его при
+   * каждом открытии страницы означало бы держать оператора в ожидании.
+   *
+   * Таймаут увеличен: сервер ждёт ответа до трёх секунд, и стандартных
+   * пятнадцати хватает, но запас нужен на медленной сети.
+   */
+  search: () => api.get<SwitchFound[]>('/switches/search', { timeout: 30000 }),
+
+  create: (data: { sn: string; name?: string; location?: string; password?: string }) =>
+    api.post<SwitchDevice>('/switches', data),
+
+  /**
+   * Изменение настроек коммутатора.
+   *
+   * Поле password: undefined — не менять, пустая строка — снять пароль.
+   * Различие существенно: сохранение формы без касания поля иначе
+   * стирало бы пароль у закрытых моделей, и коммутатор «пропал» бы из
+   * системы до повторного ввода.
+   */
+  update: (
+    id: string,
+    data: { name: string; location: string; ports_reversed?: boolean; password?: string }
+  ) => api.put<SwitchDevice>(`/switches/${id}`, data),
+
+  remove: (id: string) => api.delete(`/switches/${id}`),
+
+  /** Внеочередной опрос: ответ приходит и при неудаче, с описанием причины. */
+  poll: (id: string) =>
+    api.post<{ ok: boolean; error?: string; switch?: SwitchDevice }>(`/switches/${id}/poll`),
+
+  /** Действие над портом: перезагрузка питанием, включение и выключение PoE. */
+  portAction: (id: string, port: number, action: PortAction) =>
+    api.post<SwitchDevice>(`/switches/${id}/ports/${port}/action`, { action }),
+
+  events: (switchID?: string, limit = 100) =>
+    api.get<SwitchPortEvent[]>('/switches/events', {
+      params: { ...(switchID ? { id: switchID } : {}), limit },
+    }),
+
+  /** Привязка камеры к порту. Порт должен существовать — сервер это проверяет. */
+  bind: (cameraID: string, switchID: string, port: number) =>
+    api.post<{ ok: boolean }>('/switches/bind', {
+      camera_id: cameraID,
+      switch_id: switchID,
+      port,
+    }),
+
+  unbind: (cameraID: string) => api.delete(`/cameras/${cameraID}/switch-link`),
+
+  /** Подключение камеры. null, если привязки нет — это не ошибка. */
+  cameraLink: (cameraID: string) =>
+    api.get<CameraPortLink | null>(`/cameras/${cameraID}/switch-link`),
 }
 
 export const acsAPI = {

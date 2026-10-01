@@ -3,7 +3,7 @@ import { useAuth } from '../hooks/useApi'
 import {
   LayoutDashboard, Video, AlertTriangle, HardDrive,
   Shield, LogOut, Camera, Search, Settings, ScanFace, Volume2, Share2,
-  LayoutGrid, Bell, Server, ScrollText, Activity, Users, Map
+  LayoutGrid, Bell, Server, ScrollText, Activity, Users, Map, EthernetPort
 } from 'lucide-react'
 
 const navItems = [
@@ -27,6 +27,10 @@ const navItems = [
   // Планы помещений: схемы этажей с расстановкой устройств. Отдельно от
   // СКУД: там права и доступы, здесь место и состояние оборудования.
   { to: '/plans', icon: Map, label: 'Планы' },
+  // Коммутаторы рядом с планами: там видно, где стоит устройство, здесь —
+  // есть ли у него питание и связь. Вместе они отвечают на вопрос «почему
+  // камера пропала» без похода к потолку.
+  { to: '/switches', icon: EthernetPort, label: 'Коммутаторы' },
   // Доступ рядом со СКУД, но отдельно: там железо и события, здесь люди,
   // группы и права. Оператору, который выдаёт пропуск, не нужно
   // разбираться в настройках контроллеров.

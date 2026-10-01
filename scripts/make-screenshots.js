@@ -207,7 +207,81 @@ const SHOTS = [
       await maskSecrets(page)
     },
   },
+  {
+    file: '19-switches.png',
+    title: 'Коммутаторы: порты и питание PoE',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/switches`, { waitUntil: 'domcontentloaded' })
+      // Ждём опроса: состояние портов приходит отдельным запросом, и до
+      // его завершения таблица пуста.
+      await page.waitForTimeout(5000)
+      // Открываем коммутатор с восемью PoE-портами: на нём видно и
+      // питание камер, и транзитные порты, которые нельзя выключать.
+      const eight = page.locator('button', { hasText: 'PS208' }).first()
+      if (await eight.count()) {
+        await eight.click()
+        await page.waitForTimeout(4000)
+      }
+    },
+  },
+  {
+    file: '20-camera-network.png',
+    title: 'Карточка камеры: подключение к коммутатору',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/cameras/${DEMO_CAMERA}`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(9000)
+      // Прокручиваем к блоку подключения: он в боковой колонке и без
+      // прокрутки не попадает в кадр.
+      await page.evaluate(() => {
+        const el = [...document.querySelectorAll('h3')]
+          .find((e) => e.textContent.includes('Подключение'))
+        if (el) el.scrollIntoView({ block: 'center' })
+      })
+      await page.waitForTimeout(1500)
+    },
+  },
 ]
+
+/**
+ * Закрывает учётные данные в адресах потоков.
+ *
+ * Адрес RTSP вида rtsp://admin:пароль@192.168.1.11/... показывается в
+ * карточке камеры как есть, и он попадал на снимки, которые уходят в
+ * публичный репозиторий. Пароль камеры в открытом виде в документации —
+ * это готовый доступ к потоку для любого, кто её читает.
+ *
+ * Затираем только пару логин:пароль, оставляя схему и адрес: по снимку
+ * должно оставаться понятно, что это адрес потока, иначе он перестанет
+ * что-либо объяснять.
+ *
+ * Функция вызывается для каждого снимка без исключения — так надёжнее,
+ * чем полагаться на то, что автор новой записи вспомнит о маскировке.
+ */
+async function maskCredentials(page) {
+  await page.evaluate(() => {
+    // Логин и пароль между «//» и «@». Слэши и пробелы внутри не берём:
+    // иначе под правило попал бы весь остаток строки до случайной собаки.
+    const re = /(\/\/)[^\s/@:]+:[^\s/@]+@/g
+
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    const nodes = []
+    while (walker.nextNode()) {
+      const n = walker.currentNode
+      const v = n.nodeValue || ''
+      if (v.includes('@') && v.includes('//')) nodes.push(n)
+    }
+    for (const n of nodes) {
+      n.nodeValue = n.nodeValue.replace(re, '$1***:***@')
+    }
+
+    // Поля ввода: адрес может быть открыт в форме редактирования.
+    document.querySelectorAll('input, textarea').forEach((el) => {
+      if (el.value && el.value.includes('@') && el.value.includes('//')) {
+        el.value = el.value.replace(re, '$1***:***@')
+      }
+    })
+  })
+}
 
 /**
  * Закрывает токены и адреса чатов на снимке.
@@ -276,6 +350,10 @@ async function main() {
   for (const shot of SHOTS) {
     try {
       await shot.prepare(page)
+      // Маскировка паролей в адресах потоков — для каждого снимка, без
+      // исключений: снимки публикуются, и одна забытая запись открыла бы
+      // доступ к камере.
+      await maskCredentials(page)
       await page.screenshot({
         path: path.join(OUT, shot.file),
         fullPage: false,

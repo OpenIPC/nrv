@@ -32,8 +32,14 @@ type RouterConfig struct {
 	// отвечает, а на карте номер не напечатан.
 	CardCapture *service.CardCaptureManager
 	// ACSPlanSvc — планы помещений: схемы этажей с расстановкой устройств.
-	ACSPlanSvc   *service.ACSPlanService
-	FirmwareSvc  *service.FirmwareService
+	ACSPlanSvc *service.ACSPlanService
+	// SwitchSvc — PoE-коммутаторы: питание портов и мониторинг.
+	//
+	// Отдельный сервис, а не часть камер: коммутатор живёт сам по себе
+	// и обслуживает не только камеры, а питание порта — действие над
+	// физическим устройством, а не над записью в базе.
+	SwitchSvc   *service.SwitchService
+	FirmwareSvc *service.FirmwareService
 	UserRepo     *postgres.UserRepo
 	JWTSecret    string
 	WGManager    *tunnel.WireGuardManager
@@ -118,6 +124,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// Планы помещений: схемы этажей. Отдельный обработчик, потому что
 	// предмет другой — не «кто куда может пройти», а «где это стоит».
 	acsPlanH := handlers.NewACSPlanHandler(cfg.ACSPlanSvc, tokenAuth)
+	// Коммутаторы: питание портов и мониторинг.
+	switchH := handlers.NewSwitchHandler(cfg.SwitchSvc)
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
 	statsH := handlers.NewStatsHandler(cfg.DB)
@@ -499,6 +507,36 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/acs/plans/{id}/image", acsPlanH.UploadPlanImage)
 			r.Post("/acs/plans/{id}/points", acsPlanH.SavePoint)
 			r.Delete("/acs/plans/{id}/points/{pointID}", acsPlanH.DeletePoint)
+
+			// Коммутаторы: питание портов и мониторинг.
+			//
+			// Отдельно от камер: коммутатор обслуживает не только камеры,
+			// а состояние порта (линк, потребление) — это сведения о
+			// физическом подключении, которых у самой камеры нет.
+			r.Get("/switches", switchH.List)
+			r.Post("/switches", switchH.Create)
+			// Поиск рассылает широковещательный запрос, поэтому вынесен
+			// отдельно от списка: список читается из базы мгновенно, а
+			// поиск ждёт ответа устройств несколько секунд.
+			r.Get("/switches/search", switchH.Search)
+			r.Get("/switches/events", switchH.Events)
+			r.Get("/switches/{id}", switchH.Get)
+			r.Put("/switches/{id}", switchH.Update)
+			r.Delete("/switches/{id}", switchH.Delete)
+			r.Post("/switches/{id}/poll", switchH.Poll)
+			r.Get("/switches/{id}/events", switchH.Events)
+			// Действие над портом: перезагрузка питанием, включение и
+			// выключение PoE. Действие приходит строкой, а не числовым
+			// кодом устройства — клиент не должен уметь формировать
+			// опкоды, среди которых есть опасные операции.
+			r.Post("/switches/{id}/ports/{port}/action", switchH.PortAction)
+
+			// Привязка камеры к порту коммутатора. Отдельные маршруты, а
+			// не поле в карточке камеры: привязка правится и со страницы
+			// коммутатора, где камеры распределяют по портам.
+			r.Post("/switches/bind", switchH.BindCamera)
+			r.Get("/cameras/{cameraID}/switch-link", switchH.CameraLink)
+			r.Delete("/cameras/{cameraID}/switch-link", switchH.UnbindCamera)
 
 			// Прошивки контроллеров СКУД: образы на сервере и OTA-обновление.
 			r.Get("/acs/firmwares", fwH.ListFirmwares)
