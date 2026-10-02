@@ -525,6 +525,16 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Delete("/switches/{id}", switchH.Delete)
 			r.Post("/switches/{id}/poll", switchH.Poll)
 			r.Get("/switches/{id}/events", switchH.Events)
+			// Таблица MAC-адресов: какие устройства видит коммутатор и на
+			// каких портах. Отдельно от карточки, потому что список может
+			// быть длинным, а нужен не всегда.
+			r.Get("/switches/{id}/mac", switchH.MacEntries)
+			// Привязки по таблице MAC: сервер сам решает, какие камеры
+			// можно привязать, и не доверяет список клиенту. Между показом
+			// предложений и применением таблица могла измениться, а
+			// неверная привязка приводит к перезагрузке не той камеры.
+			r.Get("/switches/{id}/bind-proposals", switchH.BindProposals)
+			r.Post("/switches/{id}/bind-proposals/apply", switchH.ApplyBindings)
 			// Действие над портом: перезагрузка питанием, включение и
 			// выключение PoE. Действие приходит строкой, а не числовым
 			// кодом устройства — клиент не должен уметь формировать

@@ -209,19 +209,27 @@ const SHOTS = [
   },
   {
     file: '19-switches.png',
-    title: 'Коммутаторы: порты и питание PoE',
+    title: 'Коммутаторы: порты, питание PoE и устройства',
     prepare: async (page) => {
       await page.goto(`${BASE}/switches`, { waitUntil: 'domcontentloaded' })
       // Ждём опроса: состояние портов приходит отдельным запросом, и до
       // его завершения таблица пуста.
       await page.waitForTimeout(5000)
-      // Открываем коммутатор с восемью PoE-портами: на нём видно и
-      // питание камер, и транзитные порты, которые нельзя выключать.
-      const eight = page.locator('button', { hasText: 'PS208' }).first()
-      if (await eight.count()) {
-        await eight.click()
+      // Открываем коммутатор, который сообщает порты в таблице MAC: на нём
+      // видно и питание, и определение привязки камер. На части моделей
+      // прошивка порт не сообщает, и раздел выглядит иначе.
+      const sw = page.locator('button', { hasText: 'GPS204V3' }).first()
+      if (await sw.count()) {
+        await sw.click()
         await page.waitForTimeout(4000)
       }
+      // Прокручиваем к таблице устройств: она ниже списка портов.
+      await page.evaluate(() => {
+        const el = [...document.querySelectorAll('h3')]
+          .find((e) => e.textContent.includes('Устройства на портах'))
+        if (el) el.scrollIntoView({ block: 'center' })
+      })
+      await page.waitForTimeout(1200)
     },
   },
   {

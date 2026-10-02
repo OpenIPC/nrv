@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import {
-  PORT_ACTION_TITLES, PortAction, SwitchDevice, SwitchFound, SwitchPort,
-  switchAPI,
+  BindProposal, MacTableState, PORT_ACTION_TITLES, PortAction, SwitchDevice,
+  SwitchFound, SwitchMacEntry, SwitchPort, switchAPI,
 } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import {
-  AlertTriangle, Cable, Download, EthernetPort, Gauge, Plug, Plus,
+  AlertTriangle, Cable, Download, EthernetPort, Gauge, Link2, Plug, Plus,
   RefreshCw, RotateCcw, Search, Settings, Thermometer, Trash2, X, Zap, Camera,
 } from 'lucide-react'
 
@@ -341,6 +341,8 @@ function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
         )}
       </div>
 
+      <MacTableCard device={current} onBound={() => { refetch(); onRefresh() }} />
+
       {confirming && (
         <ConfirmAction
           port={confirming.port}
@@ -533,6 +535,272 @@ function PortRow({ port, busy, onAction }: {
 const tdStyle: React.CSSProperties = {
   padding: '8px',
   verticalAlign: 'middle',
+}
+
+// ---------------------------------------------------------------------------
+// Таблица MAC
+// ---------------------------------------------------------------------------
+
+/**
+ * Таблица MAC-адресов: какие устройства видит коммутатор и на каких портах.
+ *
+ * Смысл раздела — убрать ручную привязку камер там, где это возможно, и
+ * честно сказать, где невозможно. Коммутатор сам сообщает, к какому порту
+ * подключён адрес, поэтому привязку можно определить по адресу камеры.
+ *
+ * Но так умеют не все модели: часть прошивок отдаёт таблицу без портов.
+ * Тогда раздел показывает адреса и объясняет, что привязки придётся задать
+ * руками — неактивная кнопка без причины заставила бы искать её наугад.
+ */
+function MacTableCard({ device, onBound }: {
+  device: SwitchDevice
+  onBound: () => void
+}) {
+  const [proposals, setProposals] = useState<BindProposal[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const toast = useToast()
+
+  const entries = device.mac_entries || []
+  const state: MacTableState = device.mac_table_state
+
+  const findProposals = async () => {
+    setLoading(true)
+    try {
+      const res = await switchAPI.bindProposals(device.id)
+      setProposals(res.data)
+    } catch (e: any) {
+      toast.error(e.response?.data?.error || 'Не удалось получить предложения')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const apply = async () => {
+    setApplying(true)
+    try {
+      const res = await switchAPI.applyBindings(device.id)
+      toast.success(`Привязано камер: ${res.data.applied}`)
+      setProposals(null)
+      onBound()
+    } catch (e: any) {
+      toast.error(e.response?.data?.error || 'Не удалось применить привязки')
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  // Модель не поддерживает команду: показывать нечего, кроме объяснения.
+  if (state === 'unsupported') {
+    return (
+      <div className="card" style={{ marginTop: 16 }}>
+        <h3 style={{ margin: '0 0 8px', fontSize: 15 }}>Устройства на портах</h3>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0 }}>
+          {device.mac_table_note || 'Модель не поддерживает чтение таблицы MAC.'}{' '}
+          Какие устройства подключены к портам, эта модель сообщить не может —
+          привязку камер задайте вручную в их карточках.
+        </p>
+      </div>
+    )
+  }
+
+  const withPort = entries.filter((e) => e.port_number && !e.via_uplink)
+  const viaUplink = entries.filter((e) => e.via_uplink)
+  const unknown = withPort.filter((e) => !e.camera_id)
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 15 }}>Устройства на портах</h3>
+        {state === 'ok' && withPort.length > 0 && (
+          <button className="btn btn-outline btn-sm" onClick={findProposals} disabled={loading}>
+            <Link2 size={14} />
+            {loading ? 'Ищу…' : 'Определить привязки камер'}
+          </button>
+        )}
+      </div>
+
+      {state === 'no_ports' && (
+        <div style={warnBoxStyle}>
+          <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            {device.mac_table_note}. Ниже — адреса устройств на этом
+            коммутаторе, но без привязки к портам.
+          </span>
+        </div>
+      )}
+
+      {entries.length === 0 ? (
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0 }}>
+          Устройства не обнаружены. Таблица заполняется по мере появления
+          трафика и обновляется при опросе.
+        </p>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 18, marginBottom: 12, flexWrap: 'wrap' }}>
+            <SmallMetric label="Всего адресов" value={String(entries.length)} />
+            {state === 'ok' && (
+              <>
+                <SmallMetric label="На портах PoE" value={String(withPort.length)} />
+                <SmallMetric label="За транзитным портом" value={String(viaUplink.length)} />
+                {/* Неопознанные устройства — самая полезная часть: это то,
+                    чего нет в списке камер, и что стоит проверить. */}
+                <SmallMetric
+                  label="Не опознано"
+                  value={String(unknown.length)}
+                  accent={unknown.length > 0}
+                />
+              </>
+            )}
+          </div>
+
+          <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'left' }}>
+                  <th style={thStyle}>Порт</th>
+                  <th style={thStyle}>Адрес</th>
+                  <th style={thStyle}>Устройство</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((e) => (
+                  <tr key={e.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={tdStyle}>
+                      {e.port_number
+                        ? <span style={{ fontWeight: 600 }}>{e.port_number}</span>
+                        : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
+                    </td>
+                    <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: 12 }}>
+                      {formatMAC(e.mac)}
+                    </td>
+                    <td style={tdStyle}>
+                      {e.camera_id ? (
+                        <a href={`/cameras/${e.camera_id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                          {e.camera_name}
+                        </a>
+                      ) : e.via_uplink ? (
+                        <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                          за транзитным портом
+                        </span>
+                      ) : (
+                        <span style={{ color: 'var(--warning)', fontSize: 12 }}>
+                          не опознано
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {proposals && (
+        <ProposalsPanel
+          proposals={proposals}
+          applying={applying}
+          onClose={() => setProposals(null)}
+          onApply={apply}
+        />
+      )}
+    </div>
+  )
+}
+
+/** Панель найденных привязок. */
+function ProposalsPanel({ proposals, applying, onClose, onApply }: {
+  proposals: BindProposal[]
+  applying: boolean
+  onClose: () => void
+  onApply: () => void
+}) {
+  if (proposals.length === 0) {
+    return (
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 10px' }}>
+          Готовых привязок не нашлось: адреса камер либо не совпали с таблицей,
+          либо камеры подключены не к этому коммутатору. Проверьте, что у камер
+          заполнено поле MAC.
+        </p>
+        <button className="btn btn-outline btn-sm" onClick={onClose}>Понятно</button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+      <p style={{ fontSize: 13, margin: '0 0 10px' }}>
+        Найдено привязок: <strong>{proposals.length}</strong>. Привязка
+        определяется по совпадению адреса камеры с таблицей коммутатора.
+      </p>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 12 }}>
+        <thead>
+          <tr style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'left' }}>
+            <th style={thStyle}>Камера</th>
+            <th style={thStyle}>Порт</th>
+            <th style={thStyle}>Было</th>
+          </tr>
+        </thead>
+        <tbody>
+          {proposals.map((p) => (
+            <tr key={p.camera_id} style={{ borderBottom: '1px solid var(--border)' }}>
+              <td style={tdStyle}>
+                {p.camera_name}
+                {p.camera_ip ? <span style={{ color: 'var(--text-secondary)' }}> · {p.camera_ip}</span> : null}
+              </td>
+              <td style={{ ...tdStyle, fontWeight: 600 }}>{p.port_number}</td>
+              <td style={{ ...tdStyle, color: 'var(--text-secondary)' }}>
+                {/* Показываем прежнюю привязку: иначе оператор не поймёт,
+                    что привязка сдвинется, а не появится впервые. */}
+                {p.current_port
+                  ? `порт ${p.current_port}${p.current_switch ? ` (${p.current_switch})` : ''}`
+                  : 'не привязана'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button className="btn btn-outline btn-sm" onClick={onClose} disabled={applying}>
+          Отмена
+        </button>
+        <button className="btn btn-primary btn-sm" onClick={onApply} disabled={applying}>
+          <Link2 size={14} />
+          {applying ? 'Применяю…' : 'Применить'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function SmallMetric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div>
+      <div style={{ color: 'var(--text-secondary)', fontSize: 11 }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, marginTop: 1, color: accent ? 'var(--warning)' : undefined }}>
+        {value}
+      </div>
+    </div>
+  )
+}
+
+/** Форматирует адрес для показа: устройство отдаёт его без разделителей. */
+function formatMAC(mac: string) {
+  if (mac.length !== 12) return mac
+  return mac.match(/.{1,2}/g)!.join(':')
+}
+
+const warnBoxStyle: React.CSSProperties = {
+  display: 'flex', gap: 8, alignItems: 'flex-start',
+  marginBottom: 12, padding: '8px 10px',
+  background: 'rgba(255,159,10,0.12)',
+  border: '1px solid rgba(255,159,10,0.3)',
+  borderRadius: 'var(--radius-sm)',
+  color: 'var(--warning)',
+  fontSize: 12,
+  lineHeight: 1.4,
 }
 
 // ---------------------------------------------------------------------------

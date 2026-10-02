@@ -877,6 +877,8 @@ export interface SwitchDevice {
   name: string
   location: string
   port_count: number
+  /** Сколько из портов умеют питать. Нужно для пересчёта номеров портов. */
+  poe_count: number
   /**
    * Модель нумерует порты в ответе в обратном порядке.
    *
@@ -889,9 +891,20 @@ export interface SwitchDevice {
   last_seen_at?: string
   /** Текст последней ошибки связи. Пусто, если связь есть. */
   last_error: string
+  /**
+   * Умеет ли модель сообщать, какое устройство на каком порту.
+   *
+   * От этого зависит, можно ли определить привязки камер к портам
+   * автоматически, или их придётся задавать вручную.
+   */
+  mac_table_state: MacTableState
+  /** Пояснение к состоянию словами — показывается оператору. */
+  mac_table_note: string
   voltage: number
   temperature: number
   ports?: SwitchPort[]
+  /** Таблица MAC-адресов. Приходит вместе с портами. */
+  mac_entries?: SwitchMacEntry[]
   camera_count: number
   /** Задан ли пароль. Значение пароля сервер не отдаёт. */
   has_password: boolean
@@ -940,6 +953,51 @@ export interface SwitchPortEvent {
   message: string
   actor: string
   created_at: string
+}
+
+/**
+ * Способность модели сообщать порт для MAC-адреса.
+ *
+ * Различать эти случаи обязательно: где-то привязки определяются сами,
+ * где-то их задают руками, а где-то автоматика невозможна вовсе. Интерфейс
+ * должен говорить об этом прямо, а не показывать кнопку, которая ничего не
+ * сделает.
+ */
+export type MacTableState = 'unknown' | 'ok' | 'no_ports' | 'unsupported'
+
+/** Запись таблицы MAC-адресов коммутатора. */
+export interface SwitchMacEntry {
+  id: string
+  switch_id: string
+  /** Адрес без разделителей, в нижнем регистре. */
+  mac: string
+  /** Номер порта. Пусто, если модель его не сообщает. */
+  port_number?: number
+  /**
+   * Адрес виден через транзитный порт.
+   *
+   * Значит само устройство подключено не к этому коммутатору, и
+   * привязывать камеру к такому порту нельзя — её там нет.
+   */
+  via_uplink: boolean
+  updated_at: string
+  /** Камера проекта с таким же адресом. Пусто, если устройство не опознано. */
+  camera_name?: string
+  camera_id?: string
+}
+
+/** Предложение привязать камеру к порту. */
+export interface BindProposal {
+  camera_id: string
+  camera_name: string
+  camera_ip?: string
+  camera_mac: string
+  port_number: number
+  switch_id?: string
+  switch_name?: string
+  /** Текущая привязка, если она есть и отличается. */
+  current_port?: number
+  current_switch?: string
 }
 
 // ACSCard — карта доступа. Пара facility+card — это код Wiegand,
@@ -1653,6 +1711,23 @@ export const switchAPI = {
   /** Подключение камеры. null, если привязки нет — это не ошибка. */
   cameraLink: (cameraID: string) =>
     api.get<CameraPortLink | null>(`/cameras/${cameraID}/switch-link`),
+
+  /** Таблица MAC-адресов коммутатора. */
+  macEntries: (id: string) => api.get<SwitchMacEntry[]>(`/switches/${id}/mac`),
+
+  /**
+   * Предложения привязать камеры к портам по таблице MAC.
+   *
+   * Решение принимает сервер: правила отбора узкие, и держать их в браузере
+   * значило бы, что при расхождении версий оператор увидит предложение,
+   * которое сервер применить откажется.
+   */
+  bindProposals: (id: string) =>
+    api.get<BindProposal[]>(`/switches/${id}/bind-proposals`),
+
+  /** Применение предложений. Список заново собирает сервер. */
+  applyBindings: (id: string) =>
+    api.post<{ applied: number }>(`/switches/${id}/bind-proposals/apply`),
 }
 
 export const acsAPI = {

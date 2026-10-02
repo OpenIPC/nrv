@@ -25,6 +25,13 @@ type Switch struct {
 	// сохранённых строк SwitchPort, если коммутатор только что добавлен и
 	// опрос ещё не прошёл.
 	PortCount int `json:"port_count"`
+	// PoeCount — сколько из этих портов умеют питать.
+	//
+	// Нужно для перевода номера порта во внутренний индекс: устройство
+	// переворачивает нумерацию только у портов PoE, а транзитные оставляет
+	// в конце. Без этого числа разворот затронул бы и транзитные порты, и
+	// команда ушла бы не туда.
+	PoeCount int `json:"poe_count"`
 	// PortsReversed — модель нумерует порты в ответе в обратном порядке.
 	// Хранится на коммутаторе, а не вычисляется при разборе: разные
 	// прошивки одной модели могут вести себя по-разному, и возможность
@@ -46,6 +53,18 @@ type Switch struct {
 	// Показывается оператору вместо общего «офлайн».
 	LastError string `json:"last_error"`
 
+	// MacTableState — умеет ли модель сообщать, какое устройство на каком
+	// порту.
+	//
+	// Различаем не «работает / не работает», а три случая, потому что
+	// действия оператора в них разные: где-то привязки определяются
+	// автоматически, где-то их задают руками, а где-то автоматика вообще
+	// невозможна.
+	MacTableState MacTableState `json:"mac_table_state"`
+	// MacTableNote — пояснение к состоянию словами. Показывается вместо
+	// того, чтобы оператор гадал, почему кнопка неактивна.
+	MacTableNote string `json:"mac_table_note"`
+
 	// Питание и температура, разобранные из Detail. Отдаются отдельными
 	// полями, потому что нужны в карточке и на дашборде постоянно, а
 	// разбирать Detail на каждом кадре интерфейса неудобно.
@@ -54,6 +73,12 @@ type Switch struct {
 
 	// Порты с состоянием на момент последнего опроса.
 	Ports []SwitchPort `json:"ports,omitempty"`
+	// MacEntries — таблица MAC-адресов коммутатора.
+	//
+	// Подтягивается вместе с портами: она нужна той же карточке, и
+	// отдельный запрос за ней означал бы ещё один круг до сервера на
+	// каждое открытие страницы.
+	MacEntries []SwitchMacEntry `json:"mac_entries,omitempty"`
 
 	// Сколько камер привязано к коммутатору. Считается запросом и нужно,
 	// чтобы напомнить про камеры при удалении коммутатора.
@@ -209,4 +234,64 @@ type SwitchPortEvent struct {
 	Message    string       `json:"message"`
 	Actor      string       `json:"actor"`
 	CreatedAt  time.Time    `json:"created_at"`
+}
+// MacTableState — способность модели сообщать порт для MAC-адреса.
+type MacTableState string
+
+const (
+	// MacTableUnknown — коммутатор ещё не опрашивали.
+	MacTableUnknown MacTableState = "unknown"
+	// MacTableOK — порты сообщаются, привязки можно определять
+	// автоматически.
+	MacTableOK MacTableState = "ok"
+	// MacTableNoPorts — таблица читается, но порт в ней не указан.
+	//
+	// Так ведёт себя часть прошивок: маска портов заполняется одним
+	// значением для всех записей. Проверено на живом PS208GV3.
+	MacTableNoPorts MacTableState = "no_ports"
+	// MacTableUnsupported — модель не понимает команду таблицы MAC.
+	MacTableUnsupported MacTableState = "unsupported"
+)
+
+// SwitchMacEntry — запись таблицы MAC-адресов коммутатора.
+type SwitchMacEntry struct {
+	ID       uuid.UUID `json:"id"`
+	SwitchID uuid.UUID `json:"switch_id"`
+	// MAC — адрес без разделителей, в нижнем регистре.
+	MAC string `json:"mac"`
+	// PortNumber пусто, если модель не сообщила порт.
+	PortNumber *int `json:"port_number,omitempty"`
+	// ViaUplink — адрес виден через транзитный порт, то есть само
+	// устройство подключено не к этому коммутатору. Привязывать к такому
+	// порту нельзя: камеры там нет.
+	ViaUplink bool      `json:"via_uplink"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// CameraName — камера этого проекта с таким же адресом. Подставляется
+	// при чтении, чтобы было видно, опознано устройство или нет.
+	CameraName string     `json:"camera_name,omitempty"`
+	CameraID   *uuid.UUID `json:"camera_id,omitempty"`
+}
+
+// BindProposal — предложение привязать камеру к порту.
+//
+// Отдельный тип, а не пара идентификаторов: предложение несёт причину, по
+// которой оно возникло, и без неё оператор не может решить, соглашаться.
+type BindProposal struct {
+	CameraID   uuid.UUID `json:"camera_id"`
+	CameraName string    `json:"camera_name"`
+	CameraIP   string    `json:"camera_ip,omitempty"`
+	// CameraMAC — адрес камеры в том же виде, что и в таблице.
+	CameraMAC  string `json:"camera_mac"`
+	PortNumber int    `json:"port_number"`
+	// SwitchID и SwitchName заполняются, когда предложение относится к
+	// конкретному коммутатору; пусто при поиске по всем.
+	SwitchID   *uuid.UUID `json:"switch_id,omitempty"`
+	SwitchName string     `json:"switch_name,omitempty"`
+	// CurrentPort — текущая привязка камеры, если она уже есть и
+	// отличается. Показывается, чтобы оператор видел, что привязка
+	// сдвинется, а не появится впервые.
+	CurrentPort *int `json:"current_port,omitempty"`
+	// CurrentSwitch — коммутатор текущей привязки.
+	CurrentSwitch string `json:"current_switch,omitempty"`
 }

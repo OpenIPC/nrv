@@ -364,3 +364,65 @@ func (h *SwitchHandler) CameraLink(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, link)
 }
+
+// MacEntries возвращает таблицу MAC-адресов коммутатора.
+func (h *SwitchHandler) MacEntries(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный идентификатор"})
+		return
+	}
+
+	entries, err := h.svc.MacEntries(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if entries == nil {
+		entries = []domain.SwitchMacEntry{}
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// BindProposals возвращает предложения привязать камеры к портам.
+//
+// Предложения формирует сервер по таблице MAC, а не интерфейс: правила
+// отбора узкие, и держать их в браузере означало бы, что при расхождении
+// версий оператор увидит предложение, которое сервер применить откажется.
+func (h *SwitchHandler) BindProposals(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный идентификатор"})
+		return
+	}
+
+	proposals, err := h.svc.BindProposals(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if proposals == nil {
+		proposals = []domain.BindProposal{}
+	}
+	writeJSON(w, http.StatusOK, proposals)
+}
+
+// ApplyBindings применяет предложения привязки.
+//
+// Список предложений заново запрашивается сервером, а не принимается от
+// клиента: между показом и применением таблица MAC могла измениться, а
+// неверная привязка приводит к перезагрузке питания не той камеры.
+func (h *SwitchHandler) ApplyBindings(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный идентификатор"})
+		return
+	}
+
+	applied, err := h.svc.ApplyBindings(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"applied": applied})
+}

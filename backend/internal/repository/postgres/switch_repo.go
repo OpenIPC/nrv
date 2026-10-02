@@ -37,8 +37,8 @@ func NewSwitchRepo(db *pgxpool.Pool) *SwitchRepo {
 // При добавлении поля достаточно поправить здесь и в scanSwitch, иначе
 // поле легко забыть в одном из мест, и коммутатор читался бы неполным.
 const switchColumns = `id, sn, mac, ip, model, firmware, name, location,
-	port_count, ports_reversed, password, online, last_seen_at, last_error,
-	voltage, temperature, created_at, updated_at`
+	port_count, poe_count, ports_reversed, password, online, last_seen_at, last_error,
+	mac_table_state, mac_table_note, voltage, temperature, created_at, updated_at`
 
 // scanSwitch читает строку коммутатора.
 //
@@ -50,8 +50,9 @@ func scanSwitch(row interface {
 }) (domain.Switch, error) {
 	var s domain.Switch
 	err := row.Scan(&s.ID, &s.SN, &s.MAC, &s.IP, &s.Model, &s.Firmware,
-		&s.Name, &s.Location, &s.PortCount, &s.PortsReversed, &s.Password,
-		&s.Online, &s.LastSeenAt, &s.LastError, &s.Voltage, &s.Temperature,
+		&s.Name, &s.Location, &s.PortCount, &s.PoeCount, &s.PortsReversed, &s.Password,
+		&s.Online, &s.LastSeenAt, &s.LastError,
+		&s.MacTableState, &s.MacTableNote, &s.Voltage, &s.Temperature,
 		&s.CreatedAt, &s.UpdatedAt)
 	// Наличие пароля вычисляем здесь, а не в базе: булево поле в выборке
 	// было бы лишним столбцом ради одного бита, а решение лежит ровно в
@@ -133,8 +134,9 @@ func scanSwitchWithCameraCount(row interface {
 }) (domain.Switch, error) {
 	var s domain.Switch
 	err := row.Scan(&s.ID, &s.SN, &s.MAC, &s.IP, &s.Model, &s.Firmware,
-		&s.Name, &s.Location, &s.PortCount, &s.PortsReversed, &s.Password,
-		&s.Online, &s.LastSeenAt, &s.LastError, &s.Voltage, &s.Temperature,
+		&s.Name, &s.Location, &s.PortCount, &s.PoeCount, &s.PortsReversed, &s.Password,
+		&s.Online, &s.LastSeenAt, &s.LastError,
+		&s.MacTableState, &s.MacTableNote, &s.Voltage, &s.Temperature,
 		&s.CreatedAt, &s.UpdatedAt, &s.CameraCount)
 	s.HasPassword = s.Password != ""
 	return s, err
@@ -152,8 +154,9 @@ func (r *SwitchRepo) GetSwitch(ctx context.Context, id uuid.UUID) (*domain.Switc
 	var s domain.Switch
 	var detail []byte
 	err := row.Scan(&s.ID, &s.SN, &s.MAC, &s.IP, &s.Model, &s.Firmware,
-		&s.Name, &s.Location, &s.PortCount, &s.PortsReversed, &s.Password,
-		&s.Online, &s.LastSeenAt, &s.LastError, &s.Voltage, &s.Temperature,
+		&s.Name, &s.Location, &s.PortCount, &s.PoeCount, &s.PortsReversed, &s.Password,
+		&s.Online, &s.LastSeenAt, &s.LastError,
+		&s.MacTableState, &s.MacTableNote, &s.Voltage, &s.Temperature,
 		&s.CreatedAt, &s.UpdatedAt, &s.CameraCount, &detail)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSwitchNotFound
@@ -267,26 +270,31 @@ func (r *SwitchRepo) UpsertSwitch(ctx context.Context, s *domain.Switch) (uuid.U
 	var id uuid.UUID
 	err := r.db.QueryRow(ctx,
 		`INSERT INTO switches (sn, mac, ip, model, firmware, name, location, password,
-		                       port_count, ports_reversed, online, last_seen_at,
-		                       last_error, voltage, temperature, detail)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		                       port_count, poe_count, ports_reversed, online, last_seen_at,
+		                       last_error, mac_table_state, mac_table_note,
+		                       voltage, temperature, detail)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		 ON CONFLICT (sn) DO UPDATE SET
 		     mac = EXCLUDED.mac,
 		     ip = EXCLUDED.ip,
 		     model = CASE WHEN EXCLUDED.model <> '' THEN EXCLUDED.model ELSE switches.model END,
 		     firmware = EXCLUDED.firmware,
 		     port_count = EXCLUDED.port_count,
+		     poe_count = EXCLUDED.poe_count,
 		     online = EXCLUDED.online,
 		     last_seen_at = EXCLUDED.last_seen_at,
 		     last_error = EXCLUDED.last_error,
+		     mac_table_state = EXCLUDED.mac_table_state,
+		     mac_table_note = EXCLUDED.mac_table_note,
 		     voltage = EXCLUDED.voltage,
 		     temperature = EXCLUDED.temperature,
 		     detail = EXCLUDED.detail,
 		     updated_at = now()
 		 RETURNING id`,
 		s.SN, s.MAC, s.IP, s.Model, s.Firmware, s.Name, s.Location, s.Password,
-		s.PortCount, s.PortsReversed, s.Online, s.LastSeenAt,
-		s.LastError, s.Voltage, s.Temperature, detail).Scan(&id)
+		s.PortCount, s.PoeCount, s.PortsReversed, s.Online, s.LastSeenAt,
+		s.LastError, s.MacTableState, s.MacTableNote,
+		s.Voltage, s.Temperature, detail).Scan(&id)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -616,6 +624,182 @@ func (r *SwitchRepo) SetPassword(ctx context.Context, id uuid.UUID, password str
 		return ErrSwitchNotFound
 	}
 	return nil
+}
+
+// SaveMacEntries заменяет таблицу MAC-адресов коммутатора.
+//
+// Полная замена, а не дополнение: таблица MAC живая, записи в ней стареют
+// и исчезают. Если бы мы только добавляли, удалённые устройства оставались
+// бы в базе навсегда и привязки предлагались бы по ним — то есть по
+// оборудованию, которого на порту уже нет.
+//
+// Работа в транзакции: половина обновлённой таблицы хуже отсутствия
+// данных, по ней можно предложить неверную привязку.
+func (r *SwitchRepo) SaveMacEntries(ctx context.Context, switchID uuid.UUID, entries []domain.SwitchMacEntry) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM switch_mac_entries WHERE switch_id = $1`, switchID); err != nil {
+		return err
+	}
+
+	for _, e := range entries {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO switch_mac_entries (switch_id, mac, port_number, via_uplink, updated_at)
+			 VALUES ($1, $2, $3, $4, now())
+			 ON CONFLICT (switch_id, mac) DO UPDATE SET
+			     port_number = EXCLUDED.port_number,
+			     via_uplink = EXCLUDED.via_uplink,
+			     updated_at = now()`,
+			switchID, e.MAC, e.PortNumber, e.ViaUplink); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// ListMacEntries возвращает таблицу MAC-адресов коммутатора.
+//
+// Соединение с камерами нужно, чтобы сразу показать, опознано устройство
+// или нет: адрес без имени оператору ничего не говорит, а неопознанная
+// запись на порту — как раз то, что помогает найти лишнее устройство.
+func (r *SwitchRepo) ListMacEntries(ctx context.Context, switchID uuid.UUID) ([]domain.SwitchMacEntry, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT m.id, m.switch_id, m.mac, m.port_number, m.via_uplink, m.updated_at,
+		        c.name, c.id
+		   FROM switch_mac_entries m
+		   LEFT JOIN cameras c
+		          ON replace(lower(c.mac), ':', '') = m.mac
+		  WHERE m.switch_id = $1
+		  ORDER BY m.port_number NULLS LAST, m.mac`, switchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]domain.SwitchMacEntry, 0)
+	for rows.Next() {
+		var e domain.SwitchMacEntry
+		var camName *string
+		var camID *uuid.UUID
+		if err := rows.Scan(&e.ID, &e.SwitchID, &e.MAC, &e.PortNumber, &e.ViaUplink,
+			&e.UpdatedAt, &camName, &camID); err != nil {
+			return nil, err
+		}
+		if camName != nil {
+			e.CameraName = *camName
+		}
+		e.CameraID = camID
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// MacPorts возвращает для коммутатора соответствие «адрес → номер порта».
+//
+// Нужно при опросе: таблицу MAC надо связать с портами, а читать её
+// целиком ради этого незачем.
+func (r *SwitchRepo) MacPorts(ctx context.Context, switchID uuid.UUID) (map[string]int, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT mac, port_number FROM switch_mac_entries
+		  WHERE switch_id = $1 AND port_number IS NOT NULL`, switchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]int{}
+	for rows.Next() {
+		var mac string
+		var port int
+		if err := rows.Scan(&mac, &port); err != nil {
+			return nil, err
+		}
+		out[mac] = port
+	}
+	return out, rows.Err()
+}
+
+// SwitchIDByCamera возвращает коммутатор, к которому привязана камера.
+func (r *SwitchRepo) SwitchIDByCamera(ctx context.Context, cameraID uuid.UUID) (*uuid.UUID, error) {
+	var id uuid.UUID
+	err := r.db.QueryRow(ctx,
+		`SELECT switch_id FROM camera_switch_port WHERE camera_id = $1`, cameraID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &id, nil
+}
+
+// BindProposals собирает предложения привязать камеры к портам.
+//
+// Правила отбора намеренно узкие, потому что цена ошибки высока: неверная
+// привязка приведёт к тому, что оператор перезагрузит питание не той
+// камеры. Поэтому предложение делается только когда
+//
+//   - коммутатор сообщает порт для адреса, и порт один;
+//   - порт не транзитный: через него видно чужие устройства, и самой
+//     камеры там нет;
+//   - адрес найден ровно у одной камеры проекта.
+//
+// Если привязка у камеры уже есть и указывает на другой порт, предложение
+// всё равно формируется, но с указанием текущего: оператор должен видеть,
+// что привязка сдвинется.
+func (r *SwitchRepo) BindProposals(ctx context.Context, switchID uuid.UUID) ([]domain.BindProposal, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT c.id, c.name, COALESCE(c.ip, ''), m.mac, m.port_number,
+		        csp.port_number, COALESCE(s.name, ''), s.id
+		   FROM switch_mac_entries m
+		   JOIN cameras c ON replace(lower(c.mac), ':', '') = m.mac
+		   LEFT JOIN camera_switch_port csp ON csp.camera_id = c.id
+		   LEFT JOIN switches s ON s.id = csp.switch_id
+		  WHERE m.switch_id = $1
+		    AND m.port_number IS NOT NULL
+		    AND NOT m.via_uplink
+		  ORDER BY m.port_number`, switchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]domain.BindProposal, 0)
+	for rows.Next() {
+		var p domain.BindProposal
+		var curPort *int
+		var curSwitch string
+		var curSwitchID *uuid.UUID
+		if err := rows.Scan(&p.CameraID, &p.CameraName, &p.CameraIP, &p.CameraMAC,
+			&p.PortNumber, &curPort, &curSwitch, &curSwitchID); err != nil {
+			return nil, err
+		}
+
+		// Уже привязана к этому же порту — предлагать нечего.
+		if curPort != nil && curSwitchID != nil && *curSwitchID == switchID && *curPort == p.PortNumber {
+			continue
+		}
+
+		p.CurrentPort = curPort
+		p.CurrentSwitch = curSwitch
+		p.SwitchID = &switchID
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// SwitchName возвращает название коммутатора по идентификатору.
+func (r *SwitchRepo) SwitchName(ctx context.Context, id uuid.UUID) (string, error) {
+	var name string
+	if err := r.db.QueryRow(ctx, `SELECT name FROM switches WHERE id = $1`, id).Scan(&name); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // ListOnlineSwitches возвращает коммутаторы, доступные для опроса.

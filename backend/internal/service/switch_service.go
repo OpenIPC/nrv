@@ -162,7 +162,19 @@ func (s *SwitchService) List(ctx context.Context) ([]domain.Switch, error) {
 
 // Get возвращает коммутатор с портами.
 func (s *SwitchService) Get(ctx context.Context, id uuid.UUID) (*domain.Switch, error) {
-	return s.repo.GetSwitch(ctx, id)
+	sw, err := s.repo.GetSwitch(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Таблицу MAC подтягиваем вместе с портами: она нужна той же карточке,
+	// и отдельный запрос за ней был бы лишним обращением на каждое
+	// открытие страницы. Ошибка чтения не прерывает выдачу — состояние
+	// портов важнее.
+	if entries, err := s.repo.ListMacEntries(ctx, id); err == nil {
+		sw.MacEntries = entries
+	}
+	return sw, nil
 }
 
 // UpdateMeta сохраняет имя, расположение и порядок нумерации.
@@ -251,6 +263,7 @@ func (s *SwitchService) PollByID(ctx context.Context, id uuid.UUID) error {
 	// мусор.
 	sw.Temperature = det.Temperature()
 	sw.PortCount = det.PortCount()
+	sw.PoeCount = det.PoECount()
 
 	// Полный ответ сохраняем целиком. Набор полей различается от модели к
 	// модели, и жёсткая схема ломалась бы на новом устройстве; здесь же
@@ -271,6 +284,11 @@ func (s *SwitchService) PollByID(ctx context.Context, id uuid.UUID) error {
 	if err := s.repo.SavePorts(ctx, sw.ID, ports); err != nil {
 		return err
 	}
+
+	// Таблица MAC опрашивается следом за состоянием и не влияет на него:
+	// неумение модели её отдавать — обычное дело и не повод считать
+	// коммутатор недоступным. Ошибки здесь только записываем в состояние.
+	s.pollMacTable(ctx, sw)
 	return nil
 }
 
@@ -295,11 +313,10 @@ func (s *SwitchService) buildPorts(sw *domain.Switch, det *sscpoe.Detail) []doma
 	ports := make([]domain.SwitchPort, 0, count)
 
 	for i := 0; i < count; i++ {
-		// Номер порта, который видит оператор.
-		portNumber := i + 1
-		if sw.PortsReversed {
-			portNumber = count - i
-		}
+		// Номер порта, который видит оператор. Разворот затрагивает
+		// только порты PoE, транзитные остаются в конце — так они и
+		// подписаны на корпусе.
+		portNumber := sscpoe.LabelPort(i, poeCount, count, sw.PortsReversed)
 
 		p := domain.SwitchPort{
 			SwitchID:   sw.ID,
@@ -413,7 +430,7 @@ func (s *SwitchService) ExecutePortAction(ctx context.Context, switchID uuid.UUI
 		}
 	}
 
-	index, err := sscpoe.PortIndex(portNumber, sw.PortCount, sw.PortsReversed)
+	index, err := sscpoe.PortIndex(portNumber, sw.PoeCount, sw.PortCount, sw.PortsReversed)
 	if err != nil {
 		return err
 	}
@@ -639,6 +656,137 @@ func (s *SwitchService) Events(ctx context.Context, switchID *uuid.UUID, limit i
 // PollNow запускает внеочередной опрос одного коммутатора.
 func (s *SwitchService) PollNow(ctx context.Context, id uuid.UUID) error {
 	return s.PollByID(ctx, id)
+}
+
+// pollMacTable читает таблицу MAC и сохраняет её.
+//
+// Ошибки здесь не возвращаются наружу: неумение модели отдавать таблицу —
+// обычное свойство, а не сбой, и оно не должно выглядеть как недоступный
+// коммутатор. Вместо ошибки записывается состояние: оператору нужно
+// знать, можно ли здесь определять привязки автоматически.
+func (s *SwitchService) pollMacTable(ctx context.Context, sw *domain.Switch) {
+	tbl, err := s.client.MacTable(ctx, sw.SN, sw.Password)
+	if err != nil {
+		sw.MacTableState, sw.MacTableNote = describeMacTableError(err)
+		if _, uerr := s.repo.UpsertSwitch(ctx, sw); uerr != nil {
+			log.Warn().Err(uerr).Msg("не удалось сохранить состояние таблицы MAC")
+		}
+		return
+	}
+
+	entries, state, note := s.mapMacEntries(sw, tbl)
+	sw.MacTableState, sw.MacTableNote = state, note
+
+	if _, uerr := s.repo.UpsertSwitch(ctx, sw); uerr != nil {
+		log.Warn().Err(uerr).Msg("не удалось сохранить состояние таблицы MAC")
+	}
+	if serr := s.repo.SaveMacEntries(ctx, sw.ID, entries); serr != nil {
+		log.Warn().Err(serr).Msg("не удалось сохранить таблицу MAC")
+	}
+}
+
+// mapMacEntries переводит таблицу MAC в записи для хранения.
+//
+// Здесь же решается, полезны ли данные. Различать нужно три случая:
+//
+//   - запись привязана ровно к одному порту PoE — годная, по ней можно
+//     предложить привязку;
+//   - запись указывает на транзитный порт — само устройство подключено не
+//     сюда, привязывать камеру к такому порту нельзя;
+//   - маска у всех записей одинаковая — прошивка не заполняет поле по
+//     портам, и определить привязки по такой таблице невозможно.
+func (s *SwitchService) mapMacEntries(sw *domain.Switch, tbl *sscpoe.MacTable) ([]domain.SwitchMacEntry, domain.MacTableState, string) {
+	if tbl.Empty {
+		return nil, domain.MacTableOK, "таблица MAC пуста: устройства не обнаружены"
+	}
+
+	// Одинаковая маска у всех записей означает, что поле не несёт
+	// информации о порте. Сохраняем адреса без портов: они всё равно
+	// полезны — видно, какие устройства на коммутаторе есть, — но
+	// привязки по ним не предлагаем.
+	if tbl.UniformBitmap {
+		entries := make([]domain.SwitchMacEntry, 0, len(tbl.Entries))
+		for _, e := range tbl.Entries {
+			entries = append(entries, domain.SwitchMacEntry{SwitchID: sw.ID, MAC: e.MAC})
+		}
+		return entries, domain.MacTableNoPorts,
+			"модель не сообщает порт для адреса: маска портов одинакова у всех записей, привязки задаются вручную"
+	}
+
+	entries := make([]domain.SwitchMacEntry, 0, len(tbl.Entries))
+	for _, e := range tbl.Entries {
+		entry := domain.SwitchMacEntry{SwitchID: sw.ID, MAC: e.MAC}
+
+		// Берём только однозначные записи. Если адрес виден сразу с
+		// нескольких портов (так бывает за неуправляемым концентратором),
+		// угадывать нельзя — ошибка здесь означает перезагрузку не той
+		// камеры.
+		if len(e.PortIndexes) == 1 {
+			idx := e.PortIndexes[0]
+			if idx < sw.PortCount {
+				port := sscpoe.LabelPort(idx, sw.PoeCount, sw.PortCount, sw.PortsReversed)
+				entry.PortNumber = &port
+				// Транзитный порт означает, что устройство за другим
+				// коммутатором: привязывать к нему нечего.
+				entry.ViaUplink = idx >= sw.PoeCount
+			}
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, domain.MacTableOK, ""
+}
+
+// describeMacTableError переводит ошибку чтения таблицы в состояние.
+func describeMacTableError(err error) (domain.MacTableState, string) {
+	switch {
+	case errors.Is(err, sscpoe.ErrAuthRequired):
+		return domain.MacTableUnknown, "нужен пароль коммутатора для чтения таблицы MAC"
+	case errors.Is(err, sscpoe.ErrWrongPassword):
+		return domain.MacTableUnknown, "коммутатор отклонил пароль при чтении таблицы MAC"
+	case errors.Is(err, sscpoe.ErrTimeout):
+		// Модель не понимает команду и просто молчит. Отличить это от
+		// недоступности можно только потому, что запрос состояния на том
+		// же устройстве прошёл успешно — сюда мы попадаем уже после него.
+		return domain.MacTableUnsupported, "модель не поддерживает чтение таблицы MAC"
+	default:
+		return domain.MacTableUnknown, "не удалось прочитать таблицу MAC: " + err.Error()
+	}
+}
+
+// MacEntries возвращает таблицу MAC коммутатора.
+func (s *SwitchService) MacEntries(ctx context.Context, switchID uuid.UUID) ([]domain.SwitchMacEntry, error) {
+	return s.repo.ListMacEntries(ctx, switchID)
+}
+
+// BindProposals возвращает предложения привязки для коммутатора.
+func (s *SwitchService) BindProposals(ctx context.Context, switchID uuid.UUID) ([]domain.BindProposal, error) {
+	return s.repo.BindProposals(ctx, switchID)
+}
+
+// ApplyBindings применяет предложенные привязки.
+//
+// Список предложений запрашивается заново, а не принимается от клиента:
+// между показом предложений и применением порт мог измениться, а неверная
+// привязка приводит к перезагрузке не той камеры. Источник истины —
+// текущая таблица MAC на сервере.
+func (s *SwitchService) ApplyBindings(ctx context.Context, switchID uuid.UUID) (int, error) {
+	proposals, err := s.repo.BindProposals(ctx, switchID)
+	if err != nil {
+		return 0, err
+	}
+
+	applied := 0
+	for _, p := range proposals {
+		if err := s.repo.BindCamera(ctx, p.CameraID, switchID, p.PortNumber); err != nil {
+			log.Warn().Err(err).
+				Str("camera", p.CameraName).Int("port", p.PortNumber).
+				Msg("не удалось применить привязку")
+			continue
+		}
+		applied++
+	}
+	return applied, nil
 }
 
 // SetPassword сохраняет пароль коммутатора и сразу проверяет его.

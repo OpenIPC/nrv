@@ -332,6 +332,48 @@ func (c *Client) requestDetail(ctx context.Context, sn string) (*Detail, error) 
 	return parseDetail(env.Data)
 }
 
+// MacTable запрашивает таблицу MAC-адресов.
+//
+// Повторяет поведение запроса состояния: на моделях, требующих вход,
+// устройство отвечает текстовым сообщением, и только после входа отдаёт
+// данные. Пустой пароль означает, что модель открыта.
+//
+// Отдельная ошибка ErrUnsupported здесь не возвращается намеренно: часть
+// моделей не понимает эту команду и просто не отвечает, а отличить
+// «не поддерживает» от «недоступен» по одному запросу нельзя. Решение
+// принимает вызывающий код, который уже знает, отвечает ли устройство
+// на запрос состояния.
+func (c *Client) MacTable(ctx context.Context, sn, password string) (*MacTable, error) {
+	tbl, err := c.macTableOnce(ctx, sn)
+	if err == nil {
+		return tbl, nil
+	}
+
+	var msgErr *DeviceMessageError
+	if errors.As(err, &msgErr) {
+		if password == "" {
+			return nil, ErrAuthRequired
+		}
+		if lerr := c.Login(ctx, sn, password); lerr != nil {
+			return nil, lerr
+		}
+		return c.macTableOnce(ctx, sn)
+	}
+	return nil, err
+}
+
+// macTableOnce выполняет один запрос таблицы без попытки входа.
+func (c *Client) macTableOnce(ctx context.Context, sn string) (*MacTable, error) {
+	env, err := c.request(Request{CallCmd: CmdMacTable, SN: sn})
+	if err != nil {
+		return nil, err
+	}
+	if env.ErrCode != 0 {
+		return nil, fmt.Errorf("%w: код %d", ErrDeviceCode, env.ErrCode)
+	}
+	return ParseMacTable(env.Data)
+}
+
 // Login выполняет вход на коммутаторе.
 //
 // Формат запроса подтверждён на GPS204V3: пароль передаётся открытым
