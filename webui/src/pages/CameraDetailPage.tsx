@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useParams, useNavigate } from 'react-router-dom'
 import { camerasAPI, logsAPI, majesticAPI, eventsAPI, type Camera, type DetectionEvent, type StreamInfo, type NTPStatus, type LogRemoteState, type MajesticWatchState } from '../api/client'
 import { useAsync } from '../hooks/useApi'
@@ -30,6 +31,7 @@ function eventSnapshotSrc(eventId: string): string {
 export default function CameraDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const toast = useToast()
   const [tab, setTab] = useState<'live' | 'events' | 'detection' | 'audio' | 'settings' | 'advanced'>('live')
   const [streamInfo, setStreamInfo] = useState<StreamInfo | null>(null)
@@ -133,7 +135,7 @@ export default function CameraDetailPage() {
       loadLogRemote()
       loadMajestic()
     }
-    toast.success('Данные обновлены')
+    toast.success(t('cameraPage.dataUpdated'))
   }
 
   // Проверка стримера по требованию. Нужна, когда камера не показывает
@@ -145,16 +147,16 @@ export default function CameraDetailPage() {
       setMajestic(res.data)
       switch (res.data.last_state) {
         case 'ok':
-          toast.success('Стример отвечает')
+          toast.success(t('cameraPage.streamerOk'))
           break
         case 'fallen':
-          toast.error('Стример не отвечает — цикл присмотра поднимет его в течение минуты')
+          toast.error(t('cameraPage.streamerFallen'))
           break
         default:
-          toast.info('Камера недоступна: проверьте питание и связь')
+          toast.info(t('cameraPage.streamerUnknown'))
       }
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось проверить стример')
+      toast.error(e?.response?.data?.error || t('cameraPage.majesticCheckFailed'))
     } finally {
       setBusy(null)
     }
@@ -163,14 +165,14 @@ export default function CameraDetailPage() {
   // Сброс счётчиков: после ручной перезагрузки или замены камеры старая
   // история падений к новой уже не относится.
   const handleResetMajestic = async () => {
-    if (!confirm('Сбросить счётчик перезапусков? Автоматическая перезагрузка начнёт отсчёт заново.')) return
+    if (!confirm(t('cameraPage.confirmResetCounter'))) return
     setBusy('majestic')
     try {
       const res = await majesticAPI.reset(id!)
       setMajestic(res.data)
-      toast.success('Счётчик сброшен')
+      toast.success(t('cameraPage.counterReset'))
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось сбросить счётчик')
+      toast.error(e?.response?.data?.error || t('cameraPage.counterResetFailed'))
     } finally {
       setBusy(null)
     }
@@ -186,14 +188,12 @@ export default function CameraDetailPage() {
     setBusy('logs')
     try {
       await logsAPI.setRemote(id!, enabled)
-      toast.success(enabled
-        ? 'Камера будет отправлять логи на сервер'
-        : 'Отправка логов с камеры выключена')
+      toast.success(enabled ? t('cameraPage.logsOn') : t('cameraPage.logsOff'))
       // Перечитываем через небольшую паузу: камера перезапускает
       // syslogd, и сразу после команды он ещё не успевает подняться.
       setTimeout(loadLogRemote, 2500)
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось изменить настройку')
+      toast.error(e?.response?.data?.error || t('cameraPage.logsToggleFailed'))
     } finally {
       setBusy(null)
     }
@@ -212,12 +212,12 @@ export default function CameraDetailPage() {
       const res = await camerasAPI.applyNTP(id!)
       setNtp(res.data)
       if (res.data.uses_our_server) {
-        toast.success('Камера переведена на наш сервер времени')
+        toast.success(t('cameraPage.ntpApplied'))
       } else {
-        toast.error('Серверы прописаны, но наш не первый в списке')
+        toast.error(t('cameraPage.ntpNotFirst'))
       }
     } catch (e: any) {
-      toast.error(e?.response?.data?.details || 'Не удалось применить настройки времени')
+      toast.error(e?.response?.data?.details || t('cameraPage.ntpApplyFailed'))
     } finally {
       setBusy(null)
     }
@@ -226,18 +226,18 @@ export default function CameraDetailPage() {
   // Перезапуск стримера камеры (Majestic). Поток поднимается не сразу,
   // поэтому после команды даём камере время и перечитываем stream-инфо.
   const handleRestartStreamer = async () => {
-    if (!confirm('Перезапустить стример камеры? Видеопоток прервётся на несколько секунд.')) return
+    if (!confirm(t('cameraPage.confirmRestartStreamer'))) return
     setBusy('restart')
     try {
       const res = await camerasAPI.restartStreamer(id!)
       if (res.data.success) {
-        toast.success('Стример перезапущен')
+        toast.success(t('cameraPage.streamerRestarted'))
         setTimeout(() => { loadStream(); refetch() }, 6000)
       } else {
-        toast.error(res.data.error || 'Не удалось перезапустить стример')
+        toast.error(res.data.error || t('cameraPage.streamerRestartFailed'))
       }
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Ошибка перезапуска стримера')
+      toast.error(e?.response?.data?.error || t('cameraPage.streamerRestartError'))
     } finally {
       setBusy(null)
     }
@@ -253,16 +253,16 @@ export default function CameraDetailPage() {
     try {
       const res = await camerasAPI.recreateStream(id!)
       if (res.data.ready) {
-        toast.success(`Поток поднялся за ${(res.data.elapsed_ms / 1000).toFixed(1)} с`)
+        toast.success(t('cameraPage.streamUpIn', { sec: (res.data.elapsed_ms / 1000).toFixed(1) }))
       } else {
         // Не просто «ошибка»: сервер возвращает объяснение причины,
         // и оператору важно его увидеть — от причины зависит, что делать.
-        toast.error(res.data.detail || 'Поток не поднялся')
+        toast.error(res.data.detail || t('cameraPage.streamNotUp'))
       }
       loadStream()
       refetch()
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось пересоздать поток')
+      toast.error(e?.response?.data?.error || t('cameraPage.recreateFailed'))
     } finally {
       setBusy(null)
     }
@@ -272,14 +272,14 @@ export default function CameraDetailPage() {
   // Команда идёт через API прошивки, а не по SSH: не нужны root-пароль
   // и доступ к shell камеры.
   const handleReboot = async () => {
-    if (!confirm('Перезагрузить камеру? Она будет недоступна около минуты.')) return
+    if (!confirm(t('cameraPage.confirmReboot'))) return
     setBusy('reboot')
     try {
       await camerasAPI.restartCamera(id!)
-      toast.success('Команда перезагрузки отправлена')
+      toast.success(t('cameraPage.rebootSent'))
       setTimeout(() => { loadStream(); refetch() }, 45000)
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Ошибка перезагрузки')
+      toast.error(e?.response?.data?.error || t('cameraPage.rebootFailed'))
     } finally {
       setBusy(null)
     }
@@ -290,12 +290,12 @@ export default function CameraDetailPage() {
     return (
       <div className="card" style={{ textAlign: 'center', padding: 60 }}>
         <AlertTriangle size={48} style={{ color: 'var(--danger)', marginBottom: 16 }} />
-        <h2>Камера не найдена</h2>
+        <h2>{t('cameraPage.notFoundTitle')}</h2>
         <p style={{ color: 'var(--text-secondary)', margin: '12px 0' }}>
-          {error || 'Не удалось загрузить данные камеры'}
+          {error || t('cameraPage.loadFailed')}
         </p>
         <button className="btn btn-primary" onClick={() => navigate('/cameras')}>
-          ← К списку камер
+          {t('cameraPage.toList')}
         </button>
       </div>
     )
@@ -309,7 +309,7 @@ export default function CameraDetailPage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
         <button className="btn btn-outline btn-sm" onClick={() => navigate('/cameras')}>
           <ArrowLeft size={16} />
-          Камеры
+          {t('cameraPage.back')}
         </button>
         <span style={{ color: 'var(--text-secondary)' }}>/</span>
         <span style={{ fontWeight: 600 }}>{camera.name}</span>
@@ -335,12 +335,12 @@ export default function CameraDetailPage() {
             <VendorBadge vendor={camera.vendor} />
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-            {isOnline ? 'Камера активна, поток доступен' : 'Камера не в сети'}
+            {isOnline ? t('cameraPage.active') : t('cameraPage.offline')}
           </p>
         </div>
         <button className="btn btn-outline btn-sm" onClick={handleRefresh}>
           <RefreshCw size={16} />
-          Обновить
+          {t('cameraPage.refresh')}
         </button>
       </div>
 
@@ -374,9 +374,9 @@ export default function CameraDetailPage() {
               <div className="video-placeholder" style={{ position: 'relative' }}>
                 <div style={{ textAlign: 'center' }}>
                   <WifiOff size={48} style={{ color: 'var(--danger)', marginBottom: 12, opacity: 0.5 }} />
-                  <p style={{ color: 'var(--text-secondary)' }}>Нет сигнала</p>
+                  <p style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.noSignal')}</p>
                   <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
-                    {isOnline ? 'HLS-поток недоступен' : 'Камера не в сети'}
+                    {isOnline ? t('cameraPage.hlsUnavailable') : t('cameraPage.offline')}
                   </p>
                 </div>
               </div>
@@ -384,7 +384,7 @@ export default function CameraDetailPage() {
             {/* Переключатель потоков: main / sub */}
             {isOnline && (
               <div style={{ display: 'flex', gap: 8, padding: '8px 16px', background: 'rgba(0,0,0,0.03)', fontSize: 11, borderTop: '1px solid var(--border)', alignItems: 'center' }}>
-                <span style={{ color: 'var(--text-secondary)', marginRight: 4 }}>Поток:</span>
+                <span style={{ color: 'var(--text-secondary)', marginRight: 4 }}>{t('cameraPage.streamLabel')}</span>
                 <button
                   className={`btn btn-sm ${activeStream === 'main' ? 'btn-primary' : 'btn-outline'}`}
                   style={{ padding: '3px 10px', fontSize: 11 }}
@@ -415,35 +415,35 @@ export default function CameraDetailPage() {
                 onClick={() => setTab('live')}
               >
                 <Radio size={14} />
-                Live
+                {t('cameraPage.tabLive')}
               </button>
               <button
                 className={`btn ${tab === 'events' ? 'btn-primary' : 'btn-outline'} btn-sm`}
                 onClick={() => setTab('events')}
               >
                 <AlertTriangle size={14} />
-                События ({eventsData?.total || 0})
+                {t('cameraPage.tabEvents', { count: eventsData?.total || 0 })}
               </button>
               <button
                 className={`btn ${tab === 'detection' ? 'btn-primary' : 'btn-outline'} btn-sm`}
                 onClick={() => setTab('detection')}
               >
                 <Crosshair size={14} />
-                Детекция
+                {t('cameraPage.tabDetection')}
               </button>
               <button
                 className={`btn ${tab === 'audio' ? 'btn-primary' : 'btn-outline'} btn-sm`}
                 onClick={() => setTab('audio')}
               >
                 <Volume2 size={14} />
-                Звук
+                {t('cameraPage.tabAudio')}
               </button>
               <button
                 className={`btn ${tab === 'settings' ? 'btn-primary' : 'btn-outline'} btn-sm`}
                 onClick={() => setTab('settings')}
               >
                 <Sliders size={14} />
-                Настройки
+                {t('cameraPage.tabSettings')}
               </button>
               {/* Все настройки прошивки: состав полей приходит от самой
                   камеры, поэтому здесь есть всё, что она поддерживает.
@@ -457,37 +457,37 @@ export default function CameraDetailPage() {
                   onClick={() => setTab('advanced')}
                 >
                   <Layers size={14} />
-                  Прошивка
+                  {t('cameraPage.tabFirmware')}
                 </button>
               )}
             </div>
 
             {tab === 'live' && (
               <div>
-                <h3 style={{ fontSize: 15, marginBottom: 12 }}>Основной поток (main)</h3>
+                <h3 style={{ fontSize: 15, marginBottom: 12 }}>{t('cameraPage.mainStream')}</h3>
                 <div className="info-grid" style={{ marginBottom: 16 }}>
                   <InfoRow label="RTSP" value={streamInfo?.main_rtsp_url || camera.main_stream || camera.rtsp_url || '—'} mono />
                   <InfoRow label="HLS" value={streamInfo?.main_hls_url || streamInfo?.hls_url || '—'} mono />
                   <InfoRow label="WebRTC" value={streamInfo?.webrtc_url || '—'} mono />
-                  <InfoRow label="Статус" value={streamInfo?.main_hls_url ? 'доступен' : 'недоступен'} />
+                  <InfoRow label={t('cameraPage.lStatus')} value={streamInfo?.main_hls_url ? t('cameraPage.available') : t('cameraPage.unavailable')} />
                 </div>
 
-                <h3 style={{ fontSize: 15, marginBottom: 12, color: 'var(--accent)' }}>Доп. поток (sub)</h3>
+                <h3 style={{ fontSize: 15, marginBottom: 12, color: 'var(--accent)' }}>{t('cameraPage.subStream')}</h3>
                 <div className="info-grid" style={{ marginBottom: 16 }}>
                   <InfoRow label="RTSP" value={streamInfo?.sub_rtsp_url || camera.sub_stream || '—'} mono />
                   <InfoRow label="HLS" value={streamInfo?.sub_hls_url || '—'} mono />
-                  <InfoRow label="Назначение" value="Сетка камер + AI-детекция" />
-                  <InfoRow label="Статус" value={streamInfo?.sub_hls_url ? 'доступен' : 'недоступен'} />
+                  <InfoRow label={t('cameraPage.lPurpose')} value={t('cameraPage.purposeSub')} />
+                  <InfoRow label={t('cameraPage.lStatus')} value={streamInfo?.sub_hls_url ? t('cameraPage.available') : t('cameraPage.unavailable')} />
                 </div>
 
-                <h3 style={{ fontSize: 15, marginBottom: 12 }}>Общая информация</h3>
+                <h3 style={{ fontSize: 15, marginBottom: 12 }}>{t('cameraPage.generalInfo')}</h3>
                 <div className="info-grid">
-                  <InfoRow label="Статус потока" value={streamInfo?.status || camera.status} />
-                  {camera.ip && <InfoRow label="IP-адрес" value={camera.ip} mono />}
-                  {camera.wg_ip && <InfoRow label="WireGuard IP" value={camera.wg_ip} mono />}
-                  {camera.mac && <InfoRow label="MAC" value={camera.mac} mono />}
-                  {camera.firmware && <InfoRow label="Прошивка" value={camera.firmware} />}
-                  {streamInfo?.snapshot_url && <InfoRow label="Снапшот" value={streamInfo.snapshot_url} mono />}
+                  <InfoRow label={t('cameraPage.lStreamStatus')} value={streamInfo?.status || camera.status} />
+                  {camera.ip && <InfoRow label={t('cameraPage.lIp')} value={camera.ip} mono />}
+                  {camera.wg_ip && <InfoRow label={t('cameraPage.lWgIp')} value={camera.wg_ip} mono />}
+                  {camera.mac && <InfoRow label={t('cameraPage.lMac')} value={camera.mac} mono />}
+                  {camera.firmware && <InfoRow label={t('cameraPage.lFirmware')} value={camera.firmware} />}
+                  {streamInfo?.snapshot_url && <InfoRow label={t('cameraPage.lSnapshot')} value={streamInfo.snapshot_url} mono />}
                 </div>
               </div>
             )}
@@ -497,21 +497,21 @@ export default function CameraDetailPage() {
                 {events.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: 24, color: 'var(--text-secondary)' }}>
                     <Eye size={32} style={{ marginBottom: 8, opacity: 0.3 }} />
-                    <p>Нет событий для этой камеры</p>
+                    <p>{t('cameraPage.noEvents')}</p>
                   </div>
                 ) : (
                   <div style={{ maxHeight: 400, overflowY: 'auto' }}>
                     {events.map((ev) => (
                       <div key={ev.id} className="timeline-event" style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
                         <div className="timeline-time">
-                          {new Date(ev.timestamp).toLocaleTimeString('ru')}
+                          {new Date(ev.timestamp).toLocaleTimeString()}
                         </div>
                         <div className="timeline-dot" style={{ background: ev.confidence > 0.7 ? 'var(--success)' : 'var(--warning)', marginTop: 6 }} />
                         {/* Снимок события: показываем прямо в ленте, если он сохранён */}
                         {ev.snapshot_path && (
                           <img
                             src={eventSnapshotSrc(ev.id)}
-                            alt="снимок"
+                            alt={t('cameraPage.snapshotAlt')}
                             loading="lazy"
                             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
                             style={{ width: 72, height: 40, borderRadius: 4, objectFit: 'cover', flexShrink: 0, border: '1px solid var(--border)' }}
@@ -524,7 +524,7 @@ export default function CameraDetailPage() {
                           </span>
                           {ev.track_id && (
                             <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginLeft: 8 }}>
-                              трек #{ev.track_id}
+                              {t('cameraPage.track', { id: ev.track_id })}
                             </span>
                           )}
                         </div>
@@ -544,7 +544,7 @@ export default function CameraDetailPage() {
                       различим. По отдельности они бесполезны: зона по
                       смазанной картинке номер не прочитает, а резкая
                       картинка вне зоны номера не покажет. */}
-                  <OpenIPCOnly vendor={camera.vendor} title="Режимы съёмки">
+                  <OpenIPCOnly vendor={camera.vendor} title={t('cameraPage.shootingModes')}>
                     <CameraImageProfilePanel cameraId={camera.id} />
                   </OpenIPCOnly>
                 </div>
@@ -559,7 +559,7 @@ export default function CameraDetailPage() {
                 с устройства, поэтому здесь есть всё, что поддерживает
                 эта прошивка — и ничего лишнего. */}
             {tab === 'advanced' && (
-              <OpenIPCOnly vendor={camera.vendor} title="Настройки прошивки">
+              <OpenIPCOnly vendor={camera.vendor} title={t('cameraPage.firmwareSettings')}>
                 <CameraConfigPanel cameraId={camera.id} />
               </OpenIPCOnly>
             )}
@@ -572,12 +572,12 @@ export default function CameraDetailPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontSize: 15 }}>
               <Info size={18} style={{ color: 'var(--accent)' }} />
-              Информация
+              {t('cameraPage.info')}
             </h3>
-            <InfoRow label="ID" value={camera.id.slice(0, 8) + '...'} mono />
-            <InfoRow label="Добавлена" value={new Date(camera.created_at).toLocaleDateString('ru')} />
-            <InfoRow label="Обновлена" value={new Date(camera.updated_at).toLocaleDateString('ru')} />
-            <InfoRow label="Объект" value={camera.site_id?.slice(0, 8) || '—'} />
+            <InfoRow label={t('cameraPage.lId')} value={camera.id.slice(0, 8) + '...'} mono />
+            <InfoRow label={t('cameraPage.lAdded')} value={new Date(camera.created_at).toLocaleDateString()} />
+            <InfoRow label={t('cameraPage.lUpdated')} value={new Date(camera.updated_at).toLocaleDateString()} />
+            <InfoRow label={t('cameraPage.lSite')} value={camera.site_id?.slice(0, 8) || '—'} />
           </div>
 
           {/* Подключение к коммутатору: видно питание и связь на порту.
@@ -594,30 +594,30 @@ export default function CameraDetailPage() {
           <div className="card">
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontSize: 15 }}>
               <Settings size={18} style={{ color: 'var(--accent)' }} />
-              Действия
+              {t('cameraPage.actions')}
             </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <button className="btn btn-outline btn-sm" onClick={() => setShowEdit(true)}>
                 <Pencil size={14} />
-                Редактировать
+                {t('cameraPage.edit')}
               </button>
               <button className="btn btn-outline btn-sm" onClick={handleRefresh}>
                 <RefreshCw size={14} />
-                Обновить
+                {t('cameraPage.refresh')}
               </button>
               <button
                 className="btn btn-outline btn-sm"
                 style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
                 onClick={() => {
-                  if (confirm('Удалить камеру?')) {
+                  if (confirm(t('cameraPage.confirmDelete'))) {
                     camerasAPI.delete(id!).then(() => {
-                      toast.success('Камера удалена')
+                      toast.success(t('cameraPage.deleted'))
                       navigate('/cameras')
-                    }).catch(() => toast.error('Ошибка удаления'))
+                    }).catch(() => toast.error(t('cameraPage.deleteFailed')))
                   }
                 }}
               >
-                Удалить камеру
+                {t('cameraPage.deleteCamera')}
               </button>
             </div>
           </div>
@@ -626,10 +626,10 @@ export default function CameraDetailPage() {
           <div className="card" style={{ marginTop: 16 }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 15 }}>
               <Power size={18} style={{ color: 'var(--warning)' }} />
-              Управление камерой
+              {t('cameraPage.control')}
             </h3>
             <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-              Команды отправляются по HTTP API прошивки ({camera.ip || '—'}). SSH не требуется.
+              {t('cameraPage.controlHint', { ip: camera.ip || '—' })}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {/* Первой — потому что это самый частый случай: камера уже
@@ -640,19 +640,19 @@ export default function CameraDetailPage() {
                 className="btn btn-outline btn-sm"
                 onClick={handleRecreateStream}
                 disabled={busy !== null}
-                title="Пересоздать путь камеры в медиасервере, если камера в сети, а поток не идёт"
+                title={t('cameraPage.startStreamHint')}
               >
                 {busy === 'recreate' ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
-                {busy === 'recreate' ? 'Запуск...' : 'Запустить поток'}
+                {busy === 'recreate' ? t('cameraPage.starting') : t('cameraPage.startStream')}
               </button>
               <button
                 className="btn btn-outline btn-sm"
                 onClick={handleRestartStreamer}
                 disabled={busy !== null || !camera.ip || !isOpenIPC}
-                title={isOpenIPC ? undefined : 'Перезапуск стримера есть только на OpenIPC: на других камерах стример встроен в устройство и своим API не перезапускается'}
+                title={isOpenIPC ? undefined : t('cameraPage.restartStreamerOnlyIpc')}
               >
                 {busy === 'restart' ? <Loader2 size={14} className="spin" /> : <RotateCw size={14} />}
-                {busy === 'restart' ? 'Перезапуск...' : 'Перезапустить стример'}
+                {busy === 'restart' ? t('cameraPage.restarting') : t('cameraPage.restartStreamer')}
               </button>
               <button
                 className="btn btn-outline btn-sm"
@@ -661,12 +661,12 @@ export default function CameraDetailPage() {
                 disabled={busy !== null || !camera.ip}
               >
                 {busy === 'reboot' ? <Loader2 size={14} className="spin" /> : <Power size={14} />}
-                {busy === 'reboot' ? 'Перезагрузка...' : 'Перезагрузить камеру'}
+                {busy === 'reboot' ? t('cameraPage.rebooting') : t('cameraPage.rebootCamera')}
               </button>
             </div>
             {!camera.ip && (
               <p style={{ fontSize: 11, color: 'var(--warning)', marginTop: 8 }}>
-                Нужен IP-адрес камеры для отправки команд.
+                {t('cameraPage.needIpForCommands')}
               </p>
             )}
             {/* Поясняем ограничение словами, а не только серой кнопкой:
@@ -674,8 +674,7 @@ export default function CameraDetailPage() {
                 производителями. */}
             {!isOpenIPC && (
               <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 8 }}>
-                Перезапуск стримера доступен только на OpenIPC. Перезагрузка работает
-                и на этой камере, но делает это её собственный веб-интерфейс.
+                {t('cameraPage.restartOnlyIpc')}
               </p>
             )}
           </div>
@@ -685,26 +684,26 @@ export default function CameraDetailPage() {
               в архиве оказывается неверная дата. По умолчанию камеры
               OpenIPC берут время у публичных серверов в интернете —
               здесь видно, так ли это, и можно перевести на наш сервер. */}
-          <OpenIPCOnly vendor={camera.vendor} title="Время камеры">
+          <OpenIPCOnly vendor={camera.vendor} title={t('cameraPage.cameraTime')}>
           <div className="card" style={{ marginTop: 16 }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 15 }}>
               <Clock size={18} style={{ color: 'var(--primary)' }} />
-              Время
+              {t('cameraPage.timeTitle')}
             </h3>
 
             {ntp ? (
               <>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Время камеры</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lCameraTime')}</span>
                     <span style={{ fontFamily: 'monospace' }}>{ntp.camera_time || '—'}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Часовой пояс</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lTimezone')}</span>
                     <span style={{ fontFamily: 'monospace' }}>{ntp.timezone || '—'}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Серверы</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lServers')}</span>
                     <span style={{ textAlign: 'right', wordBreak: 'break-all' }}>
                       {ntp.configured?.length ? ntp.configured.join(', ') : '—'}
                     </span>
@@ -715,25 +714,25 @@ export default function CameraDetailPage() {
                       ходить к нам и при этом отставать, если синхронизация
                       не проходит: это разные проблемы и лечатся по-разному. */}
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Источник времени</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lTimeSource')}</span>
                     {ntp.uses_our_server ? (
-                      <span style={{ color: 'var(--success)' }}>наш сервер</span>
+                      <span style={{ color: 'var(--success)' }}>{t('cameraPage.sourceOurs')}</span>
                     ) : (
                       <span style={{ color: 'var(--warning)' }}>
-                        не наш — камера ходит в интернет
+                        {t('cameraPage.sourceNotOurs')}
                       </span>
                     )}
                   </div>
 
                   {ntp.camera_time && (
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Расхождение</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lDrift')}</span>
                       {ntp.drift_too_large ? (
                         <span style={{ color: 'var(--danger)' }}>
-                          {ntp.drift_seconds} с — время не синхронизировано
+                          {t('cameraPage.driftBad', { sec: ntp.drift_seconds })}
                         </span>
                       ) : (
-                        <span style={{ color: 'var(--success)' }}>{ntp.drift_seconds} с — норма</span>
+                        <span style={{ color: 'var(--success)' }}>{t('cameraPage.driftOk', { sec: ntp.drift_seconds })}</span>
                       )}
                     </div>
                   )}
@@ -747,20 +746,19 @@ export default function CameraDetailPage() {
                     disabled={busy !== null || !camera.ip}
                   >
                     {busy === 'ntp' ? <Loader2 size={14} className="spin" /> : <Clock size={14} />}
-                    {busy === 'ntp' ? 'Применяю...' : 'Перевести на наш сервер времени'}
+                    {busy === 'ntp' ? t('cameraPage.applying') : t('cameraPage.applyNtp')}
                   </button>
                 )}
               </>
             ) : (
               <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-                Не удалось прочитать время камеры. Это бывает, когда камера
-                недоступна по SSH — проверьте связь.
+                {t('cameraPage.ntpReadFailed')}
               </p>
             )}
 
             {!camera.ip && (
               <p style={{ fontSize: 11, color: 'var(--warning)', marginTop: 8 }}>
-                Нужен IP-адрес камеры для чтения времени.
+                {t('cameraPage.needIpForTime')}
               </p>
             )}
           </div>
@@ -771,29 +769,29 @@ export default function CameraDetailPage() {
               по кругу: когда камера виснет и её перезагружают, объяснение
               пропадает вместе с буфером. Здесь включается отправка логов
               на сервер, где они переживут и перезагрузку, и саму камеру. */}
-          <OpenIPCOnly vendor={camera.vendor} title="Логи на сервере">
+          <OpenIPCOnly vendor={camera.vendor} title={t('cameraPage.logsTitle')}>
           <div className="card" style={{ marginTop: 16 }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 15 }}>
               <ScrollText size={18} style={{ color: 'var(--primary)' }} />
-              Логи на сервере
+              {t('cameraPage.logsTitle')}
             </h3>
 
             {logRemote ? (
               <>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Отправка</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lSending')}</span>
                     {logRemote.enabled ? (
-                      <span style={{ color: 'var(--success)' }}>включена</span>
+                      <span style={{ color: 'var(--success)' }}>{t('cameraPage.sendingOn')}</span>
                     ) : (
-                      <span style={{ color: 'var(--text-secondary)' }}>выключена</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.sendingOff')}</span>
                     )}
                   </div>
 
                   {logRemote.enabled && (
                     <>
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-secondary)' }}>Приёмник</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lReceiver')}</span>
                         <span style={{ fontFamily: 'monospace', wordBreak: 'break-all', textAlign: 'right' }}>
                           {logRemote.target || '—'}
                         </span>
@@ -803,11 +801,11 @@ export default function CameraDetailPage() {
                           мы их не увидим, и это надо исправить — иначе
                           при разборе происшествия логов просто не будет. */}
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-secondary)' }}>Куда идут</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lWhereGoes')}</span>
                         {logRemote.our_server ? (
-                          <span style={{ color: 'var(--success)' }}>на наш сервер</span>
+                          <span style={{ color: 'var(--success)' }}>{t('cameraPage.toOurServer')}</span>
                         ) : (
-                          <span style={{ color: 'var(--warning)' }}>на сторонний адрес</span>
+                          <span style={{ color: 'var(--warning)' }}>{t('cameraPage.toForeign')}</span>
                         )}
                       </div>
                     </>
@@ -822,29 +820,26 @@ export default function CameraDetailPage() {
                 >
                   {busy === 'logs' ? <Loader2 size={14} className="spin" /> : <ScrollText size={14} />}
                   {busy === 'logs'
-                    ? 'Применяю...'
+                    ? t('cameraPage.applying')
                     : logRemote.enabled
-                      ? 'Выключить отправку логов'
-                      : 'Отправлять логи на сервер'}
+                      ? t('cameraPage.disableLogs')
+                      : t('cameraPage.enableLogs')}
                 </button>
 
                 {logRemote.enabled && !logRemote.our_server && (
                   <p style={{ fontSize: 11, color: 'var(--warning)', marginTop: 8 }}>
-                    Логи уходят по другому адресу. Включите отправку на наш
-                    сервер — иначе их не будет в общем журнале.
+                    {t('cameraPage.logsForeignWarn')}
                   </p>
                 )}
               </>
             ) : (
               <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-                Не удалось прочитать настройку. Это бывает, когда камера
-                недоступна по SSH — проверьте связь.
+                {t('cameraPage.logsReadFailed')}
               </p>
             )}
 
             <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 10, lineHeight: 1.5 }}>
-              Что успела записать камера до перезагрузки, видно только
-              в журнале на сервере. Без этого причину сбоя установить нечем.
+              {t('cameraPage.logsFooter')}
             </p>
           </div>
           </OpenIPCOnly>
@@ -858,21 +853,21 @@ export default function CameraDetailPage() {
             <div className="card" style={{ marginTop: 16 }}>
               <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 15 }}>
                 <Activity size={18} style={{ color: 'var(--primary)' }} />
-                Стример
+                {t('cameraPage.streamerTitle')}
               </h3>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>Состояние</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lState')}</span>
                   {majestic.last_state === 'ok' && (
-                    <span style={{ color: 'var(--success)' }}>отвечает</span>
+                    <span style={{ color: 'var(--success)' }}>{t('cameraPage.stateOk')}</span>
                   )}
                   {majestic.last_state === 'fallen' && (
-                    <span style={{ color: 'var(--danger)' }}>не отвечает — поднимаю</span>
+                    <span style={{ color: 'var(--danger)' }}>{t('cameraPage.stateFallen')}</span>
                   )}
                   {majestic.last_state === 'unknown' && (
                     <span style={{ color: 'var(--text-secondary)' }}>
-                      не удалось проверить
+                      {t('cameraPage.stateUnknown')}
                     </span>
                   )}
                 </div>
@@ -883,15 +878,13 @@ export default function CameraDetailPage() {
                     и важно не путать эти случаи. */}
                 {majestic.last_state === 'unknown' && (
                   <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '2px 0 0', lineHeight: 1.5 }}>
-                    Возможно, камера выключена или недоступна по сети.
-                    Если это камера другого производителя, присмотр к ней
-                    не применяется — стримера Majestic там нет.
+                    {t('cameraPage.stateUnknownHint')}
                   </p>
                 )}
 
                 {majestic.restart_count > 0 && (
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Перезапусков за сутки</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.restartsPerDay')}</span>
                     <span style={{
                       color: majestic.restart_count >= 3 ? 'var(--warning)' : 'inherit',
                     }}>
@@ -902,9 +895,9 @@ export default function CameraDetailPage() {
 
                 {majestic.last_restart_at && (
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Последний перезапуск</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lastRestart')}</span>
                     <span>
-                      {new Date(majestic.last_restart_at).toLocaleString('ru-RU', {
+                      {new Date(majestic.last_restart_at).toLocaleString(undefined, {
                         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
                       })}
                     </span>
@@ -913,9 +906,9 @@ export default function CameraDetailPage() {
 
                 {majestic.last_reboot_at && (
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Перезагрузка камеры</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.lastReboot')}</span>
                     <span style={{ color: 'var(--warning)' }}>
-                      {new Date(majestic.last_reboot_at).toLocaleString('ru-RU', {
+                      {new Date(majestic.last_reboot_at).toLocaleString(undefined, {
                         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
                       })}
                     </span>
@@ -944,7 +937,7 @@ export default function CameraDetailPage() {
                   disabled={busy !== null || !camera.ip}
                 >
                   {busy === 'majestic' ? <Loader2 size={14} className="spin" /> : <Activity size={14} />}
-                  Проверить
+                  {t('cameraPage.check')}
                 </button>
                 {majestic.restart_count > 0 && (
                   <button
@@ -952,16 +945,15 @@ export default function CameraDetailPage() {
                     style={{ flex: 1 }}
                     onClick={handleResetMajestic}
                     disabled={busy !== null}
-                    title="Сбросить историю перезапусков после ручного вмешательства"
+                    title={t('cameraPage.resetCounterHint')}
                   >
-                    Сбросить счётчик
+                    {t('cameraPage.resetCounter')}
                   </button>
                 )}
               </div>
 
               <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 10, lineHeight: 1.5 }}>
-                Сервер сам поднимает упавший стример и перезагружает камеру,
-                если тот падает слишком часто. Причину смотрите в журнале логов.
+                {t('cameraPage.streamerFooter')}
               </p>
             </div>
           )}
@@ -976,7 +968,7 @@ export default function CameraDetailPage() {
           camera={camera}
           onClose={() => setShowEdit(false)}
           onSaved={() => {
-            toast.success('Камера обновлена')
+            toast.success(t('cameraPage.updated'))
             refetch()
             setTimeout(loadStream, 1500)
           }}
