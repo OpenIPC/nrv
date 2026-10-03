@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   facesAPI, platesAPI, recognitionAPI,
   KnownFace, KnownPlate, RecognitionSettings,
@@ -13,13 +14,14 @@ import { UserPlus, Car, Trash2, Pencil, ShieldAlert, ToggleLeft, ToggleRight, X,
 // и в архиве становится видно не «человек / машина», а «Иванов И.И. / А123ВС77».
 // Записи из чёрного списка помечаются как тревожные.
 export default function RecognitionPage() {
+  const { t } = useTranslation()
   const [tab, setTab] = useState<'faces' | 'plates'>('faces')
   return (
     <div>
       <div className="page-header">
         <div>
-          <h1>Распознавание</h1>
-          <p>Справочники известных лиц и автомобильных номеров</p>
+          <h1>{t('recognitionPage.title')}</h1>
+          <p>{t('recognitionPage.subtitle')}</p>
         </div>
       </div>
 
@@ -29,13 +31,13 @@ export default function RecognitionPage() {
           className={tab === 'faces' ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm'}
           onClick={() => setTab('faces')}
         >
-          Лица
+          {t('recognitionPage.tabFaces')}
         </button>
         <button
           className={tab === 'plates' ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm'}
           onClick={() => setTab('plates')}
         >
-          Номера авто
+          {t('recognitionPage.tabPlates')}
         </button>
       </div>
 
@@ -50,6 +52,7 @@ export default function RecognitionPage() {
 
 function FacesTab() {
   const { success, error } = useToast()
+  const { t } = useTranslation()
   const [showDisabled, setShowDisabled] = useState(false)
   const [editing, setEditing] = useState<KnownFace | null>(null)
   const [creating, setCreating] = useState(false)
@@ -62,13 +65,13 @@ function FacesTab() {
   const faces: KnownFace[] = data?.faces || []
 
   const handleDelete = async (f: KnownFace) => {
-    if (!confirm(`Удалить «${f.name}» из справочника?`)) return
+    if (!confirm(t('recognitionPage.confirmDeleteFace', { name: f.name }))) return
     try {
       await facesAPI.delete(f.id)
-      success('Запись удалена')
+      success(t('recognitionPage.entryDeleted'))
       refetch()
     } catch {
-      error('Не удалось удалить запись')
+      error(t('recognitionPage.deleteRecordFailed'))
     }
   }
 
@@ -77,7 +80,7 @@ function FacesTab() {
       await facesAPI.update(f.id, { enabled: !f.enabled })
       refetch()
     } catch {
-      error('Не удалось изменить запись')
+      error(t('recognitionPage.updateFailed'))
     }
   }
 
@@ -88,18 +91,18 @@ function FacesTab() {
       <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
           <input type="checkbox" checked={showDisabled} onChange={(e) => setShowDisabled(e.target.checked)} />
-          Показывать отключённые
+          {t('recognitionPage.showDisabled')}
         </label>
         <button className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
-          <UserPlus size={14} /> Добавить лицо
+          <UserPlus size={14} /> {t('recognitionPage.addFace')}
         </button>
       </div>
 
       {faces.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
           <UserPlus size={48} style={{ marginBottom: 16, opacity: 0.3 }} />
-          <p>Справочник пуст</p>
-          <p style={{ fontSize: 13 }}>Добавьте лица, чтобы система узнавала своих и предупреждала о посторонних</p>
+          <p>{t('recognitionPage.facesEmpty')}</p>
+          <p style={{ fontSize: 13 }}>{t('recognitionPage.facesEmptyHint')}</p>
         </div>
       ) : (
         <FaceGrid faces={faces} onEdit={setEditing} onDelete={handleDelete} onToggle={handleToggle} />
@@ -128,6 +131,7 @@ function FaceGrid({ faces, onEdit, onDelete, onToggle }: {
   onDelete: (f: KnownFace) => void
   onToggle: (f: KnownFace) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
       {faces.map((f) => (
@@ -169,23 +173,23 @@ function FaceGrid({ faces, onEdit, onDelete, onToggle }: {
               {/* Без эмбеддинга лицо не участвует в распознавании — предупреждаем */}
               {!f.has_embedding && (
                 <span style={{ fontSize: 11, color: 'var(--warning, #f59e0b)' }}>
-                  без биометрии
+                  {t('recognitionPage.noBiometrics')}
                 </span>
               )}
             </div>
           </div>
 
           <div style={{ display: 'flex', gap: 6, marginTop: 10, justifyContent: 'flex-end' }}>
-            <button className="btn btn-outline btn-sm" title="Изменить" onClick={() => onEdit(f)}>
+            <button className="btn btn-outline btn-sm" title={t('recognitionPage.editHint')} onClick={() => onEdit(f)}>
               <Pencil size={13} />
             </button>
-            <button className="btn btn-outline btn-sm" title={f.enabled ? 'Отключить' : 'Включить'} onClick={() => onToggle(f)}>
+            <button className="btn btn-outline btn-sm" title={f.enabled ? t('recognitionPage.disableHint') : t('recognitionPage.enableHint')} onClick={() => onToggle(f)}>
               {f.enabled ? <ToggleRight size={13} /> : <ToggleLeft size={13} />}
             </button>
             <button
               className="btn btn-outline btn-sm"
               style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
-              title="Удалить"
+              title={t('recognitionPage.deleteHint')}
               onClick={() => onDelete(f)}
             >
               <Trash2 size={13} />
@@ -203,6 +207,7 @@ function FaceModal({ face, onClose, onSaved }: {
   onSaved: () => void
 }) {
   const { success, error } = useToast()
+  const { t } = useTranslation()
   const [name, setName] = useState(face?.name || '')
   const [note, setNote] = useState(face?.note || '')
   const [isBlocked, setIsBlocked] = useState(face?.is_blocked || false)
@@ -211,7 +216,7 @@ function FaceModal({ face, onClose, onSaved }: {
 
   const pickPhoto = (file: File) => {
     if (file.size > 8 * 1024 * 1024) {
-      error('Снимок больше 8 МБ')
+      error(t('recognitionPage.photoTooBig'))
       return
     }
     const reader = new FileReader()
@@ -225,7 +230,7 @@ function FaceModal({ face, onClose, onSaved }: {
 
   const handleSave = async () => {
     if (!name.trim()) {
-      error('Укажите имя')
+      error(t('recognitionPage.nameRequired'))
       return
     }
     setSaving(true)
@@ -237,7 +242,7 @@ function FaceModal({ face, onClose, onSaved }: {
           is_blocked: isBlocked,
           ...(photo ? { photo_base64: photo } : {}),
         })
-        success('Запись обновлена')
+        success(t('recognitionPage.recordUpdated'))
       } else {
         await facesAPI.create({
           name: name.trim(),
@@ -245,25 +250,25 @@ function FaceModal({ face, onClose, onSaved }: {
           is_blocked: isBlocked,
           ...(photo ? { photo_base64: photo } : {}),
         })
-        success('Лицо добавлено')
+        success(t('recognitionPage.faceAdded'))
       }
       onSaved()
     } catch {
-      error('Не удалось сохранить запись')
+      error(t('recognitionPage.saveRecordFailed'))
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <ModalShell title={face ? 'Изменить лицо' : 'Новое лицо'} onClose={onClose}>
-      <Field label="Имя">
-        <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Иванов Иван Иванович" autoFocus />
+    <ModalShell title={face ? t('recognitionPage.editFaceTitle') : t('recognitionPage.newFaceTitle')} onClose={onClose}>
+      <Field label={t('recognitionPage.name')}>
+        <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('recognitionPage.namePlaceholder')} autoFocus />
       </Field>
-      <Field label="Заметка">
-        <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Должность, отдел" />
+      <Field label={t('recognitionPage.note')}>
+        <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('recognitionPage.faceNotePlaceholder')} />
       </Field>
-      <Field label="Эталонный снимок">
+      <Field label={t('recognitionPage.refPhoto')}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <input
             type="file"
@@ -273,19 +278,19 @@ function FaceModal({ face, onClose, onSaved }: {
             onChange={(e) => { const f = e.target.files?.[0]; if (f) pickPhoto(f) }}
           />
           <label htmlFor="face-photo" className="btn btn-outline btn-sm" style={{ cursor: 'pointer' }}>
-            <Upload size={13} /> Выбрать файл
+            <Upload size={13} /> {t('recognitionPage.pickFile')}
           </label>
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            {photo ? 'снимок выбран' : face?.photo_path ? 'снимок уже есть' : 'не выбран'}
+            {photo ? t('recognitionPage.photoChosen') : face?.photo_path ? t('recognitionPage.photoExists') : t('recognitionPage.photoNotChosen')}
           </span>
         </div>
         <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6 }}>
-          По снимку рассчитывается биометрия — только после этого лицо участвует в распознавании.
+          {t('recognitionPage.photoHint')}
         </p>
       </Field>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
         <input type="checkbox" checked={isBlocked} onChange={(e) => setIsBlocked(e.target.checked)} />
-        Заблокирован (события помечаются как тревожные)
+        {t('recognitionPage.blocked')}
       </label>
 
       <ModalActions onCancel={onClose} onSave={handleSave} saving={saving} />
@@ -297,6 +302,7 @@ function FaceModal({ face, onClose, onSaved }: {
 
 function PlatesTab() {
   const { success, error } = useToast()
+  const { t } = useTranslation()
   const [showDisabled, setShowDisabled] = useState(false)
   const [editing, setEditing] = useState<KnownPlate | null>(null)
   const [creating, setCreating] = useState(false)
@@ -309,13 +315,13 @@ function PlatesTab() {
   const plates: KnownPlate[] = data?.plates || []
 
   const handleDelete = async (p: KnownPlate) => {
-    if (!confirm(`Удалить номер ${p.plate}?`)) return
+    if (!confirm(t('recognitionPage.confirmDeletePlate', { plate: p.plate }))) return
     try {
       await platesAPI.delete(p.id)
-      success('Номер удалён')
+      success(t('recognitionPage.plateDeleted'))
       refetch()
     } catch {
-      error('Не удалось удалить номер')
+      error(t('recognitionPage.deletePlateFailed'))
     }
   }
 
@@ -324,7 +330,7 @@ function PlatesTab() {
       await platesAPI.update(p.id, { enabled: !p.enabled })
       refetch()
     } catch {
-      error('Не удалось изменить запись')
+      error(t('recognitionPage.updateFailed'))
     }
   }
 
@@ -335,18 +341,18 @@ function PlatesTab() {
       <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
           <input type="checkbox" checked={showDisabled} onChange={(e) => setShowDisabled(e.target.checked)} />
-          Показывать отключённые
+          {t('recognitionPage.showDisabled')}
         </label>
         <button className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
-          <Car size={14} /> Добавить номер
+          <Car size={14} /> {t('recognitionPage.addPlate')}
         </button>
       </div>
 
       {plates.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
           <Car size={48} style={{ marginBottom: 16, opacity: 0.3 }} />
-          <p>Справочник пуст</p>
-          <p style={{ fontSize: 13 }}>Добавьте номера, чтобы отличать своих автомобилей от посторонних</p>
+          <p>{t('recognitionPage.facesEmpty')}</p>
+          <p style={{ fontSize: 13 }}>{t('recognitionPage.platesEmptyHint')}</p>
         </div>
       ) : (
         <div className="card" style={{ padding: 0 }}>
@@ -354,10 +360,10 @@ function PlatesTab() {
             <table>
               <thead>
                 <tr>
-                  <th>Номер</th>
-                  <th>Владелец</th>
-                  <th>Заметка</th>
-                  <th>Статус</th>
+                  <th>{t('recognitionPage.thPlate')}</th>
+                  <th>{t('recognitionPage.thOwner')}</th>
+                  <th>{t('recognitionPage.thNote')}</th>
+                  <th>{t('recognitionPage.thStatus')}</th>
                   <th></th>
                 </tr>
               </thead>
@@ -374,25 +380,25 @@ function PlatesTab() {
                     <td style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{p.note || '—'}</td>
                     <td>
                       {p.is_blocked ? (
-                        <span style={{ fontSize: 11, color: 'var(--danger)' }}>заблокирован</span>
+                        <span style={{ fontSize: 11, color: 'var(--danger)' }}>{t('recognitionPage.statusBlocked')}</span>
                       ) : (
                         <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                          {p.enabled ? 'активен' : 'отключён'}
+                          {p.enabled ? t('recognitionPage.statusActive') : t('recognitionPage.statusDisabled')}
                         </span>
                       )}
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn btn-outline btn-sm" title="Изменить" onClick={() => setEditing(p)}>
+                        <button className="btn btn-outline btn-sm" title={t('recognitionPage.editHint')} onClick={() => setEditing(p)}>
                           <Pencil size={13} />
                         </button>
-                        <button className="btn btn-outline btn-sm" title={p.enabled ? 'Отключить' : 'Включить'} onClick={() => handleToggle(p)}>
+                        <button className="btn btn-outline btn-sm" title={p.enabled ? t('recognitionPage.disableHint') : t('recognitionPage.enableHint')} onClick={() => handleToggle(p)}>
                           {p.enabled ? <ToggleRight size={13} /> : <ToggleLeft size={13} />}
                         </button>
                         <button
                           className="btn btn-outline btn-sm"
                           style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
-                          title="Удалить"
+                          title={t('recognitionPage.deleteHint')}
                           onClick={() => handleDelete(p)}
                         >
                           <Trash2 size={13} />
@@ -423,6 +429,7 @@ function PlateModal({ plate, onClose, onSaved }: {
   onSaved: () => void
 }) {
   const { success, error } = useToast()
+  const { t } = useTranslation()
   const [value, setValue] = useState(plate?.plate || '')
   const [owner, setOwner] = useState(plate?.owner || '')
   const [note, setNote] = useState(plate?.note || '')
@@ -431,51 +438,51 @@ function PlateModal({ plate, onClose, onSaved }: {
 
   const handleSave = async () => {
     if (!value.trim()) {
-      error('Укажите номер')
+      error(t('recognitionPage.plateRequired'))
       return
     }
     setSaving(true)
     try {
       if (plate) {
         await platesAPI.update(plate.id, { plate: value.trim(), owner, note, is_blocked: isBlocked })
-        success('Номер обновлён')
+        success(t('recognitionPage.plateUpdated'))
       } else {
         await platesAPI.create({ plate: value.trim(), owner, note, is_blocked: isBlocked })
-        success('Номер добавлен')
+        success(t('recognitionPage.plateAdded'))
       }
       onSaved()
     } catch {
       // Бэкенд отвергает дубликаты — текст ошибки показываем как есть
-      error('Не удалось сохранить номер (возможно, он уже есть в справочнике)')
+      error(t('recognitionPage.plateSaveFailed'))
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <ModalShell title={plate ? 'Изменить номер' : 'Новый номер'} onClose={onClose}>
-      <Field label="Номер">
+    <ModalShell title={plate ? t('recognitionPage.editPlateTitle') : t('recognitionPage.newPlateTitle')} onClose={onClose}>
+      <Field label={t('recognitionPage.plateNumber')}>
         <input
           className="input"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="А123ВС77"
+          placeholder={t('recognitionPage.platePlaceholder')}
           style={{ fontFamily: 'monospace' }}
           autoFocus
         />
         <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6 }}>
-          Сравнение идёт без учёта регистра, пробелов и дефисов.
+          {t('recognitionPage.plateCompareHint')}
         </p>
       </Field>
-      <Field label="Владелец">
-        <input className="input" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="ФИО или организация" />
+      <Field label={t('recognitionPage.owner')}>
+        <input className="input" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder={t('recognitionPage.ownerPlaceholder')} />
       </Field>
-      <Field label="Заметка">
-        <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Марка, цвет, комментарий" />
+      <Field label={t('recognitionPage.note')}>
+        <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('recognitionPage.plateNotePlaceholder')} />
       </Field>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
         <input type="checkbox" checked={isBlocked} onChange={(e) => setIsBlocked(e.target.checked)} />
-        Заблокирован (события помечаются как тревожные)
+        {t('recognitionPage.blocked')}
       </label>
 
       <ModalActions onCancel={onClose} onSave={handleSave} saving={saving} />
@@ -487,6 +494,7 @@ function PlateModal({ plate, onClose, onSaved }: {
 
 function RecognitionSettingsPanel() {
   const { success, error } = useToast()
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
 
   const { data, loading, refetch } = useAsync<any>(() => recognitionAPI.getSettings(), [])
@@ -496,10 +504,10 @@ function RecognitionSettingsPanel() {
   const update = async (patch: Partial<RecognitionSettings>) => {
     try {
       await recognitionAPI.updateSettings(patch)
-      success('Настройки сохранены')
+      success(t('recognitionPage.settingsSaved'))
       refetch()
     } catch {
-      error('Не удалось сохранить настройки')
+      error(t('recognitionPage.settingsSaveFailed'))
     }
   }
 
@@ -512,57 +520,59 @@ function RecognitionSettingsPanel() {
         onClick={() => setOpen(!open)}
       >
         <div>
-          <strong style={{ fontSize: 14 }}>Настройки распознавания</strong>
+          <strong style={{ fontSize: 14 }}>{t('recognitionPage.settingsTitle')}</strong>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 0' }}>
-            Пороги сравнения и реакция на заблокированные лица и номера
+            {t('recognitionPage.settingsHint')}
           </p>
         </div>
-        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{open ? 'Свернуть' : 'Развернуть'}</span>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          {open ? t('recognitionPage.collapse') : t('recognitionPage.expand')}
+        </span>
       </div>
 
       {open && settings && (
         <div style={{ marginTop: 16, display: 'grid', gap: 20 }}>
           <section>
-            <h4 style={{ fontSize: 13, marginBottom: 10 }}>Лица</h4>
+            <h4 style={{ fontSize: 13, marginBottom: 10 }}>{t('recognitionPage.facesSection')}</h4>
             <Toggle
-              label="Распознавание лиц включено"
+              label={t('recognitionPage.facesEnabled')}
               checked={settings.faces.enabled}
               onChange={(v) => update({ faces: { ...settings.faces, enabled: v } })}
             />
             <Slider
-              label="Порог схожести"
+              label={t('recognitionPage.similarityThreshold')}
               value={settings.faces.threshold}
               min={0.2}
               max={0.8}
               step={0.01}
-              hint="Больше значение — строже сравнение, меньше ложных срабатываний"
+              hint={t('recognitionPage.similarityHint')}
               onChange={(v) => update({ faces: { ...settings.faces, threshold: v } })}
             />
             <Toggle
-              label="Помечать заблокированные лица как тревожные"
+              label={t('recognitionPage.alertBlockedFaces')}
               checked={settings.faces.alert_blocked}
               onChange={(v) => update({ faces: { ...settings.faces, alert_blocked: v } })}
             />
           </section>
 
           <section>
-            <h4 style={{ fontSize: 13, marginBottom: 10 }}>Номера автомобилей</h4>
+            <h4 style={{ fontSize: 13, marginBottom: 10 }}>{t('recognitionPage.platesSection')}</h4>
             <Toggle
-              label="Распознавание номеров включено"
+              label={t('recognitionPage.platesEnabled')}
               checked={settings.plates.enabled}
               onChange={(v) => update({ plates: { ...settings.plates, enabled: v } })}
             />
             <Slider
-              label="Минимальная уверенность OCR"
+              label={t('recognitionPage.ocrThreshold')}
               value={settings.plates.threshold}
               min={0.3}
               max={0.95}
               step={0.01}
-              hint="Ниже порога номер считается ненадёжным и не сохраняется"
+              hint={t('recognitionPage.ocrHint')}
               onChange={(v) => update({ plates: { ...settings.plates, threshold: v } })}
             />
             <Toggle
-              label="Помечать заблокированные номера как тревожные"
+              label={t('recognitionPage.alertBlockedPlates')}
               checked={settings.plates.alert_blocked}
               onChange={(v) => update({ plates: { ...settings.plates, alert_blocked: v } })}
             />
@@ -621,11 +631,12 @@ function ModalActions({ onCancel, onSave, saving }: {
   onSave: () => void
   saving: boolean
 }) {
+  const { t } = useTranslation()
   return (
     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-      <button className="btn btn-outline btn-sm" onClick={onCancel}>Отмена</button>
+      <button className="btn btn-outline btn-sm" onClick={onCancel}>{t('common.cancel')}</button>
       <button className="btn btn-primary btn-sm" onClick={onSave} disabled={saving}>
-        {saving ? 'Сохранение...' : 'Сохранить'}
+        {saving ? t('common.saving') : t('common.save')}
       </button>
     </div>
   )
