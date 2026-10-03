@@ -100,7 +100,11 @@ func NewManager(repo *postgres.ACSRepo) *Manager {
 	// Basic Auth, журнал проходов — по протоколу WEBJSON, в котором
 	// контроллер сам обращается к нашему серверу (см. z5r_webjson.go).
 	m.Register("z5r", NewZ5RAdapter)
-
+	// Домофон Beward (DS07P-LP): реле замка и кнопка вызова по
+	// фирменному HTTP API. Реле подключено к входу «кнопка выхода»
+	// контроллера Z5R, поэтому открытие с домофона в журнале Z5R
+	// выглядит нажатием кнопки — журнал ведём у себя (см. beward.go).
+	m.Register("beward", NewBewardAdapter)
 	return m
 }
 

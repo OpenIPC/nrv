@@ -46,7 +46,7 @@ type Switch struct {
 	// HasPassword — задан ли пароль. Отдельное поле, потому что интерфейсу
 	// нужно показать состояние настройки, а сам пароль передавать нельзя.
 	HasPassword bool `json:"has_password"`
-	Online        bool `json:"online"`
+	Online      bool `json:"online"`
 	// LastSeenAt — когда коммутатор в последний раз ответил.
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 	// LastError — текст последней ошибки связи. Пусто, если связь есть.
@@ -135,9 +135,9 @@ type SwitchPort struct {
 
 	// Данные, подставленные при чтении: камера на порту. Пусто, если
 	// порт занят не камерой или свободен.
-	CameraID   *uuid.UUID `json:"camera_id,omitempty"`
-	CameraName string     `json:"camera_name,omitempty"`
-	CameraOnline bool     `json:"camera_online,omitempty"`
+	CameraID     *uuid.UUID `json:"camera_id,omitempty"`
+	CameraName   string     `json:"camera_name,omitempty"`
+	CameraOnline bool       `json:"camera_online,omitempty"`
 }
 
 // SpeedMbpsValue переводит внутренний код скорости коммутатора в Мбит/с.
@@ -228,13 +228,14 @@ type SwitchPortEvent struct {
 	// к которой относилось действие. Хранить имя в записи было бы точнее,
 	// но тогда журнал расходился бы с текущей схемой подключения, и
 	// непонятно, какому источнику верить. Привязка — источник истины.
-	CameraName string `json:"camera_name,omitempty"`
-	Action     PortAction   `json:"action"`
-	Result     string       `json:"result"`
-	Message    string       `json:"message"`
-	Actor      string       `json:"actor"`
-	CreatedAt  time.Time    `json:"created_at"`
+	CameraName string     `json:"camera_name,omitempty"`
+	Action     PortAction `json:"action"`
+	Result     string     `json:"result"`
+	Message    string     `json:"message"`
+	Actor      string     `json:"actor"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
+
 // MacTableState — способность модели сообщать порт для MAC-адреса.
 type MacTableState string
 

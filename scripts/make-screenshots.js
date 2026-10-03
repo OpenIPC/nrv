@@ -248,6 +248,25 @@ const SHOTS = [
       await page.waitForTimeout(1500)
     },
   },
+  {
+    file: '21-camera-device.png',
+    title: 'Карточка камеры: паспорт и состояние устройства',
+    // Блок «Устройство» длинный: паспорт, состояние и потоки не помещаются
+    // в обычный вьюпорт, и снимок обрывался бы на середине.
+    viewport: { width: 1440, height: 1500 },
+    prepare: async (page) => {
+      await page.goto(`${BASE}/cameras/${DEMO_CAMERA}`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(9000)
+      // Прокручиваем к блоку «Устройство»: он в боковой колонке ниже
+      // «Подключения», и без прокрутки в кадр попадёт не то.
+      await page.evaluate(() => {
+        const el = [...document.querySelectorAll('h3')]
+          .find((e) => e.textContent.trim() === 'Устройство')
+        if (el) el.scrollIntoView({ block: 'start' })
+      })
+      await page.waitForTimeout(1500)
+    },
+  },
 ]
 
 /**
@@ -357,6 +376,9 @@ async function main() {
   const done = []
   for (const shot of SHOTS) {
     try {
+      // Размер окна можно задать для отдельного снимка: длинные блоки не
+      // помещаются в общий вьюпорт, и без этого снимок обрывался бы.
+      await page.setViewportSize(shot.viewport || { width: 1440, height: 900 })
       await shot.prepare(page)
       // Маскировка паролей в адресах потоков — для каждого снимка, без
       // исключений: снимки публикуются, и одна забытая запись открыла бы

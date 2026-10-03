@@ -350,6 +350,7 @@ func (r *SwitchRepo) GetSwitchBySN(ctx context.Context, sn string) (*domain.Swit
 	}
 	return &s, nil
 }
+
 // SavePorts сохраняет состояние портов, полученное при опросе.
 //
 // Работает в транзакции: порт, обновлённый наполовину, выглядел бы как
@@ -523,21 +524,21 @@ func (r *SwitchRepo) UnbindCamera(ctx context.Context, cameraID uuid.UUID) error
 
 // CameraPortLink — сведения о подключении камеры.
 type CameraPortLink struct {
-	SwitchID   uuid.UUID `json:"switch_id"`
-	SwitchName string    `json:"switch_name"`
-	SwitchSN   string    `json:"switch_sn"`
-	SwitchIP   string    `json:"switch_ip"`
-	SwitchModel string   `json:"switch_model"`
-	PortNumber int       `json:"port_number"`
+	SwitchID    uuid.UUID `json:"switch_id"`
+	SwitchName  string    `json:"switch_name"`
+	SwitchSN    string    `json:"switch_sn"`
+	SwitchIP    string    `json:"switch_ip"`
+	SwitchModel string    `json:"switch_model"`
+	PortNumber  int       `json:"port_number"`
 	// Состояние порта: нужно в карточке камеры, чтобы сразу показать,
 	// есть ли питание и линк — это и есть ответ на вопрос «камера
 	// действительно зависла или у неё отвалился кабель».
-	LinkUp     bool    `json:"link_up"`
-	PoeEnabled bool    `json:"poe_enabled"`
-	PoeWatts   float64 `json:"poe_watts"`
-	PoeCapable bool    `json:"poe_capable"`
-	SpeedMbps  int     `json:"speed_mbps"`
-	SwitchOnline bool  `json:"switch_online"`
+	LinkUp       bool    `json:"link_up"`
+	PoeEnabled   bool    `json:"poe_enabled"`
+	PoeWatts     float64 `json:"poe_watts"`
+	PoeCapable   bool    `json:"poe_capable"`
+	SpeedMbps    int     `json:"speed_mbps"`
+	SwitchOnline bool    `json:"switch_online"`
 }
 
 // CameraLink возвращает подключение камеры к порту коммутатора.

@@ -955,7 +955,7 @@ type ScanResult struct {
 
 type CreateACSControllerRequest struct {
 	Name     string `json:"name" validate:"required"`
-	Vendor   string `json:"vendor" validate:"required,oneof=hikvision dahua promwad skud z5r"`
+	Vendor   string `json:"vendor" validate:"required,oneof=hikvision dahua promwad skud z5r beward"`
 	IP       string `json:"ip" validate:"required,ip"`
 	Port     int    `json:"port" validate:"min=1,max=65535"`
 	Login    string `json:"login"`

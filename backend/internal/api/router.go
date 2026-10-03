@@ -38,8 +38,14 @@ type RouterConfig struct {
 	// Отдельный сервис, а не часть камер: коммутатор живёт сам по себе
 	// и обслуживает не только камеры, а питание порта — действие над
 	// физическим устройством, а не над записью в базе.
-	SwitchSvc   *service.SwitchService
-	FirmwareSvc *service.FirmwareService
+	SwitchSvc *service.SwitchService
+	// CameraAPISvc — доступ к камерам по их собственным протоколам:
+	// сведения об устройстве, состояние, перезагрузка.
+	//
+	// Отдельно от CameraSvc: тот работает с нашей базой, этот — с самим
+	// устройством. Разные предметы и разные причины отказа.
+	CameraAPISvc *service.CameraAPIService
+	FirmwareSvc  *service.FirmwareService
 	UserRepo     *postgres.UserRepo
 	JWTSecret    string
 	WGManager    *tunnel.WireGuardManager
@@ -126,6 +132,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	acsPlanH := handlers.NewACSPlanHandler(cfg.ACSPlanSvc, tokenAuth)
 	// Коммутаторы: питание портов и мониторинг.
 	switchH := handlers.NewSwitchHandler(cfg.SwitchSvc)
+	// Доступ к камерам по их собственным протоколам.
+	cameraAPIH := handlers.NewCameraAPIHandler(cfg.CameraAPISvc)
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
 	statsH := handlers.NewStatsHandler(cfg.DB)
@@ -547,6 +555,17 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/switches/bind", switchH.BindCamera)
 			r.Get("/cameras/{cameraID}/switch-link", switchH.CameraLink)
 			r.Delete("/cameras/{cameraID}/switch-link", switchH.UnbindCamera)
+
+			// Обращение к самой камере по её собственному протоколу.
+			//
+			// Отдельно от остальных маршрутов камер: они меняют запись в
+			// нашей базе, а эти разговаривают с устройством. Отказ тут
+			// бывает от камеры, а не от нас, и это важно различать.
+			r.Get("/cameras/{id}/device", cameraAPIH.Overview)
+			// Перезагрузка — действие разрушительное: камера уходит из
+			// сети на минуту с лишним. Поэтому отдельным маршрутом, а не
+			// флагом в общем запросе.
+			r.Post("/cameras/{id}/device/reboot", cameraAPIH.Reboot)
 
 			// Прошивки контроллеров СКУД: образы на сервере и OTA-обновление.
 			r.Get("/acs/firmwares", fwH.ListFirmwares)

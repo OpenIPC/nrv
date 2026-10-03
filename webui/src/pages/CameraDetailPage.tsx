@@ -14,6 +14,7 @@ import CameraImageProfilePanel from '../components/CameraImageProfilePanel'
 import OpenIPCOnly from '../components/OpenIPCOnly'
 import VendorBadge from '../components/VendorBadge'
 import CameraNetworkCard from '../components/CameraNetworkCard'
+import CameraDeviceCard from '../components/CameraDeviceCard'
 import {
   ArrowLeft, RefreshCw, Wifi, WifiOff, Radio, Info,
   Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, Loader2, Crosshair, Volume2, Sliders,
@@ -583,6 +584,11 @@ export default function CameraDetailPage() {
               Стоит рядом со статусом, потому что отвечает на тот же вопрос
               «камера работает?», но со стороны сети, а не устройства. */}
           <CameraNetworkCard cameraID={camera.id} cameraOnline={isOnline} />
+
+          {/* Что камера сообщает о себе сама — паспорт, состояние, потоки
+              и перезагрузка. Здесь же, потому что это следующий шаг после
+              «камера в сети и порт в порядке»: что именно за устройство. */}
+          <CameraDeviceCard cameraID={camera.id} vendor={camera.vendor} />
 
           {/* Действия */}
           <div className="card">

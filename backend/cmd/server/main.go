@@ -199,6 +199,14 @@ func main() {
 	switchRepo := postgres.NewSwitchRepo(db)
 	switchSvc := service.NewSwitchService(switchRepo, "", 0)
 
+	// Доступ к камерам по их собственным протоколам.
+	//
+	// Способ обращения выбирается по производителю и проверяется опросом:
+	// для Hikvision — фирменный ISAPI, для остальных — общий ONVIF.
+	// Выбор не догадка: на камерах парка Hikvision ONVIF не отвечает без
+	// отдельной настройки, а ISAPI работает сразу.
+	cameraAPISvc := service.NewCameraAPIService(cameraRepo)
+
 	// Распознавание лиц и автомобильных номеров: справочники сопоставляются
 	// с событиями, результат попадает в detection_events и в триггер записи.
 	recognitionRepo := postgres.NewRecognitionRepo(db)
@@ -452,6 +460,7 @@ func main() {
 		CardCapture:        cardCapture,
 		ACSPlanSvc:         acsPlanSvc,
 		SwitchSvc:          switchSvc,
+		CameraAPISvc:       cameraAPISvc,
 		FirmwareSvc:        firmwareSvc,
 		UserRepo:           userRepo,
 		JWTSecret:          cfg.JWTSecret,

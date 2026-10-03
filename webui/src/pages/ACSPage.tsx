@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { acsAPI, ACSController, ACSEvent } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { Plus, Shield, DoorOpen, Unlock, RefreshCw, Pencil, CreditCard, Trash2, Video, Cpu } from 'lucide-react'
@@ -18,6 +18,9 @@ function vendorLabel(vendor: string): string {
   const titles: Record<string, string> = {
     skud: 'SKUD (ESP32-P4)',
     z5r: 'Z5R WEB BT (IronLogic)',
+    // Домофон в роли контроллера доступа: у него реле замка, и он же
+    // дублирует открытие на вход «кнопка выхода» контроллера Z5R.
+    beward: 'Beward (домофон)',
     hikvision: 'Hikvision',
     dahua: 'Dahua',
     promwad: 'Promwad',
@@ -52,6 +55,40 @@ export default function ACSPage() {
   const [firmwareFor, setFirmwareFor] = useState<ACSController | null>(null)
   const [actionError, setActionError] = useState('')
 
+  // Двери каждого контроллера, по его идентификатору.
+  //
+  // Идентификатор двери задаёт САМ контроллер, и у разных вендоров он
+  // разный: у Z5R это «door-1», у домофона Beward — «relay1». Раньше кнопка
+  // открытия подставляла одно зашитое значение для всех, и на домофоне
+  // открытие отвечало отказом «неизвестная дверь»: команда уходила с чужим
+  // идентификатором. Теперь список дверей запрашивается у контроллера, и
+  // кнопка отправляет именно его значение.
+  const [doors, setDoors] = useState<Record<string, { id: string; name: string }[]>>({})
+
+  useEffect(() => {
+    if (!controllers?.length) return
+    let cancelled = false
+
+    // Ошибку чтения дверей не показываем: это вспомогательные данные, и
+    // падение сюда не должно выглядеть как сбой контроллера. Кнопка
+    // открытия просто остается недоступной.
+    Promise.all(
+      controllers.map(async (c) => {
+        try {
+          const res = await acsAPI.listDoors(c.id)
+          return [c.id, (res.data || []) as { id: string; name: string }[]] as const
+        } catch {
+          return [c.id, []] as const
+        }
+      }),
+    ).then((list) => {
+      if (cancelled) return
+      setDoors(Object.fromEntries(list))
+    })
+
+    return () => { cancelled = true }
+  }, [controllers])
+
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
     setSaving(true)
@@ -68,13 +105,39 @@ export default function ACSPage() {
     }
   }
 
-  const handleOpenDoor = async (ctrlID: string, doorID: string) => {
+  const handleOpenDoor = async (ctrlID: string, doorID?: string) => {
     setActionError('')
+    if (!doorID) {
+      // Двери ещё не прочитаны — отправлять нечего. Молчание здесь хуже
+      // понятного сообщения: оператор нажал бы кнопку и не понял, почему
+      // ничего не произошло.
+      setActionError('Список дверей контроллера ещё не получен')
+      return
+    }
     try {
       await acsAPI.openDoor(ctrlID, doorID)
     } catch (e: any) {
       setActionError(e?.response?.data?.error || 'Не удалось открыть дверь')
     }
+  }
+
+  // Название двери для журнала.
+  //
+  // В событии хранится технический идентификатор — «door-1» у одного
+  // вендора, «relay1» у другого. У двух контроллеров одного вендора он
+  // совпадает, и по журналу нельзя понять, какая именно дверь открылась:
+  // видно только одинаковые «door-1» в каждой строке. Показываем имя двери
+  // вместе с именем контроллера, а если двери получить не удалось — сам
+  // идентификатор, чтобы событие не осталось вовсе без подписи.
+  const doorLabel = (ev: ACSEvent): string => {
+    const ctrl = controllers?.find((c) => c.id === ev.controller_id)
+    const door = doors[ev.controller_id]?.find((d) => d.id === ev.door_id)
+    const doorName = door?.name || ev.door_id
+    if (!ctrl) return doorName
+    // У контроллеров Z5R дверь называется так же, как сам контроллер (имя
+    // задаёт оператор при заведении). Повторять его дважды незачем —
+    // читается хуже, чем одно название.
+    return doorName === ctrl.name ? doorName : `${ctrl.name}: ${doorName}`
   }
 
   const handleDeleteController = async (ctrl: ACSController) => {
@@ -173,7 +236,13 @@ export default function ACSPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     <button
                       className="btn btn-outline btn-sm"
-                      onClick={() => handleOpenDoor(ctrl.id, 'door-1')}
+                      onClick={() => handleOpenDoor(ctrl.id, doors[ctrl.id]?.[0]?.id)}
+                      disabled={!doors[ctrl.id]?.length}
+                      title={
+                        doors[ctrl.id]?.[0]
+                          ? `Дверь: ${doors[ctrl.id][0].name}`
+                          : 'Список дверей контроллера ещё не получен'
+                      }
                     >
                       <Unlock size={14} />
                       Открыть дверь
@@ -254,7 +323,7 @@ export default function ACSPage() {
                             </span>
                           )}
                         </td>
-                        <td style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{ev.door_id}</td>
+                        <td style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{doorLabel(ev)}</td>
                         <td style={{ fontSize: 13 }}>
                           {ev.card_number ? (
                             <>
@@ -314,6 +383,7 @@ export default function ACSPage() {
               <select value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })}>
                 <option value="skud">SKUD (ESP32-P4)</option>
                 <option value="z5r">Z5R WEB BT (IronLogic)</option>
+                <option value="beward">Beward (домофон)</option>
                 <option value="hikvision">Hikvision</option>
                 <option value="dahua">Dahua</option>
                 <option value="promwad">Promwad</option>

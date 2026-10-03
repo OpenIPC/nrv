@@ -258,6 +258,62 @@ export interface CameraDeviceInfo {
   kernel?: string
 }
 
+// Паспорт устройства, полученный от самой камеры (не из нашей базы).
+// Поля необязательные: набор зависит от протокола. Источник (source)
+// показывает, чем удалось ответить — ISAPI или ONVIF. Это важно видеть
+// оператору: если по одному протоколу камера не ответила, а по другому
+// ответила, значит дело не в камере, а в настройках учётной записи.
+export interface CameraDevicePassport {
+  manufacturer?: string
+  model?: string
+  firmware?: string
+  firmware_date?: string
+  serial?: string
+  hardware_id?: string
+  mac?: string
+  device_type?: string
+  // 'isapi' или 'onvif' — какой адаптер ответил
+  source?: string
+}
+
+export interface CameraDeviceStatus {
+  uptime_seconds?: number
+  device_time?: string
+  // Расхождение часов камеры с нашим временем в секундах. Положительное
+  // значение означает, что часы камеры ОТСТАЮТ: метки в архиве поедут
+  // назад во времени. На камерах парка встречается отставание в 139 суток.
+  time_drift_seconds?: number
+  cpu_percent?: number
+  memory_percent?: number
+  memory_free_kb?: number
+}
+
+export interface CameraDeviceStream {
+  id?: string
+  name?: string
+  codec?: string
+  width?: number
+  height?: number
+  fps?: number
+  rate_control?: string
+  bitrate_kbps?: number
+}
+
+// Ответ эндпоинта /cameras/{id}/device. Каждая из трёх частей приходит
+// отдельно со своей ошибкой: камера может ответить паспортом, но не
+// отдать параметры потоков — тогда видно, что именно не получилось.
+export interface CameraOverview {
+  vendor: string
+  vendor_title?: string
+  info?: CameraDevicePassport
+  info_error?: string
+  status?: CameraDeviceStatus
+  status_error?: string
+  streams?: CameraDeviceStream[]
+  streams_error?: string
+  can_reboot: boolean
+}
+
 // Настройки камеры. Все поля необязательные: при сохранении отправляются
 // только изменённые, поэтому остальные настройки камеры не затрагиваются.
 export interface CameraSettings {
@@ -1215,6 +1271,15 @@ export const camerasAPI = {
   // Перезапуск камеры через API прошивки вместо SSH.
   restartCamera: (id: string) =>
     api.post<CameraCommandResult>(`/cameras/${id}/restart`, {}),
+
+  // Паспорт, состояние и параметры потоков, прочитанные с самой камеры
+  // по её штатному протоколу (ISAPI у Hikvision, ONVIF у остальных).
+  // Отличается от get(id): тот отдаёт то, что записано у нас в базе.
+  deviceOverview: (id: string) => api.get<CameraOverview>(`/cameras/${id}/device`),
+  // Перезагрузка камеры по штатному протоколу. Нужна там, где нет
+  // Majestic: кнопка reboot выше работает только на OpenIPC.
+  deviceReboot: (id: string) =>
+    api.post<CameraCommandResult>(`/cameras/${id}/device/reboot`, {}),
 }
 
 export const logsAPI = {
