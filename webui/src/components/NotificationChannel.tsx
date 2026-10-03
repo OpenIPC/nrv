@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { Camera } from '../api/client'
 import {
   AlertCircle, Clock, Camera as CameraIcon,
@@ -5,14 +6,20 @@ import {
 } from 'lucide-react'
 import type React from 'react'
 
-/** Типы событий, доступные для отправки. */
-export const EVENT_OPTIONS: { value: string; label: string }[] = [
-  { value: 'object', label: 'Объекты' },
-  { value: 'plate', label: 'Номера' },
-  { value: 'face', label: 'Лица' },
-  { value: 'line', label: 'Пересечение линии' },
-  { value: 'acs', label: 'Доступ (СКУД)' },
-  { value: 'audio', label: 'Звуки' },
+/**
+ * Типы событий, доступные для отправки.
+ *
+ * Здесь только код события и ключ перевода: подпись ставится в месте
+ * показа. Раньше рядом с кодом лежал готовый русский текст, и в журнале
+ * отправок на китайском он оставался русским.
+ */
+export const EVENT_OPTIONS: { value: string; key: string }[] = [
+  { value: 'object', key: 'notificationsPage.events.object' },
+  { value: 'plate', key: 'notificationsPage.events.plate' },
+  { value: 'face', key: 'notificationsPage.events.face' },
+  { value: 'line', key: 'notificationsPage.events.line' },
+  { value: 'acs', key: 'notificationsPage.events.acs' },
+  { value: 'audio', key: 'notificationsPage.events.audio' },
 ]
 
 /** Общие поля канала: правила отбора событий одинаковы для всех сервисов. */
@@ -50,21 +57,22 @@ interface ChannelEventRulesProps {
 export function ChannelEventRules({
   config, cameras, patch, toggleEvent, toggleCamera, extra,
 }: ChannelEventRulesProps) {
+  const { t } = useTranslation()
   return (
     <>
       {/* О чём сообщать */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <strong>О чём сообщать</strong>
+          <strong>{t('notificationsPage.rulesAbout')}</strong>
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            выбрано: {config.events.length}
+            {t('notificationsPage.rulesSelected', { count: config.events.length })}
           </span>
         </div>
 
         {config.enabled && config.events.length === 0 && (
           <div style={{ ...warningStyle, marginBottom: 12 }}>
             <AlertCircle size={14} />
-            Ни один тип событий не выбран — уведомления приходить не будут.
+            {t('notificationsPage.rulesNoneSelected')}
           </div>
         )}
 
@@ -83,7 +91,7 @@ export function ChannelEventRules({
                   color: on ? 'var(--accent)' : 'var(--text-secondary)',
                 }}
               >
-                {opt.label}
+                {t(opt.key)}
               </button>
             )
           })}
@@ -94,18 +102,18 @@ export function ChannelEventRules({
           gap: 14,
         }}>
           <div>
-            <label style={labelStyle}>Порог уверенности</label>
+            <label style={labelStyle}>{t('notificationsPage.rulesMinConfidence')}</label>
             <input
               className="input" type="number" min={0} max={1} step={0.05}
               value={config.min_confidence}
               onChange={(e) => patch('min_confidence', Number(e.target.value))}
               style={{ width: '100%' }}
             />
-            <div style={hintStyle}>0 — отправлять всё. 0.6 — только уверенные срабатывания.</div>
+            <div style={hintStyle}>{t('notificationsPage.rulesMinConfidenceHint')}</div>
           </div>
 
           <div>
-            <label style={labelStyle}>Пауза между повторами, мин</label>
+            <label style={labelStyle}>{t('notificationsPage.rulesRepeat')}</label>
             <input
               className="input" type="number" min={0} max={1440}
               value={config.repeat_minutes}
@@ -113,7 +121,7 @@ export function ChannelEventRules({
               style={{ width: '100%' }}
             />
             <div style={hintStyle}>
-              Одна машина за проезд даёт много кадров. 0 — без ограничений.
+              {t('notificationsPage.rulesRepeatHint')}
             </div>
           </div>
         </div>
@@ -121,7 +129,7 @@ export function ChannelEventRules({
 
       {/* Вложения */}
       <div className="card" style={{ marginBottom: 16 }}>
-        <strong style={{ display: 'block', marginBottom: 14 }}>Вложения</strong>
+        <strong style={{ display: 'block', marginBottom: 14 }}>{t('notificationsPage.rulesAttachments')}</strong>
 
         <label style={{ ...checkStyle, marginBottom: 8 }}>
           <input
@@ -129,7 +137,7 @@ export function ChannelEventRules({
             checked={config.send_snapshot}
             onChange={(e) => patch('send_snapshot', e.target.checked)}
           />
-          Прикладывать снимок события
+          {t('notificationsPage.rulesSendSnapshot')}
         </label>
 
         <label style={{ ...checkStyle, marginBottom: 12 }}>
@@ -138,12 +146,12 @@ export function ChannelEventRules({
             checked={config.send_clip}
             onChange={(e) => patch('send_clip', e.target.checked)}
           />
-          Прикладывать видео клипа
+          {t('notificationsPage.rulesSendClip')}
         </label>
 
         {config.send_clip && (
           <div style={{ maxWidth: 260 }}>
-            <label style={labelStyle}>Предельный размер клипа, МБ</label>
+            <label style={labelStyle}>{t('notificationsPage.rulesClipMax')}</label>
             <input
               className="input" type="number" min={1} max={2000}
               value={config.clip_max_mb}
@@ -151,8 +159,7 @@ export function ChannelEventRules({
               style={{ width: '100%' }}
             />
             <div style={hintStyle}>
-              Клип больше предела пропускается целиком — мессенджер отказывает
-              в приёме, а не отправляет без видео. Рекомендуется 45 МБ.
+              {t('notificationsPage.rulesClipMaxHint')}
             </div>
           </div>
         )}
@@ -160,8 +167,7 @@ export function ChannelEventRules({
         {config.send_clip && (
           <div style={{ ...warningStyle, marginTop: 12 }}>
             <Clock size={14} />
-            Уведомление уходит после сборки клипа — обычно 10–20 секунд.
-            Если клип не собрался, сообщение придёт без видео через минуту.
+            {t('notificationsPage.rulesClipDelay')}
           </div>
         )}
       </div>
@@ -170,7 +176,7 @@ export function ChannelEventRules({
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
           <Clock size={16} style={{ color: 'var(--accent)' }} />
-          <strong>Расписание</strong>
+          <strong>{t('notificationsPage.rulesSchedule')}</strong>
         </div>
 
         <label style={{ ...checkStyle, marginBottom: 12 }}>
@@ -179,27 +185,27 @@ export function ChannelEventRules({
             checked={config.quiet_hours_enabled}
             onChange={(e) => patch('quiet_hours_enabled', e.target.checked)}
           />
-          Не беспокоить ночью
+          {t('notificationsPage.rulesQuiet')}
         </label>
 
         {config.quiet_hours_enabled && (
           <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
-              <label style={labelStyle}>С</label>
+              <label style={labelStyle}>{t('notificationsPage.rulesFrom')}</label>
               <input
                 className="input" type="time" value={config.quiet_hours_from}
                 onChange={(e) => patch('quiet_hours_from', e.target.value)}
               />
             </div>
             <div>
-              <label style={labelStyle}>До</label>
+              <label style={labelStyle}>{t('notificationsPage.rulesTo')}</label>
               <input
                 className="input" type="time" value={config.quiet_hours_to}
                 onChange={(e) => patch('quiet_hours_to', e.target.value)}
               />
             </div>
             <div style={{ ...hintStyle, paddingBottom: 8 }}>
-              Окно может пересекать полночь: 23:00 — 07:00.
+              {t('notificationsPage.rulesQuietHint')}
             </div>
           </div>
         )}
@@ -211,9 +217,11 @@ export function ChannelEventRules({
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
           <CameraIcon size={16} style={{ color: 'var(--accent)' }} />
-          <strong>Камеры</strong>
+          <strong>{t('notificationsPage.rulesCameras')}</strong>
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            {config.cameras.length === 0 ? 'все камеры' : `выбрано: ${config.cameras.length}`}
+            {config.cameras.length === 0
+              ? t('notificationsPage.rulesAllCameras')
+              : t('notificationsPage.rulesCamerasSelected', { count: config.cameras.length })}
           </span>
         </div>
 
@@ -243,7 +251,7 @@ export function ChannelEventRules({
         </div>
         {config.cameras.length === 0 ? (
           <div style={hintStyle}>
-            Ни одна камера не выбрана — уведомления приходят со всех камер.
+            {t('notificationsPage.rulesNoCamera')}
           </div>
         ) : (
           <button
@@ -251,7 +259,7 @@ export function ChannelEventRules({
             onClick={() => patch('cameras', [])}
             style={{ marginTop: 10 }}
           >
-            Выбрать все камеры
+            {t('notificationsPage.rulesSelectAll')}
           </button>
         )}
       </div>
@@ -269,10 +277,11 @@ export function TestBar({
   result: { ok: boolean; text: string } | null
   hint: string
 }) {
+  const { t } = useTranslation()
   return (
     <div className="card" style={{ marginBottom: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <strong>Проверка связи</strong>
+        <strong>{t('notificationsPage.rulesTest')}</strong>
         <button className="btn btn-primary btn-sm" onClick={onClick} disabled={testing}>
           {testing ? <Loader2 size={13} className="spin" /> : <Send size={13} />}
           {label}

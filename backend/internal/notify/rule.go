@@ -92,8 +92,23 @@ type Decision struct {
 	Send bool
 	// Reason — почему решено не отправлять. Идёт в журнал, чтобы оператор
 	// понимал, отчего уведомлений нет, а не искал причину наугад.
+	//
+	// Это код, а не готовый текст. Интерфейс показывается на четырёх
+	// языках, и русская строка, записанная здесь, попала бы в журнал
+	// одинаковой для всех — перевести её задним числом было бы нечем.
+	// Подпись к коду ставит интерфейс; в базе лежат коды.
 	Reason string
 }
+
+// Коды причин отказа. Новые значения добавляются сюда, а не в текст
+// подписи: журнал хранит именно код, а подписи живут в файлах переводов.
+const (
+	ReasonChannelDisabled = "channel_disabled"
+	ReasonEventNotAllowed = "event_not_allowed"
+	ReasonCameraNotAllowed = "camera_not_allowed"
+	ReasonLowConfidence = "low_confidence"
+	ReasonQuietHours = "quiet_hours"
+)
 
 // Decide проверяет событие по правилу.
 //
@@ -102,23 +117,23 @@ type Decision struct {
 // Так решение читается сверху вниз и объясняет себя.
 func (r Rule) Decide(ev Event) Decision {
 	if !r.Enabled {
-		return Decision{Reason: "уведомления выключены"}
+		return Decision{Reason: ReasonChannelDisabled}
 	}
 
 	if !r.allowsEvent(ev.Type) {
-		return Decision{Reason: "тип события не выбран для отправки"}
+		return Decision{Reason: ReasonEventNotAllowed}
 	}
 
 	if !r.allowsCamera(ev.CameraID) {
-		return Decision{Reason: "камера не выбрана для отправки"}
+		return Decision{Reason: ReasonCameraNotAllowed}
 	}
 
 	if r.MinConfidence > 0 && ev.Confidence > 0 && ev.Confidence < r.MinConfidence {
-		return Decision{Reason: "уверенность ниже порога"}
+		return Decision{Reason: ReasonLowConfidence}
 	}
 
 	if r.inQuietHours(ev.Time) {
-		return Decision{Reason: "тихие часы"}
+		return Decision{Reason: ReasonQuietHours}
 	}
 
 	return Decision{Send: true}

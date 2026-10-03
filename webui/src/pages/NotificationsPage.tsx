@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Trans, useTranslation } from 'react-i18next'
 import {
   camerasAPI, notificationsAPI,
   type TelegramConfig, type MaxConfig, type Camera, type NotificationLogRecord,
@@ -52,17 +53,45 @@ const EMPTY_MAX: MaxConfig = {
   repeat_minutes: 5,
 }
 
-/** Короткие подписи каналов для журнала и переключателя. */
+/** Ключи подписей каналов — для журнала и переключателя. */
 const CHANNEL_LABELS: Record<string, string> = {
-  telegram: 'Telegram',
-  max: 'MAX',
-  system: 'Сервер',
+  telegram: 'notificationsPage.channelTelegram',
+  max: 'notificationsPage.channelMax',
+  system: 'notificationsPage.channelSystem',
 }
 
 type Tab = 'telegram' | 'max' | 'system'
 
+/**
+ * Подписи к причинам отказа в журнале отправок.
+ *
+ * В базе лежат коды (см. backend/internal/notify/rule.go), а не готовый
+ * текст: журнал один на все языки интерфейса.
+ */
+const REASON_KEYS: Record<string, string> = {
+  channel_disabled: 'notificationsPage.reasonChannelDisabled',
+  event_not_allowed: 'notificationsPage.reasonEventNotAllowed',
+  camera_not_allowed: 'notificationsPage.reasonCameraNotAllowed',
+  low_confidence: 'notificationsPage.reasonLowConfidence',
+  quiet_hours: 'notificationsPage.reasonQuietHours',
+}
+
+/**
+ * Текст причины по коду.
+ *
+ * Если код неизвестен, показываем значение как есть: в записях,
+ * сделанных до перехода на коды, лежит русский текст, и терять
+ * его нельзя — по нему оператор разбирает старые случаи.
+ */
+function reasonText(t: (key: string) => string, code?: string): string {
+  if (!code) return ''
+  const key = REASON_KEYS[code]
+  return key ? t(key) : code
+}
+
 export default function NotificationsPage() {
   const toast = useToast()
+  const { t } = useTranslation()
 
   const [tab, setTab] = useState<Tab>('telegram')
 
@@ -122,18 +151,18 @@ export default function NotificationsPage() {
         })
         setCameras(camRes.data || [])
       })
-      .catch(() => toast.error('Не удалось загрузить настройки уведомлений'))
+      .catch(() => toast.error(t('notificationsPage.loadFailed')))
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [toast])
+  }, [toast, t])
 
   const loadLog = useCallback(() => {
     setLoadingLog(true)
     notificationsAPI.log({ status: logFilter || undefined, limit: 50 })
       .then((res) => setLog(res.data.records || []))
-      .catch(() => toast.error('Не удалось получить журнал отправок'))
+      .catch(() => toast.error(t('notificationsPage.logLoadFailed')))
       .finally(() => setLoadingLog(false))
-  }, [logFilter, toast])
+  }, [logFilter, toast, t])
 
   useEffect(() => { loadLog() }, [loadLog])
 
@@ -239,9 +268,9 @@ export default function NotificationsPage() {
     setSaving(true)
     try {
       await persist()
-      toast.success(`Настройки ${CHANNEL_LABELS[tab]} сохранены`)
+      toast.success(t('notificationsPage.saved', { channel: t(CHANNEL_LABELS[tab]) }))
     } catch (err: any) {
-      toast.error(err?.response?.data?.error || 'Не удалось сохранить настройки')
+      toast.error(err?.response?.data?.error || t('notificationsPage.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -265,7 +294,7 @@ export default function NotificationsPage() {
       } catch (err: any) {
         setTestResult({
           ok: false,
-          text: err?.response?.data?.error || 'Не удалось сохранить настройки',
+          text: err?.response?.data?.error || t('notificationsPage.saveFailed'),
         })
         return
       }
@@ -280,21 +309,23 @@ export default function NotificationsPage() {
           // Сервер может сообщить о частичном успехе: связь есть,
           // но вложение не прошло. Показываем это как предупреждение.
           text: res.data.error
-            ? `Настройки сохранены. Связь есть, чат «${res.data.chat_name}». ${res.data.error}`
-            : `Настройки сохранены. Сообщение отправлено в «${res.data.chat_name}»`,
+            ? t('notificationsPage.testSavedPartial', { chat: res.data.chat_name, error: res.data.error })
+            : t('notificationsPage.testSent', { chat: res.data.chat_name }),
         })
       } else {
         // Настройки уже записаны, но связь не подтвердилась — говорим об этом
         // прямо, чтобы оператор не ждал уведомлений напрасно.
         setTestResult({
           ok: false,
-          text: `${res.data.error || 'Не удалось отправить сообщение'} (настройки сохранены, но уведомления работать не будут)`,
+          text: t('notificationsPage.testSendFailed', {
+            error: res.data.error || t('notificationsPage.testSendFailedDefault'),
+          }),
         })
       }
     } catch (err: any) {
       setTestResult({
         ok: false,
-        text: err?.response?.data?.error || 'Ошибка запроса проверки',
+        text: err?.response?.data?.error || t('notificationsPage.testRequestFailed'),
       })
     } finally {
       setTesting(false)
@@ -304,7 +335,7 @@ export default function NotificationsPage() {
   if (loading) {
     return (
       <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Loader2 size={16} className="spin" /> Загрузка настроек…
+        <Loader2 size={16} className="spin" /> {t('notificationsPage.loadingConfig')}
       </div>
     )
   }
@@ -315,24 +346,24 @@ export default function NotificationsPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>Уведомления</h1>
-          <p>Отправка сообщений о событиях в мессенджеры</p>
+          <h1>{t('notificationsPage.title')}</h1>
+          <p>{t('notificationsPage.subtitle')}</p>
         </div>
         <button className="btn btn-primary" onClick={save} disabled={!dirty || saving}>
           {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-          Сохранить
+          {t('notificationsPage.save')}
         </button>
       </div>
 
       {/* Переключатель разделов */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {(['telegram', 'max', 'system'] as Tab[]).map((t) => {
-          const active = tab === t
-          const channelCfg = t === 'telegram' ? telegram : t === 'max' ? max : system
+        {(['telegram', 'max', 'system'] as Tab[]).map((tb) => {
+          const active = tab === tb
+          const channelCfg = tb === 'telegram' ? telegram : tb === 'max' ? max : system
           return (
             <button
-              key={t}
-              onClick={() => { setTab(t); setTestResult(null); setShowToken(false) }}
+              key={tb}
+              onClick={() => { setTab(tb); setTestResult(null); setShowToken(false) }}
               style={{
                 display: 'flex', alignItems: 'center', gap: 8,
                 padding: '8px 18px', borderRadius: 'var(--radius)', fontSize: 14,
@@ -342,10 +373,10 @@ export default function NotificationsPage() {
                 color: active ? 'var(--accent)' : 'var(--text-secondary)',
               }}
             >
-              {t === 'telegram' ? <MessageCircle size={15} />
-                : t === 'max' ? <Bell size={15} />
+              {tb === 'telegram' ? <MessageCircle size={15} />
+                : tb === 'max' ? <Bell size={15} />
                 : <Server size={15} />}
-              {CHANNEL_LABELS[t]}
+              {t(CHANNEL_LABELS[tb])}
               {/* Точка показывает, включён ли раздел — видно, не открывая вкладку */}
               <span style={{
                 width: 7, height: 7, borderRadius: '50%',
@@ -378,7 +409,7 @@ export default function NotificationsPage() {
           {tab === 'telegram'
             ? <MessageCircle size={16} style={{ color: 'var(--accent)' }} />
             : <Bell size={16} style={{ color: 'var(--accent)' }} />}
-          <strong>{CHANNEL_LABELS[tab]}</strong>
+          <strong>{t(CHANNEL_LABELS[tab])}</strong>
           <label style={{
             marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8,
             cursor: 'pointer', fontSize: 13,
@@ -388,7 +419,7 @@ export default function NotificationsPage() {
               checked={cfg.enabled}
               onChange={(e) => patchActive('enabled', e.target.checked)}
             />
-            Отправлять уведомления
+            {t('notificationsPage.sendNotifications')}
           </label>
         </div>
 
@@ -399,7 +430,7 @@ export default function NotificationsPage() {
             background: 'rgba(139,152,165,0.08)', borderRadius: 'var(--radius)',
           }}>
             <AlertCircle size={14} />
-            Канал выключен: сообщения не отправляются независимо от остальных настроек.
+            {t('notificationsPage.channelDisabled')}
           </div>
         )}
 
@@ -409,20 +440,20 @@ export default function NotificationsPage() {
         }}>
           {/* Токен бота */}
           <div>
-            <label style={labelStyle}>Токен бота</label>
+            <label style={labelStyle}>{t('notificationsPage.botToken')}</label>
             <div style={{ position: 'relative' }}>
               <input
                 className="input"
                 type={showToken ? 'text' : 'password'}
                 value={cfg.bot_token}
-                placeholder={tab === 'telegram' ? '123456789:AA...' : 'токен из настроек чат-бота'}
+                placeholder={tab === 'telegram' ? '123456789:AA...' : t('notificationsPage.maxTokenPlaceholder')}
                 onChange={(e) => patchActive('bot_token', e.target.value)}
                 style={{ width: '100%', paddingRight: 34 }}
               />
               <button
                 type="button"
                 onClick={() => setShowToken((v) => !v)}
-                title={showToken ? 'Скрыть токен' : 'Показать токен'}
+                title={showToken ? t('notificationsPage.hideToken') : t('notificationsPage.showToken')}
                 style={{
                   position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
                   background: 'none', border: 'none', cursor: 'pointer',
@@ -434,14 +465,14 @@ export default function NotificationsPage() {
             </div>
             <div style={hintStyle}>
               {tab === 'telegram'
-                ? <>Получите у <b>@BotFather</b>. После сохранения показывается маской.</>
-                : <>Настройки чат-бота в MAX → <b>⋮</b> → скопировать токен.</>}
+                ? <Trans i18nKey="notificationsPage.telegramTokenHint" components={{ 1: <b /> }} />
+                : <Trans i18nKey="notificationsPage.maxTokenHint" components={{ 1: <b /> }} />}
             </div>
           </div>
 
           {/* Чат */}
           <div>
-            <label style={labelStyle}>Куда отправлять (chat_id)</label>
+            <label style={labelStyle}>{t('notificationsPage.chatId')}</label>
             <input
               className="input"
               value={cfg.chat_id}
@@ -451,8 +482,8 @@ export default function NotificationsPage() {
             />
             <div style={hintStyle}>
               {tab === 'telegram'
-                ? 'Для канала или группы id начинается с минуса. Добавьте бота в чат и сделайте администратором.'
-                : 'id чата или канала. Для личного диалога добавьте префикс u — MAX различает чаты и пользователей.'}
+                ? t('notificationsPage.telegramChatHint')
+                : t('notificationsPage.maxChatHint')}
             </div>
           </div>
         </div>
@@ -465,7 +496,7 @@ export default function NotificationsPage() {
             size={16}
             style={{ color: tab === 'telegram' ? 'var(--accent)' : 'var(--success)' }}
           />
-          <strong>Соединение</strong>
+          <strong>{t('notificationsPage.connection')}</strong>
         </div>
 
         {tab === 'telegram' ? (
@@ -477,8 +508,8 @@ export default function NotificationsPage() {
                   checked={telegram.transport === 'direct'}
                   onChange={() => patchTelegram('transport', 'direct')}
                 />
-                Напрямую
-                <span style={hintInlineStyle}>работает за пределами России</span>
+                {t('notificationsPage.direct')}
+                <span style={hintInlineStyle}>{t('notificationsPage.directHint')}</span>
               </label>
               <label style={radioStyle}>
                 <input
@@ -486,18 +517,18 @@ export default function NotificationsPage() {
                   checked={telegram.transport === 'proxy'}
                   onChange={() => patchTelegram('transport', 'proxy')}
                 />
-                Через прокси
-                <span style={hintInlineStyle}>нужен в России</span>
+                {t('notificationsPage.viaProxy')}
+                <span style={hintInlineStyle}>{t('notificationsPage.viaProxyHint')}</span>
               </label>
             </div>
 
             {telegram.transport === 'proxy' && (
               <div>
-                <label style={labelStyle}>Адрес прокси</label>
+                <label style={labelStyle}>{t('notificationsPage.proxyUrl')}</label>
                 <input
                   className="input"
                   value={telegram.proxy_url}
-                  placeholder="socks5://127.0.0.1:1080 или ссылка tg://proxy?..."
+                  placeholder={t('notificationsPage.proxyPlaceholder')}
                   onChange={(e) => patchTelegram('proxy_url', e.target.value)}
                   onPaste={(e) => {
                     // Ссылку из Telegram вставляют целиком — разбираем её
@@ -519,13 +550,14 @@ export default function NotificationsPage() {
                     ...hintStyle,
                     color: proxyHint.usable ? 'var(--text-secondary)' : '#ff9f0a',
                   }}>
-                    {proxyHint.message}
+                    {t(proxyHint.messageKey, proxyHint.messageParams)}
                   </div>
                 ) : (
                   <div style={hintStyle}>
-                    Подойдёт SOCKS5 — укажите <b>socks5://хост:порт</b>,
-                    логин и пароль при необходимости: <b>socks5://логин:пароль@хост:порт</b>.
-                    Ссылку <b>tg://proxy?...</b> можно вставить как есть — она разберётся сама.
+                    <Trans
+                      i18nKey="notificationsPage.proxyHelp"
+                      components={{ 1: <b />, 2: <b />, 3: <b /> }}
+                    />
                   </div>
                 )}
               </div>
@@ -533,8 +565,7 @@ export default function NotificationsPage() {
           </>
         ) : (
           <div style={{ ...hintStyle, marginTop: 0 }}>
-            MAX доступен из России напрямую — прокси не требуется.
-            Это единственный канал, работающий без посредников.
+            {t('notificationsPage.maxNoProxy')}
           </div>
         )}
       </div>
@@ -553,7 +584,7 @@ export default function NotificationsPage() {
               checked={telegram.daily_report}
               onChange={(e) => patchTelegram('daily_report', e.target.checked)}
             />
-            Присылать сводку за сутки
+            {t('notificationsPage.dailyReport')}
             {telegram.daily_report && (
               <input
                 className="input" type="time"
@@ -569,9 +600,9 @@ export default function NotificationsPage() {
       <TestBar
         testing={testing}
         onClick={runTest}
-        label={`Сохранить и проверить ${CHANNEL_LABELS[tab]}`}
+        label={t('notificationsPage.testAndSave', { channel: t(CHANNEL_LABELS[tab]) })}
         result={testResult}
-        hint="Настройки сохраняются, затем отправляется пробное сообщение."
+        hint={t('notificationsPage.testHint')}
       />
       </>
       )}
@@ -579,79 +610,79 @@ export default function NotificationsPage() {
       {/* Журнал отправок: общий для обоих каналов */}
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-          <strong>Журнал отправок</strong>
+          <strong>{t('notificationsPage.logTitle')}</strong>
           <select
             value={logFilter}
             onChange={(e) => setLogFilter(e.target.value)}
             style={{ minWidth: 150 }}
           >
-            <option value="">Все записи</option>
-            <option value="sent">Отправленные</option>
-            <option value="failed">С ошибкой</option>
-            <option value="skipped">Отфильтрованные</option>
+            <option value="">{t('notificationsPage.logAll')}</option>
+            <option value="sent">{t('notificationsPage.logSent')}</option>
+            <option value="failed">{t('notificationsPage.logFailed')}</option>
+            <option value="skipped">{t('notificationsPage.logSkipped')}</option>
           </select>
 
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
             <button className="btn btn-outline btn-sm" onClick={loadLog} disabled={loadingLog}>
               {loadingLog ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />}
-              Обновить
+              {t('notificationsPage.refresh')}
             </button>
             <button
               className="btn btn-outline btn-sm"
               onClick={async () => {
                 try {
                   const res = await notificationsAPI.cleanupLog(30)
-                  toast.success(`Удалено записей: ${res.data.removed}`)
+                  toast.success(t('notificationsPage.cleaned', { count: res.data.removed }))
                   loadLog()
                 } catch {
-                  toast.error('Не удалось очистить журнал')
+                  toast.error(t('notificationsPage.cleanFailed'))
                 }
               }}
             >
-              <Trash2 size={12} /> Очистить старше месяца
+              <Trash2 size={12} /> {t('notificationsPage.cleanOld')}
             </button>
           </div>
         </div>
 
         {log.length === 0 ? (
-          <div style={{ ...hintStyle, margin: 0 }}>Записей нет.</div>
+          <div style={{ ...hintStyle, margin: 0 }}>{t('notificationsPage.logEmpty')}</div>
         ) : (
           <div style={{ maxHeight: 360, overflowY: 'auto' }}>
             <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: 'var(--text-secondary)', textAlign: 'left' }}>
-                  <th style={thStyle}>Время</th>
-                  <th style={thStyle}>Канал</th>
-                  <th style={thStyle}>Камера</th>
-                  <th style={thStyle}>Событие</th>
-                  <th style={thStyle}>Итог</th>
+                  <th style={thStyle}>{t('notificationsPage.thTime')}</th>
+                  <th style={thStyle}>{t('notificationsPage.thChannel')}</th>
+                  <th style={thStyle}>{t('notificationsPage.thCamera')}</th>
+                  <th style={thStyle}>{t('notificationsPage.thEvent')}</th>
+                  <th style={thStyle}>{t('notificationsPage.thResult')}</th>
                 </tr>
               </thead>
               <tbody>
                 {log.map((rec) => (
                   <tr key={rec.id} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={tdStyle}>
-                      {new Date(rec.created_at).toLocaleString('ru-RU', { hour12: false })}
+                      {new Date(rec.created_at).toLocaleString(undefined, { hour12: false })}
                     </td>
-                    <td style={tdStyle}>{CHANNEL_LABELS[rec.channel] || rec.channel}</td>
+                    <td style={tdStyle}>{t(CHANNEL_LABELS[rec.channel] || rec.channel)}</td>
                     <td style={tdStyle}>{rec.camera_name || '—'}</td>
                     <td style={tdStyle}>
-                      {EVENT_OPTIONS.find((e) => e.value === rec.event_type)?.label || rec.event_type}
+                      {t(EVENT_OPTIONS.find((e) => e.value === rec.event_type)?.key || '') || rec.event_type}
                     </td>
                     <td style={tdStyle}>
                       {rec.status === 'sent' && (
                         <span style={{ color: 'var(--success)' }}>
-                          <CheckCircle2 size={12} style={{ verticalAlign: -2 }} /> отправлено
+                          <CheckCircle2 size={12} style={{ verticalAlign: -2 }} /> {t('notificationsPage.statusSent')}
                         </span>
                       )}
                       {rec.status === 'failed' && (
-                        <span style={{ color: '#ff453a' }} title={rec.error}>
-                          <XCircle size={12} style={{ verticalAlign: -2 }} /> {rec.error || 'ошибка'}
+                        <span style={{ color: '#ff453a' }} title={reasonText(t, rec.error)}>
+                          <XCircle size={12} style={{ verticalAlign: -2 }} /> {reasonText(t, rec.error) || t('notificationsPage.statusFailed')}
                         </span>
                       )}
                       {rec.status === 'skipped' && (
-                        <span style={{ color: 'var(--text-secondary)' }} title={rec.error}>
-                          не отправлено: {rec.error}
+                        <span style={{ color: 'var(--text-secondary)' }} title={reasonText(t, rec.error)}>
+                          {t('notificationsPage.statusSkipped', { error: reasonText(t, rec.error) })}
                         </span>
                       )}
                     </td>

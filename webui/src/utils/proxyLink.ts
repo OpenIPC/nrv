@@ -19,8 +19,16 @@ export interface ParsedProxy {
   url: string
   /** Тип прокси: от него зависит, сработает ли подключение. */
   kind: ProxyKind
-  /** Понятное описание для оператора. */
-  message: string
+  /**
+   * Ключ перевода для оператора.
+   *
+   * Отдаётся ключ, а не готовая строка: файл ничего не знает о языке
+   * интерфейса, и русская фраза отсюда показалась бы китайцу и корейцу
+   * по-русски.
+   */
+  messageKey: string
+  /** Подстановки для ключа перевода. */
+  messageParams?: Record<string, string>
   /** Можно ли использовать этот прокси для Bot API. */
   usable: boolean
 }
@@ -59,7 +67,7 @@ export function parseProxyInput(raw: string): ParsedProxy | null {
       url: value,
       kind: 'socks5',
       usable: true,
-      message: 'Адрес SOCKS5-прокси',
+      messageKey: 'notificationsPage.proxySocks5',
     }
   }
 
@@ -89,10 +97,7 @@ export function parseProxyInput(raw: string): ParsedProxy | null {
       url: `socks5://${server}:${port}`,
       kind,
       usable: false,
-      message:
-        'Это MTProto-прокси для клиента Telegram, а не SOCKS5. ' +
-        'Он передаёт только трафик Telegram, поэтому Bot API через него не работает. ' +
-        'Поставьте рядом mtg и укажите socks5://127.0.0.1:1080.',
+      messageKey: 'notificationsPage.proxyMtproto',
     }
   }
 
@@ -100,6 +105,7 @@ export function parseProxyInput(raw: string): ParsedProxy | null {
     url: `socks5://${server}:${port}`,
     kind,
     usable: true,
-    message: `Адрес прокси: ${server}:${port}`,
+    messageKey: 'notificationsPage.proxyAddress',
+    messageParams: { server, port: String(port) },
   }
 }
