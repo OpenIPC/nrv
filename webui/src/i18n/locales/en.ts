@@ -451,4 +451,122 @@ export default {
     streamerFooter:
       'The server brings a fallen streamer back up itself and reboots the camera if it falls too often. Look for the cause in the log journal.',
   },
+
+  accessPage: {
+    title: 'Access',
+    tabHolders: 'Staff',
+    tabGroups: 'Groups',
+    tabDoors: 'Doors',
+    tabWrite: 'Card enrolment',
+
+    searchPlaceholder: 'Search by name, job title, department',
+    syncAll: 'Push the database to controllers',
+    syncBusy: 'Pushing…',
+    syncDone: 'Database pushed to controllers: {{count}} cards',
+    syncFailed: 'Could not push the database',
+    add: 'Add',
+    open: 'Open',
+    edit: 'Edit',
+    positionNotSet: 'no job title',
+    deleteFailed: 'Could not delete',
+
+    noHoldersTitle: 'No staff',
+    noHoldersText:
+      'Add a card holder: enter the full name, the job title and put them into an access group.',
+    confirmDeleteHolder:
+      'Delete the holder «{{name}}»? The cards will stay in the system without a holder.',
+    holderDeleted: 'Holder deleted',
+
+    noGroupsTitle: 'No groups',
+    noGroupsText:
+      'A group sets the rights once: tick the doors it opens and keep adding people to it.',
+    createGroup: 'Create a group',
+    peopleCount: '{{count}} people',
+    opensDoors: 'Opens doors:',
+    noDoorsOpened: 'none',
+    confirmDeleteGroup:
+      'Delete the group «{{name}}»? Its members will lose the rights granted by this group.',
+    groupDeleted: 'Group deleted',
+
+    groupTitle: 'Access group',
+    newGroupTitle: 'New group',
+    name: 'Name',
+    groupNamePlaceholder: 'Accounts',
+    description: 'Description',
+    labelColor: 'Label colour',
+    groupDoors: 'Doors the group opens',
+    groupNoDoors: 'No doors — add them on the «Doors» tab.',
+    groupNameRequired: 'Enter the group name',
+    groupCreated: 'Group created',
+    groupUpdated: 'Group updated',
+    saveFailed: 'Could not save',
+
+    noDoorsTitle: 'No doors',
+    noDoorsText:
+      'A door is an opening of a controller. Add one so you can grant rights to groups.',
+    addDoor: 'Add a door',
+    doorDisabled: 'disabled',
+    dirIn: 'entry',
+    dirOut: 'exit',
+    dirBoth: 'two-way',
+    confirmDeleteDoor:
+      'Delete the door «{{name}}»? Rights to it will be revoked from every group.',
+    doorDeleted: 'Door deleted',
+
+    newDoorTitle: 'New door',
+    controller: 'Controller',
+    selectController: 'Choose a controller',
+    doorNamePlaceholder: 'Entrance door',
+    doorNameRequired: 'Enter the door name',
+    direction: 'Direction',
+    dirBothOption: 'Two-way',
+    location: 'Location',
+    locationPlaceholder: 'Checkpoint 1',
+    doorAdded: 'Door added',
+
+    noControllersTitle: 'No controllers',
+    noControllersText:
+      'Add a controller on the «Access control controllers» page first.',
+
+    acceptTitle: 'Card enrolment on «{{name}}»',
+    acceptIntro:
+      'While the mode is on, <1>the door opens for everyone</1> and the cards presented are written into the controller memory. The mode switches itself off when the time is up — that way the opening will not stay unlocked if someone forgets about it.',
+    acceptOn: 'The mode is on. {{min}} min left.',
+    startedBy: 'Started by: {{who}} ·',
+    cardsWritten: 'cards written: {{count}}',
+    acceptNoCards:
+      'No cards have been written yet. If the counter does not grow, check that the reader is connected and cards are being presented.',
+    disableMode: 'Turn the mode off',
+    disabling: 'Turning off…',
+    enabling: 'Turning on…',
+    minutesLabel: 'For how many minutes',
+    minutesShort: '{{m}} min',
+    acceptWarning:
+      'Turn the mode on only when nobody else is around: the door will be open for everyone until the time is up.',
+    enableFor: 'Turn on for {{minutes}} min',
+    acceptEnabled: 'Card enrolment is on for {{minutes}} minutes',
+    acceptEnableFailed: 'Could not turn the mode on',
+    acceptDisabled: 'Card enrolment is off',
+    acceptDisableFailed: 'Could not turn the mode off',
+
+    captureTitle: 'Read a card on «{{name}}»',
+    captureIntro:
+      'Hold the card to the door reader and its number will appear here. The door does <1>not</1> open for everyone: the server only listens to the controller events.',
+    waitingCard: 'Waiting for a card… {{min}} min left.',
+    cardsCaught: 'cards read: {{count}}',
+    stopWaiting: 'Stop waiting',
+    waitLabel: 'How long to wait for a card',
+    waitFor: 'Wait for a card {{minutes}} min',
+    captureEnabled: 'Card waiting is on for {{minutes}} min',
+    captureEnableFailed: 'Could not start waiting',
+    captureDisabled: 'Card waiting is off',
+    captureDisableFailed: 'Could not stop waiting',
+    caughtCards: 'Cards read',
+    cardKnown: 'card is known',
+    cardNew: 'card is new',
+    copyNumber: 'Copy the number',
+    numberCopied: 'Number copied',
+    caughtHint:
+      'To assign a card to a person, open their card and enter the number into the «Bind a card» field.',
+  },
 }
