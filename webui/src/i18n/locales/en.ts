@@ -1132,4 +1132,68 @@ export default {
     unknownLabel: 'vendor?',
     unknownHint: 'the vendor is not identified: the OpenIPC sections stay hidden until it is',
   },
+
+  logsPage: {
+    title: 'Camera logs',
+    loadFailed: 'Could not load the logs',
+
+    severity0: 'Emergency',
+    severity1: 'Alert',
+    severity2: 'Critical',
+    severity3: 'Error',
+    severity4: 'Warning',
+    severity5: 'Notice',
+    severity6: 'Info',
+    severity7: 'Debug',
+
+    levelAll: 'All levels',
+    levelError: 'Errors and above',
+    levelWarning: 'Warnings and above',
+    levelImportant: 'Notices and above',
+    levelInfo: 'Info and above',
+    levelDebug: 'Everything, debug included',
+
+    period1h: 'Hour',
+    period6h: '6 hours',
+    period24h: 'Day',
+    period168h: 'Week',
+
+    received: 'received {{count}}',
+    receivedHint: 'How many lines have been accepted since the server started',
+    stored: 'stored {{count}}',
+    storedHint: 'How many lines are saved in the database',
+    duplicates: 'duplicates {{count}}',
+    duplicatesHint: 'Identical lines dropped as repeats',
+    dropped: 'lost {{count}}',
+    droppedHint: 'Lines that could not be saved',
+
+    live: 'Live',
+    liveHint: 'Refreshes every 5 seconds',
+    paused: 'Paused',
+    pausedHint: 'The feed is not refreshing',
+    refresh: 'Refresh',
+
+    summaryPeriod: '{{period}}: {{count}} lines in total',
+    summaryBySeverity: 'By severity',
+    summaryByCamera: 'By camera',
+    summaryByApp: 'By application',
+    unknownSource: 'unknown source',
+    noApp: 'no application',
+
+    searchPlaceholder: 'Search in the message text',
+    allCameras: 'All cameras',
+    allApps: 'All applications',
+    reset: 'Reset ({{count}})',
+    noData: 'no data',
+
+    cameraTime: 'Camera time: {{time}}',
+    serverTime: 'Server time: {{time}}',
+    cameraTimeWrong: 'camera time is off',
+
+    nothingMatched: 'Nothing matched these conditions',
+    noLogs: 'No logs yet',
+    tryWider: 'Try a longer period or remove some of the conditions.',
+    emptyHint:
+      'Log forwarding is enabled in the camera card. Until it is on, the camera keeps the log only in its own memory — the log is lost on reboot and there is nothing left to diagnose the failure with.',
+  },
 }

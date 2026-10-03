@@ -1082,4 +1082,68 @@ export default {
     unknownLabel: '厂商？',
     unknownHint: '未能识别厂商：在识别之前 OpenIPC 相关分区保持隐藏',
   },
+
+  logsPage: {
+    title: '摄像机日志',
+    loadFailed: '无法加载日志',
+
+    severity0: '紧急',
+    severity1: '报警',
+    severity2: '严重',
+    severity3: '错误',
+    severity4: '警告',
+    severity5: '重要',
+    severity6: '信息',
+    severity7: '调试',
+
+    levelAll: '全部级别',
+    levelError: '错误及以上',
+    levelWarning: '警告及以上',
+    levelImportant: '重要及以上',
+    levelInfo: '信息及以上',
+    levelDebug: '全部，含调试',
+
+    period1h: '一小时',
+    period6h: '6 小时',
+    period24h: '一天',
+    period168h: '一周',
+
+    received: '已接收 {{count}}',
+    receivedHint: '服务器启动以来接收的行数',
+    stored: '已入库 {{count}}',
+    storedHint: '已存入数据库的行数',
+    duplicates: '重复 {{count}}',
+    duplicatesHint: '被判定为重复而丢弃的相同行',
+    dropped: '丢失 {{count}}',
+    droppedHint: '无法保存的行',
+
+    live: '实时',
+    liveHint: '每 5 秒刷新一次',
+    paused: '已暂停',
+    pausedHint: '日志不再刷新',
+    refresh: '刷新',
+
+    summaryPeriod: '{{period}}：共 {{count}} 行',
+    summaryBySeverity: '按级别',
+    summaryByCamera: '按摄像机',
+    summaryByApp: '按程序',
+    unknownSource: '来源未知',
+    noApp: '无程序',
+
+    searchPlaceholder: '在消息文本中搜索',
+    allCameras: '全部摄像机',
+    allApps: '全部程序',
+    reset: '重置（{{count}}）',
+    noData: '暂无数据',
+
+    cameraTime: '摄像机时间：{{time}}',
+    serverTime: '服务器时间：{{time}}',
+    cameraTimeWrong: '摄像机时间不准',
+
+    nothingMatched: '没有符合这些条件的日志',
+    noLogs: '暂无日志',
+    tryWider: '试试延长时间范围，或少设一些条件。',
+    emptyHint:
+      '日志上报可在摄像机卡片中开启。开启之前，摄像机只把日志留在自己的内存里——重启就没了，故障原因也就无从查起。',
+  },
 }

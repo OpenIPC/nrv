@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   logsAPI, camerasAPI,
   type LogEntry, type LogSummary, type LogStatus, type LogFilter, type Camera,
@@ -17,15 +18,15 @@ import {
  * строку. Уровень 7 (отладка) показан серым — он нужен редко и не должен
  * перетягивать внимание на себя.
  */
-const SEVERITY_STYLES: Record<number, { label: string; color: string; icon: typeof Info }> = {
-  0: { label: 'Авария', color: '#ff453a', icon: AlertOctagon },
-  1: { label: 'Тревога', color: '#ff453a', icon: AlertOctagon },
-  2: { label: 'Критично', color: '#ff9f0a', icon: AlertTriangle },
-  3: { label: 'Ошибка', color: '#ff9f0a', icon: XCircle },
-  4: { label: 'Предупреждение', color: '#ffd60a', icon: AlertTriangle },
-  5: { label: 'Важное', color: '#2f81f7', icon: CircleDot },
-  6: { label: 'Сведения', color: '#8b98a5', icon: Info },
-  7: { label: 'Отладка', color: '#5c6873', icon: Bug },
+const SEVERITY_STYLES: Record<number, { key: string; color: string; icon: typeof Info }> = {
+  0: { key: 'logsPage.severity0', color: '#ff453a', icon: AlertOctagon },
+  1: { key: 'logsPage.severity1', color: '#ff453a', icon: AlertOctagon },
+  2: { key: 'logsPage.severity2', color: '#ff9f0a', icon: AlertTriangle },
+  3: { key: 'logsPage.severity3', color: '#ff9f0a', icon: XCircle },
+  4: { key: 'logsPage.severity4', color: '#ffd60a', icon: AlertTriangle },
+  5: { key: 'logsPage.severity5', color: '#2f81f7', icon: CircleDot },
+  6: { key: 'logsPage.severity6', color: '#8b98a5', icon: Info },
+  7: { key: 'logsPage.severity7', color: '#5c6873', icon: Bug },
 }
 
 /**
@@ -35,19 +36,19 @@ const SEVERITY_STYLES: Record<number, { label: string; color: string; icon: type
  * сервер, и если правила поменяются, менять здесь ничего не придётся.
  */
 const LEVEL_OPTIONS = [
-  { value: '', label: 'Все уровни' },
-  { value: 'ошибка', label: 'Ошибки и важнее' },
-  { value: 'предупреждение', label: 'Предупреждения и важнее' },
-  { value: 'важное', label: 'Важное и важнее' },
-  { value: 'сведения', label: 'Сведения и важнее' },
-  { value: 'отладка', label: 'Всё, включая отладку' },
+  { value: '', key: 'logsPage.levelAll' },
+  { value: 'ошибка', key: 'logsPage.levelError' },
+  { value: 'предупреждение', key: 'logsPage.levelWarning' },
+  { value: 'важное', key: 'logsPage.levelImportant' },
+  { value: 'сведения', key: 'logsPage.levelInfo' },
+  { value: 'отладка', key: 'logsPage.levelDebug' },
 ]
 
 const PERIOD_OPTIONS = [
-  { value: 1, label: 'Час' },
-  { value: 6, label: '6 часов' },
-  { value: 24, label: 'Сутки' },
-  { value: 168, label: 'Неделя' },
+  { value: 1, key: 'logsPage.period1h' },
+  { value: 6, key: 'logsPage.period6h' },
+  { value: 24, key: 'logsPage.period24h' },
+  { value: 168, key: 'logsPage.period168h' },
 ]
 
 /**
@@ -62,6 +63,7 @@ const REFRESH_MS = 5000
 
 export default function LogsPage() {
   const toast = useToast()
+  const { t } = useTranslation()
 
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [summary, setSummary] = useState<LogSummary | null>(null)
@@ -96,11 +98,11 @@ export default function LogsPage() {
     } catch {
       // Молча: при живом обновлении сообщение об ошибке всплывало бы
       // каждые пять секунд и превратилось бы в шум.
-      if (!silent) toast.error('Не удалось загрузить логи')
+      if (!silent) toast.error(t('logsPage.loadFailed'))
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [period, toast])
+  }, [period, toast, t])
 
   // Начальная загрузка: справочники меняются редко, поэтому один раз.
   useEffect(() => {
@@ -141,7 +143,7 @@ export default function LogsPage() {
     <div style={{ padding: '20px 24px', maxWidth: 1500, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <ScrollText size={22} />
-        <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Логи камер</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>{t('logsPage.title')}</h1>
 
         {/* Состояние приёмника: без него «камеры молчат» и «приёмник не
             работает» выглядят одинаково — пустой страницей. */}
@@ -150,20 +152,20 @@ export default function LogsPage() {
             display: 'flex', alignItems: 'center', gap: 14, marginLeft: 8,
             fontSize: 12, color: 'var(--text-secondary, #8b98a5)',
           }}>
-            <span title="Сколько строк принято с момента запуска сервера">
-              принято {status.received.toLocaleString('ru-RU')}
+            <span title={t('logsPage.receivedHint')}>
+              {t('logsPage.received', { count: status.received.toLocaleString() })}
             </span>
-            <span title="Сколько строк сохранено в базе">
-              сохранено {status.stored.toLocaleString('ru-RU')}
+            <span title={t('logsPage.storedHint')}>
+              {t('logsPage.stored', { count: status.stored.toLocaleString() })}
             </span>
             {status.duplicates > 0 && (
-              <span title="Одинаковые строки, отсечённые как повторы">
-                повторов {status.duplicates.toLocaleString('ru-RU')}
+              <span title={t('logsPage.duplicatesHint')}>
+                {t('logsPage.duplicates', { count: status.duplicates.toLocaleString() })}
               </span>
             )}
             {status.dropped > 0 && (
-              <span style={{ color: '#ff9f0a' }} title="Строки, которые не удалось сохранить">
-                потеряно {status.dropped.toLocaleString('ru-RU')}
+              <span style={{ color: '#ff9f0a' }} title={t('logsPage.droppedHint')}>
+                {t('logsPage.dropped', { count: status.dropped.toLocaleString() })}
               </span>
             )}
           </div>
@@ -179,10 +181,10 @@ export default function LogsPage() {
               border: '1px solid var(--border, #30363d)', borderRadius: 6,
               cursor: 'pointer', fontSize: 13,
             }}
-            title={live ? 'Обновление каждые 5 секунд' : 'Лента не обновляется'}
+            title={live ? t('logsPage.liveHint') : t('logsPage.pausedHint')}
           >
             <Activity size={14} />
-            {live ? 'Вживую' : 'Пауза'}
+            {live ? t('logsPage.live') : t('logsPage.paused')}
           </button>
           <button
             onClick={() => load()}
@@ -194,7 +196,7 @@ export default function LogsPage() {
             }}
           >
             <RefreshCw size={14} />
-            Обновить
+            {t('logsPage.refresh')}
           </button>
         </div>
       </div>
@@ -219,8 +221,10 @@ export default function LogsPage() {
               size={15}
               style={{ transform: showSummary ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform .15s' }}
             />
-            За {PERIOD_OPTIONS.find(p => p.value === period)?.label.toLowerCase() || period + ' ч'}:{" "}
-            всего {summary.total.toLocaleString('ru-RU')} строк
+            {t('logsPage.summaryPeriod', {
+              period: t(PERIOD_OPTIONS.find(p => p.value === period)?.key || 'logsPage.period1h').toLowerCase(),
+              count: summary.total.toLocaleString(),
+            })}
           </button>
 
           {showSummary && (
@@ -228,9 +232,12 @@ export default function LogsPage() {
               display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
               gap: 16, padding: '0 14px 14px',
             }}>
-              <SummaryBlock title="По важности" data={summary.by_severity} lookup={s => SEVERITY_STYLES[Number(s)]?.label || s} />
-              <SummaryBlock title="По камерам" data={summary.by_camera} />
-              <SummaryBlock title="По программам" data={summary.by_app} />
+              <SummaryBlock title={t('logsPage.summaryBySeverity')} data={summary.by_severity} lookup={s => {
+                const st = SEVERITY_STYLES[Number(s)]
+                return st ? t(st.key) : s
+              }} />
+              <SummaryBlock title={t('logsPage.summaryByCamera')} data={summary.by_camera} lookup={s => s || t('logsPage.unknownSource')} />
+              <SummaryBlock title={t('logsPage.summaryByApp')} data={summary.by_app} lookup={s => s || t('logsPage.noApp')} />
             </div>
           )}
         </div>
@@ -250,7 +257,7 @@ export default function LogsPage() {
             value={search}
             onChange={e => setSearch(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && applySearch()}
-            placeholder="Поиск по тексту сообщения"
+            placeholder={t('logsPage.searchPlaceholder')}
             style={{
               width: '100%', padding: '7px 10px 7px 30px',
               background: 'var(--bg-secondary, #21262d)',
@@ -263,25 +270,25 @@ export default function LogsPage() {
         <Select
           value={filter.camera_id || ''}
           onChange={v => setFilter(f => ({ ...f, camera_id: v }))}
-          options={[{ value: '', label: 'Все камеры' }, ...cameras.map(c => ({ value: c.id, label: c.name }))]}
+          options={[{ value: '', label: t('logsPage.allCameras') }, ...cameras.map(c => ({ value: c.id, label: c.name }))]}
         />
 
         <Select
           value={filter.app || ''}
           onChange={v => setFilter(f => ({ ...f, app: v }))}
-          options={[{ value: '', label: 'Все программы' }, ...apps.map(a => ({ value: a, label: a }))]}
+          options={[{ value: '', label: t('logsPage.allApps') }, ...apps.map(a => ({ value: a, label: a }))]}
         />
 
         <Select
           value={filter.level || ''}
           onChange={v => setFilter(f => ({ ...f, level: v }))}
-          options={LEVEL_OPTIONS}
+          options={LEVEL_OPTIONS.map(o => ({ value: o.value, label: t(o.key) }))}
         />
 
         <Select
           value={String(period)}
           onChange={v => setPeriod(Number(v))}
-          options={PERIOD_OPTIONS.map(p => ({ value: String(p.value), label: p.label }))}
+          options={PERIOD_OPTIONS.map(p => ({ value: String(p.value), label: t(p.key) }))}
         />
 
         {activeFilters > 0 && (
@@ -294,7 +301,7 @@ export default function LogsPage() {
             }}
           >
             <X size={14} />
-            Сбросить ({activeFilters})
+            {t('logsPage.reset', { count: activeFilters })}
           </button>
         )}
       </div>
@@ -326,12 +333,13 @@ function SummaryBlock({ title, data, lookup }: {
   data: Record<string, number>
   lookup?: (key: string) => string
 }) {
+  const { t } = useTranslation()
   const entries = Object.entries(data).sort((a, b) => b[1] - a[1]).slice(0, 6)
   if (entries.length === 0) {
     return (
       <div>
         <div style={{ fontSize: 11, color: 'var(--text-secondary, #8b98a5)', marginBottom: 6 }}>{title}</div>
-        <div style={{ fontSize: 13, color: 'var(--text-secondary, #8b98a5)' }}>нет данных</div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary, #8b98a5)' }}>{t('logsPage.noData')}</div>
       </div>
     )
   }
@@ -362,13 +370,14 @@ function SummaryBlock({ title, data, lookup }: {
 }
 
 function LogRow({ entry, isLast }: { entry: LogEntry; isLast: boolean }) {
+  const { t } = useTranslation()
   const style = entry.severity !== null ? SEVERITY_STYLES[entry.severity] : null
   const Icon = style?.icon || Info
   const color = style?.color || '#8b98a5'
 
   const time = entry.logged_at || entry.received_at
   const timeLabel = time
-    ? new Date(time).toLocaleString('ru-RU', {
+    ? new Date(time).toLocaleString(undefined, {
         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
       })
     : '—'
@@ -397,10 +406,10 @@ function LogRow({ entry, isLast }: { entry: LogEntry; isLast: boolean }) {
         {timeLabel}
         {drifted && (
           <div style={{ fontSize: 10, color: '#ff9f0a' }} title={
-            `Время камеры: ${new Date(entry.logged_at!).toLocaleString('ru-RU')}\n` +
-            `Время сервера: ${new Date(entry.received_at).toLocaleString('ru-RU')}`
+            `${t('logsPage.cameraTime', { time: new Date(entry.logged_at!).toLocaleString() })}\n` +
+            t('logsPage.serverTime', { time: new Date(entry.received_at).toLocaleString() })
           }>
-            время камеры неточно
+            {t('logsPage.cameraTimeWrong')}
           </div>
         )}
       </div>
@@ -430,7 +439,7 @@ function LogRow({ entry, isLast }: { entry: LogEntry; isLast: boolean }) {
           padding: '1px 7px', borderRadius: 10,
           background: `${color}1a`, whiteSpace: 'nowrap',
         }}>
-          {style.label}
+          {t(style.key)}
         </div>
       )}
     </div>
@@ -438,6 +447,7 @@ function LogRow({ entry, isLast }: { entry: LogEntry; isLast: boolean }) {
 }
 
 function EmptyState({ hasFilters }: { hasFilters: boolean }) {
+  const { t } = useTranslation()
   return (
     <div style={{
       textAlign: 'center', padding: '60px 20px',
@@ -447,18 +457,10 @@ function EmptyState({ hasFilters }: { hasFilters: boolean }) {
     }}>
       <ScrollText size={34} style={{ opacity: 0.4, marginBottom: 12 }} />
       <div style={{ fontSize: 15, marginBottom: 6 }}>
-        {hasFilters ? 'Под эти условия ничего не подошло' : 'Логов пока нет'}
+        {hasFilters ? t('logsPage.nothingMatched') : t('logsPage.noLogs')}
       </div>
       <div style={{ fontSize: 13, maxWidth: 520, margin: '0 auto', lineHeight: 1.5 }}>
-        {hasFilters ? (
-          'Попробуйте расширить период или убрать часть условий.'
-        ) : (
-          <>
-            Отправка логов включается в карточке камеры. До включения камера
-            хранит лог только у себя в памяти — он пропадает при перезагрузке,
-            и разобрать причину сбоя становится нечем.
-          </>
-        )}
+        {hasFilters ? t('logsPage.tryWider') : t('logsPage.emptyHint')}
       </div>
     </div>
   )

@@ -1106,4 +1106,68 @@ export default {
     unknownLabel: '제조사?',
     unknownHint: '제조사를 확인할 수 없습니다: 확인될 때까지 OpenIPC 항목은 숨겨집니다',
   },
+
+  logsPage: {
+    title: '카메라 로그',
+    loadFailed: '로그를 불러올 수 없습니다',
+
+    severity0: '비상',
+    severity1: '경보',
+    severity2: '심각',
+    severity3: '오류',
+    severity4: '경고',
+    severity5: '중요',
+    severity6: '정보',
+    severity7: '디버그',
+
+    levelAll: '모든 수준',
+    levelError: '오류 이상',
+    levelWarning: '경고 이상',
+    levelImportant: '중요 이상',
+    levelInfo: '정보 이상',
+    levelDebug: '전체(디버그 포함)',
+
+    period1h: '1시간',
+    period6h: '6시간',
+    period24h: '하루',
+    period168h: '일주일',
+
+    received: '수신 {{count}}',
+    receivedHint: '서버 시작 이후 수신한 줄 수',
+    stored: '저장 {{count}}',
+    storedHint: '데이터베이스에 저장된 줄 수',
+    duplicates: '중복 {{count}}',
+    duplicatesHint: '중복으로 판단해 버린 동일한 줄',
+    dropped: '손실 {{count}}',
+    droppedHint: '저장하지 못한 줄',
+
+    live: '실시간',
+    liveHint: '5초마나 새로 고칩니다',
+    paused: '일시 정지',
+    pausedHint: '목록을 새로 고치지 않습니다',
+    refresh: '새로 고침',
+
+    summaryPeriod: '{{period}}: 총 {{count}}줄',
+    summaryBySeverity: '수준별',
+    summaryByCamera: '카메라별',
+    summaryByApp: '프로그램별',
+    unknownSource: '출처 불명',
+    noApp: '프로그램 없음',
+
+    searchPlaceholder: '메시지 내용 검색',
+    allCameras: '모든 카메라',
+    allApps: '모든 프로그램',
+    reset: '초기화 ({{count}})',
+    noData: '데이터 없음',
+
+    cameraTime: '카메라 시간: {{time}}',
+    serverTime: '서버 시간: {{time}}',
+    cameraTimeWrong: '카메라 시간이 부정확',
+
+    nothingMatched: '이 조건에 맞는 로그가 없습니다',
+    noLogs: '로그가 없습니다',
+    tryWider: '기간을 늘리거나 조건을 일부 해제해 보십시오.',
+    emptyHint:
+      '로그 전송은 카메라 카드에서 켭니다. 켜기 전에는 카메라가 로그를 자체 메모리에만 보관하므로 재부팅하면 사라지고, 고장 원인을 분석할 수 없습니다.',
+  },
 }

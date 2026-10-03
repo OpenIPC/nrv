@@ -196,10 +196,12 @@ func (r *CameraLogRepo) Summary(ctx context.Context, since time.Time) (*domain.L
 	}
 
 	// В сводке по камерам берём имя, а не идентификатор: оператору нужно
-	// название, а не UUID. Строки без привязки собираем под общим ключом —
-	// они часто и указывают на проблему.
+	// название, а не UUID. Группы без названия и без программы отдаём пустым
+	// ключом, а не русской подписью: интерфейс переводится на четыре языка, и
+	// русское слово из запроса показалось бы в сводке китайцу и корейцу.
+	// Подпись к пустому ключу ставит сам интерфейс.
 	if err := r.fillGrouped(ctx,
-		`SELECT COALESCE(c.name, 'неизвестный источник'), count(*)
+		`SELECT COALESCE(c.name, ''), count(*)
 		 FROM camera_logs l LEFT JOIN cameras c ON c.id = l.camera_id
 		 WHERE l.received_at >= $1 GROUP BY 1 ORDER BY 2 DESC LIMIT 20`,
 		since, summary.ByCamera); err != nil {
@@ -207,7 +209,7 @@ func (r *CameraLogRepo) Summary(ctx context.Context, since time.Time) (*domain.L
 	}
 
 	if err := r.fillGrouped(ctx,
-		`SELECT COALESCE(NULLIF(app, ''), 'без программы'), count(*)
+		`SELECT COALESCE(app, ''), count(*)
 		 FROM camera_logs WHERE received_at >= $1 GROUP BY 1 ORDER BY 2 DESC LIMIT 20`,
 		since, summary.ByApp); err != nil {
 		return nil, err
