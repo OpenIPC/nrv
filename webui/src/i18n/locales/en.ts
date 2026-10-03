@@ -839,4 +839,84 @@ export default {
     recordPlanned:
       'The setting is saved. The recording worker is wired up at the next stage — right now video is not written to the archive, events and snapshots work.',
   },
+
+  cameraNetwork: {
+    title: 'Connection',
+    loading: 'Loading…',
+    notBound:
+      'The camera is not bound to a port of a managed switch. If it is powered through one, set the port — then the power and the link become visible and you can reboot it by power.',
+    bindPort: 'Set the port',
+    switchOffline: 'The switch is not responding: the port data may be stale',
+    lSwitch: 'Switch',
+    lModel: 'Model',
+    lAddress: 'Address',
+    lPort: 'Port',
+    link: 'Link',
+    power: 'Power',
+    speedGbit: '1 Gbit',
+    speedMbit: '{{speed}} Mbit',
+    noLink: 'none',
+    powerOff: 'off',
+
+    hintStuck:
+      'The camera is not responding, but the port has power and a link — it looks hung. A power cycle usually fixes this.',
+    warnNoLink:
+      'The camera draws power but there is no link. A power cycle is unlikely to help — this looks like a broken line or a failed port.',
+    warnPowerOff:
+      'The power on the port is off — the camera is de-energised. Turn the power on and it will start again.',
+    warnOtherPort:
+      'The camera is working but draws no power: it may be powered from a different port.',
+
+    cyclePower: 'Power cycle',
+    unbind: 'Unbind',
+    cycleDone: 'Port {{port}}: power cycled',
+    cycleFailed: 'Could not power cycle',
+    unbindDone: 'Binding removed',
+    unbindFailed: 'Could not remove the binding',
+    confirmTitle: 'Power cycle?',
+    confirmText:
+      'Power on port {{port}} will be cut and restored. The camera will go down for about a minute and boot again.',
+    reboot: 'Reboot',
+
+    selectPort: '— choose a port —',
+    portOption: 'Port {{n}}',
+    noPoe: ' (no PoE)',
+    portBusy: ' — taken: {{name}}',
+    portLink: ' — link up',
+    noPorts:
+      'No ports: the switch has not been polled yet. Poll it on the «Switches» page and try again.',
+    binding: 'Binding…',
+    bind: 'Bind',
+    bindDone: 'The camera is bound to the port',
+    bindFailed: 'Could not bind the camera',
+    switchesFailed: 'Could not get the switch list',
+    portsFailed: 'Could not get the switch ports',
+  },
+
+  imageProfile: {
+    profilesFailed: 'The profiles are unavailable: {{msg}}',
+    previewFailed: 'The preview failed: {{msg}}',
+    applyDone: 'Profile applied, changes: {{count}}',
+    applySkipped: ', fields skipped: {{count}}',
+    applyFailed: 'Not applied: {{msg}}',
+    loading: 'Reading the shooting modes…',
+    unavailable:
+      'The camera did not return the settings schema, so the shooting modes are unavailable. Check the connection to the camera.',
+    title: 'Shooting mode',
+    hint:
+      'The mode sets what matters more at this point — the surroundings or a plate. Choose by the task of the place, not by the name of the settings: the keys are picked separately for each mode.',
+    chosen: 'chosen',
+    willWork: 'will work in full',
+    willWorkPartly: 'will work partly',
+    willNotWork: 'will not work',
+    unknownKeys: 'The camera does not know: {{keys}} — these values will stay as they are.',
+    whatChanges: 'What will change',
+    alreadyChosen: 'Already chosen',
+    previewTitle: '«{{name}}»: what will change',
+    nothingToChange: 'The camera is already set up for this mode — nothing to change.',
+    thSetting: 'Setting',
+    thNow: 'Now',
+    thWill: 'Will be',
+    missingKeys: 'The camera does not have these settings, they will stay unchanged: {{keys}}',
+  },
 }

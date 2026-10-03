@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   CameraPortLink, SwitchDevice, SwitchPort, switchAPI,
 } from '../api/client'
@@ -43,6 +44,7 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
   // коммутаторов: одно действие в двух местах должно вести себя одинаково,
   // иначе оператор перестанет доверять кнопкам.
   const [confirming, setConfirming] = useState(false)
+  const { t } = useTranslation()
   const toast = useToast()
 
   const load = async () => {
@@ -66,12 +68,12 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
     setBusy(true)
     try {
       await switchAPI.portAction(link.switch_id, link.port_number, 'power_cycle')
-      toast.success(`Порт ${link.port_number}: питание перезагружено`)
+      toast.success(t('cameraNetwork.cycleDone', { port: link.port_number }))
       // Перечитываем с небольшой задержкой: устройству нужно время
       // подать питание, и сразу после команды состояние будет прежним.
       setTimeout(load, 3000)
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Не удалось перезагрузить питание')
+      toast.error(e.response?.data?.error || t('cameraNetwork.cycleFailed'))
     } finally {
       setBusy(false)
     }
@@ -81,10 +83,10 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
     setBusy(true)
     try {
       await switchAPI.unbind(cameraID)
-      toast.success('Привязка снята')
+      toast.success(t('cameraNetwork.unbindDone'))
       load()
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Не удалось снять привязку')
+      toast.error(e.response?.data?.error || t('cameraNetwork.unbindFailed'))
     } finally {
       setBusy(false)
     }
@@ -94,11 +96,11 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
     <div className="card" style={{ marginBottom: 16 }}>
       <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, fontSize: 15 }}>
         <EthernetPort size={18} style={{ color: 'var(--accent)' }} />
-        Подключение
+        {t('cameraNetwork.title')}
       </h3>
 
       {loading ? (
-        <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Загружается…</div>
+        <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{t('cameraNetwork.loading')}</div>
       ) : binding ? (
         <BindForm
           cameraID={cameraID}
@@ -108,13 +110,11 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
       ) : !link ? (
         <div>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 12px' }}>
-            Камера не привязана к порту управляемого коммутатора. Если она
-            питается через него, укажите порт — тогда будет видно питание и
-            связь, и появится возможность перезагрузить её питанием.
+            {t('cameraNetwork.notBound')}
           </p>
           <button className="btn btn-outline btn-sm" onClick={() => setBinding(true)}>
             <Link2 size={14} />
-            Указать порт
+            {t('cameraNetwork.bindPort')}
           </button>
         </div>
       ) : (
@@ -122,37 +122,37 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
           {!link.switch_online && (
             <div style={warnStyle}>
               <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-              <span>Коммутатор не отвечает: данные о порте могут быть устаревшими</span>
+              <span>{t('cameraNetwork.switchOffline')}</span>
             </div>
           )}
 
-          <Row label="Коммутатор" value={link.switch_name || link.switch_sn} />
-          <Row label="Модель" value={link.switch_model} />
-          <Row label="Адрес" value={link.switch_ip} mono />
-          <Row label="Порт" value={String(link.port_number)} />
+          <Row label={t('cameraNetwork.lSwitch')} value={link.switch_name || link.switch_sn} />
+          <Row label={t('cameraNetwork.lModel')} value={link.switch_model} />
+          <Row label={t('cameraNetwork.lAddress')} value={link.switch_ip} mono />
+          <Row label={t('cameraNetwork.lPort')} value={String(link.port_number)} />
 
           {/* Разделение питания и линка — главное на этом блоке. */}
           <div style={{ display: 'flex', gap: 16, marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
             <div>
               <div style={metricLabelStyle}>
-                <Cable size={11} /> Связь
+                <Cable size={11} /> {t('cameraNetwork.link')}
               </div>
               <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2, color: link.link_up ? 'var(--success)' : 'var(--text-secondary)' }}>
                 {link.link_up
-                  ? (link.speed_mbps >= 1000 ? '1 Гбит' : `${link.speed_mbps} Мбит`)
-                  : 'нет'}
+                  ? (link.speed_mbps >= 1000 ? t('cameraNetwork.speedGbit') : t('cameraNetwork.speedMbit', { speed: link.speed_mbps }))
+                  : t('cameraNetwork.noLink')}
               </div>
             </div>
             <div>
               <div style={metricLabelStyle}>
-                <Zap size={11} /> Питание
+                <Zap size={11} /> {t('cameraNetwork.power')}
               </div>
               <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>
                 {!link.poe_capable
                   ? '—'
                   : link.poe_enabled
-                    ? `${link.poe_watts.toFixed(1)} Вт`
-                    : 'выключено'}
+                    ? `${link.poe_watts.toFixed(1)} ${t('switchesPage.unitWatt')}`
+                    : t('cameraNetwork.powerOff')}
               </div>
             </div>
           </div>
@@ -168,9 +168,7 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
             <div style={hintStyle}>
               <RotateCcw size={13} style={{ flexShrink: 0, marginTop: 1 }} />
               <span>
-                Камера не отвечает, но питание и связь на порту есть —
-                похоже, она зависла. Перезагрузка питанием обычно это
-                лечит.
+                {t('cameraNetwork.hintStuck')}
               </span>
             </div>
           )}
@@ -178,9 +176,7 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
             <div style={warnStyle}>
               <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
               <span>
-                Камера потребляет питание, но связи нет. Перезагрузка
-                питания вряд ли поможет — похоже на обрыв линии или
-                отказ порта.
+                {t('cameraNetwork.warnNoLink')}
               </span>
             </div>
           )}
@@ -188,8 +184,7 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
             <div style={warnStyle}>
               <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
               <span>
-                Питание на порту выключено — камера обесточена.
-                Включите питание, и она запустится заново.
+                {t('cameraNetwork.warnPowerOff')}
               </span>
             </div>
           )}
@@ -197,8 +192,7 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
             <div style={warnStyle}>
               <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
               <span>
-                Камера работает, но потребления нет: возможно, она питается
-                не от этого порта.
+                {t('cameraNetwork.warnOtherPort')}
               </span>
             </div>
           )}
@@ -207,12 +201,12 @@ export default function CameraNetworkCard({ cameraID, cameraOnline }: {
             {link.poe_capable && (
               <button className="btn btn-outline btn-sm" onClick={() => setConfirming(true)} disabled={busy}>
                 <RotateCcw size={14} />
-                Перезагрузить питанием
+                {t('cameraNetwork.cyclePower')}
               </button>
             )}
             <button className="btn btn-outline btn-sm" onClick={unbind} disabled={busy}>
               <Unlink size={14} />
-              Отвязать
+              {t('cameraNetwork.unbind')}
             </button>
           </div>
         </div>
@@ -234,6 +228,7 @@ function ConfirmOverlay({ portNumber, onCancel, onConfirm }: {
   onCancel: () => void
   onConfirm: () => void
 }) {
+  const { t } = useTranslation()
   return (
     <div
       onClick={onCancel}
@@ -244,14 +239,13 @@ function ConfirmOverlay({ portNumber, onCancel, onConfirm }: {
       }}
     >
       <div className="card" onClick={(e) => e.stopPropagation()} style={{ width: 400, maxWidth: '100%' }}>
-        <h3 style={{ margin: '0 0 10px', fontSize: 16 }}>Перезагрузить питанием?</h3>
+        <h3 style={{ margin: '0 0 10px', fontSize: 16 }}>{t('cameraNetwork.confirmTitle')}</h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 16px' }}>
-          Питание на порту {portNumber} будет снято и подано снова. Камера
-          отключится примерно на минуту и загрузится заново.
+          {t('cameraNetwork.confirmText', { port: portNumber })}
         </p>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button className="btn btn-outline" onClick={onCancel}>Отмена</button>
-          <button className="btn btn-primary" onClick={onConfirm}>Перезагрузить</button>
+          <button className="btn btn-outline" onClick={onCancel}>{t('common.cancel')}</button>
+          <button className="btn btn-primary" onClick={onConfirm}>{t('cameraNetwork.reboot')}</button>
         </div>
       </div>
     </div>
@@ -269,13 +263,14 @@ function BindForm({ cameraID, onCancel, onDone }: {
   const [ports, setPorts] = useState<SwitchPort[]>([])
   const [port, setPort] = useState('')
   const [busy, setBusy] = useState(false)
+  const { t } = useTranslation()
   const toast = useToast()
 
   useEffect(() => {
     switchAPI.list().then((res) => {
       setSwitches(res.data)
       if (res.data.length) setSwitchID(res.data[0].id)
-    }).catch(() => toast.error('Не удалось получить список коммутаторов'))
+    }).catch(() => toast.error(t('cameraNetwork.switchesFailed')))
   }, [])
 
   // Порты подгружаются при выборе коммутатора: показывать все порты всех
@@ -286,7 +281,7 @@ function BindForm({ cameraID, onCancel, onDone }: {
     switchAPI.get(switchID).then((res) => {
       setPorts(res.data.ports || [])
       setPort('')
-    }).catch(() => toast.error('Не удалось получить порты коммутатора'))
+    }).catch(() => toast.error(t('cameraNetwork.portsFailed')))
   }, [switchID])
 
   const bind = async () => {
@@ -294,10 +289,10 @@ function BindForm({ cameraID, onCancel, onDone }: {
     setBusy(true)
     try {
       await switchAPI.bind(cameraID, switchID, Number(port))
-      toast.success('Камера привязана к порту')
+      toast.success(t('cameraNetwork.bindDone'))
       onDone()
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Не удалось привязать камеру')
+      toast.error(e.response?.data?.error || t('cameraNetwork.bindFailed'))
     } finally {
       setBusy(false)
     }
@@ -305,7 +300,7 @@ function BindForm({ cameraID, onCancel, onDone }: {
 
   return (
     <div>
-      <label style={labelStyle}>Коммутатор</label>
+      <label style={labelStyle}>{t('cameraNetwork.lSwitch')}</label>
       <select
         value={switchID}
         onChange={(e) => setSwitchID(e.target.value)}
@@ -318,37 +313,36 @@ function BindForm({ cameraID, onCancel, onDone }: {
         ))}
       </select>
 
-      <label style={labelStyle}>Порт</label>
+      <label style={labelStyle}>{t('cameraNetwork.lPort')}</label>
       <select
         value={port}
         onChange={(e) => setPort(e.target.value)}
         style={{ width: '100%', marginBottom: 12 }}
       >
-        <option value="">— выберите порт —</option>
+        <option value="">{t('cameraNetwork.selectPort')}</option>
         {ports.map((p) => (
           <option key={p.id} value={p.port_number}>
-            Порт {p.port_number}
-            {!p.poe_capable ? ' (без PoE)' : ''}
-            {p.camera_name ? ` — занят: ${p.camera_name}` : ''}
-            {p.link_up && !p.camera_name ? ' — есть связь' : ''}
+            {t('cameraNetwork.portOption', { n: p.port_number })}
+            {!p.poe_capable ? t('cameraNetwork.noPoe') : ''}
+            {p.camera_name ? t('cameraNetwork.portBusy', { name: p.camera_name }) : ''}
+            {p.link_up && !p.camera_name ? t('cameraNetwork.portLink') : ''}
           </option>
         ))}
       </select>
 
       {ports.length === 0 && switchID && (
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px' }}>
-          Портов нет: коммутатор ещё не опрошен. Опросите его на странице
-          «Коммутаторы» и попробуйте снова.
+          {t('cameraNetwork.noPorts')}
         </p>
       )}
 
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button className="btn btn-outline btn-sm" onClick={onCancel} disabled={busy}>
-          Отмена
+          {t('common.cancel')}
         </button>
         <button className="btn btn-primary btn-sm" onClick={bind} disabled={busy || !port}>
           <Link2 size={14} />
-          {busy ? 'Привязываю…' : 'Привязать'}
+          {busy ? t('cameraNetwork.binding') : t('cameraNetwork.bind')}
         </button>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Check, Eye, Info, Loader2, X } from 'lucide-react'
 import {
   imageProfileAPI,
@@ -25,6 +26,7 @@ import { useToast } from '../context/ToastContext'
  */
 export default function CameraImageProfilePanel({ cameraId }: { cameraId: string }) {
   const toast = useToast()
+  const { t } = useTranslation()
   const [data, setData] = useState<CameraImageProfiles | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -36,7 +38,7 @@ export default function CameraImageProfilePanel({ cameraId }: { cameraId: string
       const res = await imageProfileAPI.list(cameraId)
       setData(res.data)
     } catch (e) {
-      toast.error(`Профили недоступны: ${(e as Error).message}`)
+      toast.error(t('imageProfile.profilesFailed', { msg: (e as Error).message }))
     } finally {
       setLoading(false)
     }
@@ -51,7 +53,7 @@ export default function CameraImageProfilePanel({ cameraId }: { cameraId: string
       const res = await imageProfileAPI.preview(cameraId, id)
       setPreview(res.data)
     } catch (e) {
-      toast.error(`Предпросмотр не удался: ${(e as Error).message}`)
+      toast.error(t('imageProfile.previewFailed', { msg: (e as Error).message }))
     }
   }
 
@@ -62,13 +64,13 @@ export default function CameraImageProfilePanel({ cameraId }: { cameraId: string
       // Про пропущенные поля говорим отдельно: иначе «применено» звучит
       // как обещание, что режим встал целиком, а это не так.
       const skipped = res.data.skipped?.length
-        ? `, пропущено полей: ${res.data.skipped.length}`
+        ? t('imageProfile.applySkipped', { count: res.data.skipped.length })
         : ''
-      toast.success(`Профиль применён, изменений: ${res.data.applied?.length ?? 0}${skipped}`)
+      toast.success(t('imageProfile.applyDone', { count: res.data.applied?.length ?? 0 }) + skipped)
       setPreview(null)
       await load()
     } catch (e) {
-      toast.error(`Не применилось: ${(e as Error).message}`)
+      toast.error(t('imageProfile.applyFailed', { msg: (e as Error).message }))
     } finally {
       setBusy(null)
     }
@@ -78,7 +80,7 @@ export default function CameraImageProfilePanel({ cameraId }: { cameraId: string
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
         <Loader2 size={16} className="spin" />
-        Читаю режимы съёмки…
+        {t('imageProfile.loading')}
       </div>
     )
   }
@@ -86,7 +88,7 @@ export default function CameraImageProfilePanel({ cameraId }: { cameraId: string
   if (!data || !data.profiles?.length) {
     return (
       <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-        Камера не отдала схему настроек, поэтому режимы съёмки недоступны. Проверьте связь с камерой.
+        {t('imageProfile.unavailable')}
       </div>
     )
   }
@@ -94,10 +96,9 @@ export default function CameraImageProfilePanel({ cameraId }: { cameraId: string
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
-        <h3 style={{ fontSize: 15, marginBottom: 4 }}>Режим съёмки</h3>
+        <h3 style={{ fontSize: 15, marginBottom: 4 }}>{t('imageProfile.title')}</h3>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-          Режим задаёт, что важнее на этой точке — обстановка или номер. Выбирайте по задаче места,
-          а не по названию настроек: под каждый режим ключи подбираются отдельно.
+          {t('imageProfile.hint')}
         </div>
       </div>
 
@@ -141,6 +142,7 @@ function ProfileCard({
   onApply: () => void
 }) {
   const { profile } = item
+  const { t } = useTranslation()
   const usable = item.usable && !item.unsupported_reason
 
   return (
@@ -156,10 +158,10 @@ function ProfileCard({
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
             <span style={{ fontWeight: 600, fontSize: 14 }}>{profile.title}</span>
-            {current && <Badge tone="accent">выбран</Badge>}
-            {usable && !item.partial && <Badge tone="ok">сработает полностью</Badge>}
-            {usable && item.partial && <Badge tone="warn">сработает частично</Badge>}
-            {!usable && <Badge tone="danger">не сработает</Badge>}
+            {current && <Badge tone="accent">{t('imageProfile.chosen')}</Badge>}
+            {usable && !item.partial && <Badge tone="ok">{t('imageProfile.willWork')}</Badge>}
+            {usable && item.partial && <Badge tone="warn">{t('imageProfile.willWorkPartly')}</Badge>}
+            {!usable && <Badge tone="danger">{t('imageProfile.willNotWork')}</Badge>}
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{profile.purpose}</div>
 
@@ -174,7 +176,7 @@ function ProfileCard({
               ровно те, которых нет, чтобы оператор знал, чего не хватает. */}
           {usable && item.partial && !!item.missing?.length && (
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
-              Камера не знает: {item.missing.join(', ')} — эти значения останутся как есть.
+              {t('imageProfile.unknownKeys', { keys: item.missing.join(', ') })}
             </div>
           )}
 
@@ -189,7 +191,7 @@ function ProfileCard({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
           <button className="btn btn-outline btn-sm" onClick={onPreview} disabled={!usable}>
             <Eye size={13} />
-            Что изменится
+            {t('imageProfile.whatChanges')}
           </button>
           <button
             className={`btn ${current ? 'btn-outline' : 'btn-primary'} btn-sm`}
@@ -197,7 +199,7 @@ function ProfileCard({
             disabled={!usable || busy || current}
           >
             {busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />}
-            {current ? 'Уже выбран' : 'Применить'}
+            {current ? t('imageProfile.alreadyChosen') : t('common.apply')}
           </button>
         </div>
       </div>
@@ -225,6 +227,7 @@ function PreviewDialog({
   busy: boolean
   current: boolean
 }) {
+  const { t } = useTranslation()
   const changes: ProfileChange[] = data.changes ?? []
   const skipped = data.missing ?? []
 
@@ -248,7 +251,7 @@ function PreviewDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
-          <h3 style={{ fontSize: 15, flex: 1, margin: 0 }}>«{data.profile.title}»: что изменится</h3>
+          <h3 style={{ fontSize: 15, flex: 1, margin: 0 }}>{t('imageProfile.previewTitle', { name: data.profile.title })}</h3>
           <button className="btn btn-outline btn-sm" onClick={onClose}>
             <X size={14} />
           </button>
@@ -256,15 +259,15 @@ function PreviewDialog({
 
         {changes.length === 0 ? (
           <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-            Камера уже настроена под этот режим — менять нечего.
+            {t('imageProfile.nothingToChange')}
           </div>
         ) : (
           <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ color: 'var(--text-secondary)', textAlign: 'left' }}>
-                <th style={{ padding: '4px 6px', fontWeight: 500 }}>Настройка</th>
-                <th style={{ padding: '4px 6px', fontWeight: 500 }}>Сейчас</th>
-                <th style={{ padding: '4px 6px', fontWeight: 500 }}>Станет</th>
+                <th style={{ padding: '4px 6px', fontWeight: 500 }}>{t('imageProfile.thSetting')}</th>
+                <th style={{ padding: '4px 6px', fontWeight: 500 }}>{t('imageProfile.thNow')}</th>
+                <th style={{ padding: '4px 6px', fontWeight: 500 }}>{t('imageProfile.thWill')}</th>
               </tr>
             </thead>
             <tbody>
@@ -294,7 +297,7 @@ function PreviewDialog({
             <div style={{ display: 'flex', gap: 6 }}>
               <Info size={13} style={{ flexShrink: 0, marginTop: 2 }} />
               <span>
-                Этих настроек у камеры нет, они останутся без изменений: {skipped.join(', ')}
+                {t('imageProfile.missingKeys', { keys: skipped.join(', ') })}
               </span>
             </div>
           </div>
@@ -309,11 +312,11 @@ function PreviewDialog({
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
           <button className="btn btn-outline btn-sm" onClick={onClose}>
-            Отмена
+            {t('common.cancel')}
           </button>
           <button className="btn btn-primary btn-sm" onClick={onApply} disabled={busy || current}>
             {busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />}
-            {current ? 'Уже выбран' : 'Применить'}
+            {current ? t('imageProfile.alreadyChosen') : t('common.apply')}
           </button>
         </div>
       </div>
