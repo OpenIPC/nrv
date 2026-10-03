@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { acsAPI, ACSCard, ACSController } from '../api/client'
 import {
   Plus,
@@ -27,6 +28,7 @@ interface Props {
 }
 
 export function CardsModal({ controller, onClose }: Props) {
+  const { t } = useTranslation()
   const [tab, setTab] = useState<'server' | 'device'>('server')
   const [serverCards, setServerCards] = useState<ACSCard[]>([])
   const [deviceCards, setDeviceCards] = useState<ACSCard[]>([])
@@ -62,7 +64,7 @@ export function CardsModal({ controller, onClose }: Props) {
       const server = await acsAPI.listCards(controller.id)
       setServerCards(server.data || [])
     } catch {
-      setError('Не удалось загрузить карты с сервера')
+      setError(t('cardsModal.loadFailed'))
     }
 
     try {
@@ -71,6 +73,10 @@ export function CardsModal({ controller, onClose }: Props) {
       setUnsupported(false)
     } catch (e: any) {
       const msg = e?.response?.data?.error || ''
+      // Русская подстрока здесь — не забытая подпись, а часть ответа сервера:
+      // бэкенд сообщает о неподдерживаемом контроллере именно этими словами.
+      // Сверяемся с текстом, потому что отдельного признака в ответе нет;
+      // при переводе серверных сообщений это место надо будет поправить.
       if (msg.includes('не поддерживает')) {
         setUnsupported(true)
       }
@@ -124,9 +130,9 @@ export function CardsModal({ controller, onClose }: Props) {
       // Карта может сохраниться на сервере и не дойти до контроллера.
       // Тогда это предупреждение, а не отказ.
       if (e?.response?.status === 202) {
-        setNotice(msg || 'Карта сохранена на сервере, но не выдана на контроллер')
+        setNotice(msg || t('cardsModal.notDelivered'))
       } else {
-        setError(msg || 'Не удалось сохранить карту')
+        setError(msg || t('cardsModal.saveFailed'))
       }
       await load()
     } finally {
@@ -136,7 +142,7 @@ export function CardsModal({ controller, onClose }: Props) {
 
   const handleDelete = async (card: ACSCard) => {
     if (!card.id) return
-    if (!window.confirm(`Удалить карту ${card.facility}:${card.card}${card.name ? ` (${card.name})` : ''}?`)) {
+    if (!window.confirm(t('cardsModal.confirmDelete', { card: `${card.facility}:${card.card}${card.name ? ` (${card.name})` : ''}` }))) {
       return
     }
     setBusy('delete-' + card.id)
@@ -146,7 +152,7 @@ export function CardsModal({ controller, onClose }: Props) {
       await acsAPI.deleteCard(card.id)
       await load()
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось удалить карту')
+      setError(e?.response?.data?.error || t('cardsModal.deleteFailed'))
       await load()
     } finally {
       setBusy('')
@@ -169,7 +175,7 @@ export function CardsModal({ controller, onClose }: Props) {
       })
       await load()
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось изменить карту')
+      setError(e?.response?.data?.error || t('cardsModal.toggleFailed'))
       await load()
     } finally {
       setBusy('')
@@ -182,26 +188,26 @@ export function CardsModal({ controller, onClose }: Props) {
     setNotice('')
     try {
       const r = await acsAPI.syncCards(controller.id)
-      setNotice(`Выдано карт на контроллер: ${r.data.cards}`)
+      setNotice(t('cardsModal.syncDone', { count: r.data.cards }))
       await load()
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось выдать карты на контроллер')
+      setError(e?.response?.data?.error || t('cardsModal.syncFailed'))
     } finally {
       setBusy('')
     }
   }
 
   const handleImport = async () => {
-    if (!window.confirm('Заменить карты на сервере картами с контроллера?')) return
+    if (!window.confirm(t('cardsModal.confirmImport'))) return
     setBusy('import')
     setError('')
     setNotice('')
     try {
       const r = await acsAPI.importCards(controller.id)
-      setNotice(`Перенесено карт с контроллера: ${r.data.cards}`)
+      setNotice(t('cardsModal.importDone', { count: r.data.cards }))
       await load()
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось перенести карты')
+      setError(e?.response?.data?.error || t('cardsModal.importFailed'))
     } finally {
       setBusy('')
     }
@@ -209,7 +215,7 @@ export function CardsModal({ controller, onClose }: Props) {
 
   const handleLearn = async () => {
     if (!learnName.trim()) {
-      setError('Укажите имя владельца карты')
+      setError(t('cardsModal.learnNameRequired'))
       return
     }
     setBusy('learn')
@@ -218,9 +224,9 @@ export function CardsModal({ controller, onClose }: Props) {
     try {
       await acsAPI.startCardLearn(controller.id, learnName.trim())
       setLearning(true)
-      setNotice(`Поднесите карту к считывателю. Она будет сохранена как «${learnName.trim()}», затем нажмите «Забрать с контроллера».`)
+      setNotice(t('cardsModal.learnNotice', { name: learnName.trim() }))
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось включить режим обучения')
+      setError(e?.response?.data?.error || t('cardsModal.learnStartFailed'))
     } finally {
       setBusy('')
     }
@@ -247,11 +253,11 @@ export function CardsModal({ controller, onClose }: Props) {
       <table>
         <thead>
           <tr>
-            <th>Карта</th>
-            <th>Владелец</th>
-            <th>Группа</th>
-            <th>Доступ</th>
-            <th>Статус</th>
+            <th>{t('cardsModal.thCard')}</th>
+            <th>{t('cardsModal.thOwner')}</th>
+            <th>{t('cardsModal.thGroup')}</th>
+            <th>{t('cardsModal.thAccess')}</th>
+            <th>{t('cardsModal.thStatus')}</th>
             {!isDevice && <th style={{ width: 100 }} />}
           </tr>
         </thead>
@@ -259,7 +265,7 @@ export function CardsModal({ controller, onClose }: Props) {
           {cards.length === 0 ? (
             <tr>
               <td colSpan={isDevice ? 5 : 6} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: 24 }}>
-                {isDevice ? 'На контроллере нет карт' : 'Нет карт'}
+                {isDevice ? t('cardsModal.noCardsDevice') : t('cardsModal.noCards')}
               </td>
             </tr>
           ) : (
@@ -270,19 +276,19 @@ export function CardsModal({ controller, onClose }: Props) {
                   <td style={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                     {c.facility}:{c.card}
                   </td>
-                  <td>{c.name || <span style={{ color: 'var(--text-secondary)' }}>без имени</span>}</td>
+                  <td>{c.name || <span style={{ color: 'var(--text-secondary)' }}>{t('cardsModal.noName')}</span>}</td>
                   <td style={{ color: 'var(--text-secondary)' }}>{c.group || '—'}</td>
                   <td style={{ fontSize: 13 }}>
-                    {c.access === 1 ? 'По расписанию' : 'Постоянный'}
+                    {c.access === 1 ? t('cardsModal.accessSchedule') : t('cardsModal.accessAlways')}
                   </td>
                   <td>
                     <span className={`badge badge-${c.active ? 'online' : 'offline'}`}>
                       <span className={`badge-dot badge-dot-${c.active ? 'online' : 'offline'}`} />
-                      {c.active ? 'активна' : 'заблокирована'}
+                      {c.active ? t('cardsModal.statusActive') : t('cardsModal.statusBlocked')}
                     </span>
                     {isDevice && !onServer && (
-                      <span className="badge badge-offline" style={{ marginLeft: 6 }} title="Карта есть на контроллере, но не заведена на сервере">
-                        нет на сервере
+                      <span className="badge badge-offline" style={{ marginLeft: 6 }} title={t('cardsModal.notOnServerHint')}>
+                        {t('cardsModal.notOnServer')}
                       </span>
                     )}
                   </td>
@@ -291,15 +297,15 @@ export function CardsModal({ controller, onClose }: Props) {
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button
                           className="btn btn-outline btn-sm"
-                          title={c.active ? 'Заблокировать' : 'Разблокировать'}
+                          title={c.active ? t('cardsModal.blockHint') : t('cardsModal.unblockHint')}
                           disabled={busy === 'toggle-' + c.id}
                           onClick={() => handleQuickToggle(c)}
                         >
-                          {c.active ? 'Блок' : 'Разблок'}
+                          {c.active ? t('cardsModal.block') : t('cardsModal.unblock')}
                         </button>
                         <button
                           className="btn btn-outline btn-sm"
-                          title="Изменить"
+                          title={t('cardsModal.editHint')}
                           onClick={() => {
                             setEditing(c)
                             setForm({
@@ -316,7 +322,7 @@ export function CardsModal({ controller, onClose }: Props) {
                         </button>
                         <button
                           className="btn btn-outline btn-sm"
-                          title="Удалить"
+                          title={t('cardsModal.deleteHint')}
                           disabled={busy === 'delete-' + c.id}
                           onClick={() => handleDelete(c)}
                         >
@@ -342,7 +348,7 @@ export function CardsModal({ controller, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ marginBottom: 4 }}>Карты доступа</h2>
+          <h2 style={{ marginBottom: 4 }}>{t('cardsModal.title')}</h2>
           <button className="btn btn-outline btn-sm" onClick={onClose}><X size={16} /></button>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 0 }}>
@@ -352,8 +358,7 @@ export function CardsModal({ controller, onClose }: Props) {
         {unsupported && (
           <div className="card" style={{ padding: 12, marginBottom: 12, borderLeft: '3px solid var(--warning)' }}>
             <div style={{ fontSize: 13 }}>
-              Контроллер не поддерживает управление картами через сервер —
-              список ниже содержит только серверный справочник.
+              {t('cardsModal.unsupported')}
             </div>
           </div>
         )}
@@ -372,23 +377,23 @@ export function CardsModal({ controller, onClose }: Props) {
         {/* Действия */}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
           <button className="btn btn-outline btn-sm" onClick={load} disabled={loading}>
-            <RefreshCw size={14} /> Обновить
+            <RefreshCw size={14} /> {t('cardsModal.refresh')}
           </button>
           {!unsupported && (
             <>
               <button className="btn btn-outline btn-sm" onClick={handleSync} disabled={busy === 'sync'}>
-                <Upload size={14} /> Выдать на контроллер
+                <Upload size={14} /> {t('cardsModal.pushToDevice')}
               </button>
               <button className="btn btn-outline btn-sm" onClick={handleImport} disabled={busy === 'import'}>
-                <Download size={14} /> Забрать с контроллера
+                <Download size={14} /> {t('cardsModal.pullFromDevice')}
               </button>
               {learning ? (
                 <button className="btn btn-outline btn-sm" onClick={handleLearnCancel} disabled={busy === 'learn'}>
-                  <X size={14} /> Отменить обучение
+                  <X size={14} /> {t('cardsModal.cancelLearn')}
                 </button>
               ) : (
                 <button className="btn btn-outline btn-sm" onClick={handleLearn} disabled={busy === 'learn'}>
-                  <Radio size={14} /> Обучить карту
+                  <Radio size={14} /> {t('cardsModal.learnCard')}
                 </button>
               )}
             </>
@@ -397,20 +402,20 @@ export function CardsModal({ controller, onClose }: Props) {
 
         {!unsupported && (
           <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-            <label style={{ marginTop: 0 }}>Имя владельца для режима обучения</label>
+            <label style={{ marginTop: 0 }}>{t('cardsModal.learnNameLabel')}</label>
             <div style={{ display: 'flex', gap: 8 }}>
               <input
                 value={learnName}
                 onChange={(e) => setLearnName(e.target.value)}
-                placeholder="ФИО сотрудника"
+                placeholder={t('cardsModal.learnNamePlaceholder')}
               />
               <button className="btn btn-primary" onClick={handleLearn} disabled={busy === 'learn' || !learnName.trim()}>
-                Включить
+                {t('cardsModal.enable')}
               </button>
             </div>
             {learning && (
               <div style={{ fontSize: 12, color: 'var(--warning)', marginTop: 8 }}>
-                Контроллер ждёт карту. Поднесите её к считывателю.
+                {t('cardsModal.learnWaiting')}
               </div>
             )}
           </div>
@@ -422,13 +427,13 @@ export function CardsModal({ controller, onClose }: Props) {
             className={`btn ${tab === 'server' ? 'btn-primary' : 'btn-outline'} btn-sm`}
             onClick={() => setTab('server')}
           >
-            На сервере ({serverCards.length})
+            {t('cardsModal.tabServer', { count: serverCards.length })}
           </button>
           <button
             className={`btn ${tab === 'device' ? 'btn-primary' : 'btn-outline'} btn-sm`}
             onClick={() => setTab('device')}
           >
-            На контроллере ({deviceCards.length})
+            {t('cardsModal.tabDevice', { count: deviceCards.length })}
           </button>
         </div>
 
@@ -440,7 +445,7 @@ export function CardsModal({ controller, onClose }: Props) {
           <>
             {onlyOnDevice.length > 0 && (
               <div style={{ fontSize: 13, color: 'var(--warning)', marginBottom: 8 }}>
-                {onlyOnDevice.length} карт(ы) есть только на контроллере — их можно перенести на сервер кнопкой «Забрать с контроллера».
+                {t('cardsModal.onlyOnDevice', { count: onlyOnDevice.length })}
               </div>
             )}
             {renderTable(deviceCards, true)}
@@ -450,7 +455,7 @@ export function CardsModal({ controller, onClose }: Props) {
         {/* Форма карты */}
         <form onSubmit={handleSubmit} style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
           <h3 style={{ fontSize: 15, marginBottom: 12 }}>
-            {editing ? 'Изменить карту' : 'Добавить карту'}
+            {editing ? t('cardsModal.editTitle') : t('cardsModal.addTitle')}
           </h3>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -466,7 +471,7 @@ export function CardsModal({ controller, onClose }: Props) {
               />
             </div>
             <div>
-              <label>Номер карты (0–65535)</label>
+              <label>{t('cardsModal.cardNumberLabel')}</label>
               <input
                 type="number"
                 min={0}
@@ -477,27 +482,27 @@ export function CardsModal({ controller, onClose }: Props) {
               />
             </div>
             <div>
-              <label>Владелец</label>
+              <label>{t('cardsModal.owner')}</label>
               <input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="ФИО"
+                placeholder={t('cardsModal.ownerPlaceholder')}
               />
             </div>
             <div>
-              <label>Группа</label>
+              <label>{t('cardsModal.group')}</label>
               <input
                 value={form.group}
                 onChange={(e) => setForm({ ...form, group: e.target.value })}
-                placeholder="Отдел"
+                placeholder={t('cardsModal.groupPlaceholder')}
               />
             </div>
           </div>
 
-          <label>Тип доступа</label>
+          <label>{t('cardsModal.accessType')}</label>
           <select value={form.access} onChange={(e) => setForm({ ...form, access: +e.target.value })}>
-            <option value={0}>Постоянный</option>
-            <option value={1}>Только по расписанию</option>
+            <option value={0}>{t('cardsModal.accessAlwaysOption')}</option>
+            <option value={1}>{t('cardsModal.accessScheduleOption')}</option>
           </select>
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
@@ -507,18 +512,18 @@ export function CardsModal({ controller, onClose }: Props) {
               onChange={(e) => setForm({ ...form, active: e.target.checked })}
               style={{ width: 'auto' }}
             />
-            Карта активна
+            {t('cardsModal.cardActive')}
           </label>
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
             {editing && (
               <button type="button" className="btn btn-outline" onClick={resetForm}>
-                Отмена
+                {t('common.cancel')}
               </button>
             )}
             <button type="submit" className="btn btn-primary" disabled={busy === 'save'}>
               <Plus size={16} />
-              {busy === 'save' ? 'Сохранение...' : editing ? 'Сохранить' : 'Добавить'}
+              {busy === 'save' ? t('common.saving') : editing ? t('common.save') : t('cardsModal.add')}
             </button>
           </div>
         </form>
