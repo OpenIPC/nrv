@@ -993,4 +993,78 @@ export default {
     blockedBadge: 'access closed',
     blockedBadgeHint: 'Access is closed for all of the holder cards',
   },
+
+  plansPage: {
+    title: 'Floor plans',
+    subtitle: 'Floor layouts with the equipment: you can see what is where and what is offline',
+    refresh: 'Refresh',
+    refreshHint: 'Refresh the state',
+    addPlan: 'Add a plan',
+    listTitle: 'Plans',
+    editNameHint: 'Edit the name',
+    deleteHint: 'Delete the plan',
+    confirmDelete:
+      'Delete the plan «{{name}}»? The devices will be removed from it, the devices themselves will stay.',
+    deleted: 'Plan deleted',
+    deleteFailed: 'Could not delete the plan',
+
+    editTitle: 'Edit the plan',
+    newTitle: 'New plan',
+    name: 'Name',
+    namePlaceholder: 'First floor',
+    description: 'Description',
+    descriptionPlaceholder: 'Entrance, accounts, warehouse',
+    nameRequired: 'Enter the plan name',
+    saved: 'Plan saved',
+    created: 'Plan created',
+    saveFailed: 'Could not save the plan',
+    saving: 'Saving…',
+
+    searchPlaceholder: 'Search by name',
+    nothingFound: 'Nothing found',
+    imageUploaded: 'Background uploaded',
+    imageUploadFailed: 'Could not upload the background',
+    planNotFound: 'Plan not found',
+
+    kindCamera: 'camera',
+    kindDoor: 'door',
+    kindController: 'controller',
+    kindReader: 'reader',
+    pickCamera: 'Choose a camera',
+    pickController: 'Choose a controller',
+    pickDoor: 'Choose a door',
+    pickReaderDoor: 'Choose the door the reader is on',
+    needCameras: 'Add cameras first',
+    needControllers: 'Add a controller in the «Access control» section first',
+    needDoors: 'Create doors in the «Access» section first',
+    devicesFailed: 'Could not get the device list',
+
+    pointAdded: 'Point added',
+    pointAddFailed: 'Could not add the point',
+    pointRemoved: 'Point removed',
+    pointRemoveFailed: 'Could not remove the point',
+    positionSaved: 'Position saved',
+    positionSaveFailed: 'Could not save the position',
+
+    devicesCount: 'devices: {{count}}',
+    offlineCount: 'offline: {{count}}',
+    zoomOutHint: 'Zoom out (or the mouse wheel)',
+    zoomInHint: 'Zoom in (or the mouse wheel)',
+    zoomResetHint: 'Reset the zoom',
+    addLabel: 'Add:',
+    uploadImage: 'Upload a background',
+    replaceImage: 'Replace the background',
+    clickHint:
+      'Click the plan where the {{what}} is. Then pick the device from the list.',
+    controlsHint:
+      'Mouse wheel — zoom · dragging the background — pan the plan · dragging a marker — move the device',
+    noImage:
+      'No background uploaded. Press «Upload a background» and choose a photo or a scan of the floor plan — you will be able to place devices on it.',
+    dragHint: 'Drag to move',
+    removeFromPlan: 'Remove from the plan',
+
+    emptyTitle: 'No plans yet',
+    emptyText:
+      'Create a floor plan, upload its photo or scan and place cameras, doors and controllers on it. The layout will show what is where and what has lost its connection.',
+  },
 }

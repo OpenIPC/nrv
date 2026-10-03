@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   acsAPI, ACSPlan, ACSPlanPoint, ACSPlanPointKind,
-  PLAN_POINT_TITLES,
 } from '../api/client'
 import { camerasAPI } from '../api/client'
 import { useAsync } from '../hooks/useApi'
@@ -10,6 +10,20 @@ import {
   Camera, DoorOpen, KeyRound, Cpu, Layers, Map as MapIcon, Maximize2, Pencil,
   Plus, RefreshCw, Trash2, Upload, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
+
+/**
+ * Ключи переводов для видов точек на плане.
+ *
+ * Названия лежат в api/client.ts рядом с кодами видов — в слое, который
+ * о языке интерфейса ничего не знает. Переводим по значениям (camera,
+ * door, controller, reader): они часть протокола и не меняются.
+ */
+const PLAN_KIND_KEYS: Record<ACSPlanPointKind, string> = {
+  camera: 'plansPage.kindCamera',
+  door: 'plansPage.kindDoor',
+  controller: 'plansPage.kindController',
+  reader: 'plansPage.kindReader',
+}
 
 /**
  * Планы помещений: схемы этажей с расстановкой устройств.
@@ -21,6 +35,7 @@ import {
  * остался без наблюдения.
  */
 export default function PlansPage() {
+  const { t } = useTranslation()
   const { data: plans, loading, refetch } = useAsync(() => acsAPI.listPlans(), [])
   const [selectedID, setSelectedID] = useState<string>('')
 
@@ -38,16 +53,16 @@ export default function PlansPage() {
         <div>
           <h1 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 22, margin: 0 }}>
             <MapIcon size={22} />
-            Планы помещений
+            {t('plansPage.title')}
           </h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '4px 0 0' }}>
-            Схемы этажей с оборудованием: видно, что где стоит и что не на связи
+            {t('plansPage.subtitle')}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-outline" onClick={refetch} title="Обновить состояние">
+          <button className="btn btn-outline" onClick={refetch} title={t('plansPage.refreshHint')}>
             <RefreshCw size={14} />
-            Обновить
+            {t('plansPage.refresh')}
           </button>
           <PlanCreateButton onCreated={(id) => { refetch(); setSelectedID(id) }} />
         </div>
@@ -84,23 +99,24 @@ function PlanList({ plans, selectedID, onSelect, onChanged }: {
   onChanged: () => void
 }) {
   const toast = useToast()
+  const { t } = useTranslation()
   const [editing, setEditing] = useState<ACSPlan | null>(null)
 
   const remove = async (p: ACSPlan) => {
-    if (!confirm(`Удалить план «${p.name}»? Устройства с него будут убраны, сами устройства останутся.`)) return
+    if (!confirm(t('plansPage.confirmDelete', { name: p.name }))) return
     try {
       await acsAPI.deletePlan(p.id)
-      toast.success('План удалён')
+      toast.success(t('plansPage.deleted'))
       if (selectedID === p.id) onSelect('')
       onChanged()
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось удалить план')
+      toast.error(e?.response?.data?.error || t('plansPage.deleteFailed'))
     }
   }
 
   return (
     <div className="card" style={{ width: 260, flexShrink: 0 }}>
-      <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Планы</div>
+      <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>{t('plansPage.listTitle')}</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {plans.map((p) => (
           <div
@@ -116,14 +132,14 @@ function PlanList({ plans, selectedID, onSelect, onChanged }: {
               <strong style={{ fontSize: 13, flex: 1 }}>{p.name}</strong>
               <button
                 className="btn btn-outline btn-sm"
-                title="Изменить название"
+                title={t('plansPage.editNameHint')}
                 onClick={(e) => { e.stopPropagation(); setEditing(p) }}
               >
                 <Pencil size={11} />
               </button>
               <button
                 className="btn btn-outline btn-sm"
-                title="Удалить план"
+                title={t('plansPage.deleteHint')}
                 onClick={(e) => { e.stopPropagation(); remove(p) }}
               >
                 <Trash2 size={11} />
@@ -151,12 +167,13 @@ function PlanList({ plans, selectedID, onSelect, onChanged }: {
 
 /** Кнопка создания плана с диалогом. */
 function PlanCreateButton({ onCreated }: { onCreated: (id: string) => void }) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   return (
     <>
       <button className="btn btn-primary" onClick={() => setOpen(true)}>
         <Plus size={14} />
-        Добавить план
+        {t('plansPage.addPlan')}
       </button>
       {open && (
         <PlanEditModal
@@ -176,28 +193,29 @@ function PlanEditModal({ plan, onClose, onSaved }: {
   onSaved: (id?: string) => void
 }) {
   const toast = useToast()
+  const { t } = useTranslation()
   const [name, setName] = useState(plan?.name || '')
   const [description, setDescription] = useState(plan?.description || '')
   const [saving, setSaving] = useState(false)
 
   const save = async () => {
     if (!name.trim()) {
-      toast.error('Укажите название плана')
+      toast.error(t('plansPage.nameRequired'))
       return
     }
     setSaving(true)
     try {
       if (plan) {
         await acsAPI.updatePlan(plan.id, { name, description })
-        toast.success('План сохранён')
+        toast.success(t('plansPage.saved'))
         onSaved(plan.id)
       } else {
         const res = await acsAPI.createPlan({ name, description })
-        toast.success('План создан')
+        toast.success(t('plansPage.created'))
         onSaved(res.data?.id)
       }
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось сохранить план')
+      toast.error(e?.response?.data?.error || t('plansPage.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -213,25 +231,25 @@ function PlanEditModal({ plan, onClose, onSaved }: {
     >
       <div className="card" style={{ width: 420 }} onClick={(e) => e.stopPropagation()}>
         <h2 style={{ fontSize: 16, marginTop: 0 }}>
-          {plan ? 'Изменить план' : 'Новый план'}
+          {plan ? t('plansPage.editTitle') : t('plansPage.newTitle')}
         </h2>
-        <label>Название</label>
+        <label>{t('plansPage.name')}</label>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Первый этаж"
+          placeholder={t('plansPage.namePlaceholder')}
           autoFocus
         />
-        <label style={{ marginTop: 8 }}>Описание</label>
+        <label style={{ marginTop: 8 }}>{t('plansPage.description')}</label>
         <input
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="Вход, бухгалтерия, склад"
+          placeholder={t('plansPage.descriptionPlaceholder')}
         />
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
-          <button className="btn btn-outline" onClick={onClose}>Отмена</button>
+          <button className="btn btn-outline" onClick={onClose}>{t('common.cancel')}</button>
           <button className="btn btn-primary" onClick={save} disabled={saving}>
-            {saving ? 'Сохраняю…' : 'Сохранить'}
+            {saving ? t('plansPage.saving') : t('common.save')}
           </button>
         </div>
       </div>
@@ -253,6 +271,7 @@ function DevicePicker({ title, items, onPick, onCancel }: {
   onPick: (id: string) => void
   onCancel: () => void
 }) {
+  const { t } = useTranslation()
   const [search, setSearch] = useState('')
 
   const filtered = useMemo(() => {
@@ -278,13 +297,13 @@ function DevicePicker({ title, items, onPick, onCancel }: {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Поиск по названию"
+          placeholder={t('plansPage.searchPlaceholder')}
           autoFocus
         />
         <div style={{ overflowY: 'auto', marginTop: 8, flex: 1 }}>
           {filtered.length === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', padding: 12, textAlign: 'center' }}>
-              Ничего не найдено
+              {t('plansPage.nothingFound')}
             </div>
           ) : (
             filtered.map((it) => (
@@ -304,7 +323,7 @@ function DevicePicker({ title, items, onPick, onCancel }: {
           )}
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-          <button className="btn btn-outline" onClick={onCancel}>Отмена</button>
+          <button className="btn btn-outline" onClick={onCancel}>{t('common.cancel')}</button>
         </div>
       </div>
     </div>
@@ -322,6 +341,7 @@ function PlanCanvas({ planID, onPlanChanged }: {
   onPlanChanged: () => void
 }) {
   const toast = useToast()
+  const { t } = useTranslation()
   const { data: plan, loading, refetch } = useAsync(() => acsAPI.getPlan(planID), [planID])
   const [placing, setPlacing] = useState<ACSPlanPointKind | null>(null)
   const [selected, setSelected] = useState<ACSPlanPoint | null>(null)
@@ -347,8 +367,10 @@ function PlanCanvas({ planID, onPlanChanged }: {
   // Минута — компромисс: чаще нет смысла (монитор доступности камер
   // работает с тем же периодом), реже — оператор видел бы устаревшую схему.
   useEffect(() => {
-    const t = setInterval(refetch, 60000)
-    return () => clearInterval(t)
+    // Переменная таймера названа timer: имя t занято функцией перевода,
+    // и внутри этого колбэка вызов перевода перестал бы работать.
+    const timer = setInterval(refetch, 60000)
+    return () => clearInterval(timer)
   }, [refetch])
 
   const offlineCount = useMemo(
@@ -359,10 +381,10 @@ function PlanCanvas({ planID, onPlanChanged }: {
   const uploadImage = async (file: File) => {
     try {
       await acsAPI.uploadPlanImage(planID, file)
-      toast.success('Подложка загружена')
+      toast.success(t('plansPage.imageUploaded'))
       refetch()
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось загрузить подложку')
+      toast.error(e?.response?.data?.error || t('plansPage.imageUploadFailed'))
     }
   }
 
@@ -388,24 +410,23 @@ function PlanCanvas({ planID, onPlanChanged }: {
 
       if (kind === 'camera') {
         items = ((await camerasAPI.list()).data || []).map((c) => ({ id: c.id, name: c.name }))
-        title = 'Выберите камеру'
+        title = t('plansPage.pickCamera')
       } else if (kind === 'controller') {
         items = ((await acsAPI.listControllers()).data || []).map((c) => ({ id: c.id, name: c.name }))
-        title = 'Выберите контроллер'
+        title = t('plansPage.pickController')
       } else {
-        const label = kind === 'reader' ? 'дверь, у которой стоит считыватель' : 'дверь'
         items = ((await acsAPI.listAccessDoors()).data || []).map((d) => ({
           id: d.id,
           name: d.location ? `${d.name} · ${d.location}` : d.name,
         }))
-        title = `Выберите ${label}`
+        title = kind === 'reader' ? t('plansPage.pickReaderDoor') : t('plansPage.pickDoor')
       }
 
       if (items.length === 0) {
         toast.error(
-          kind === 'camera' ? 'Сначала добавьте камеры'
-            : kind === 'controller' ? 'Сначала добавьте контроллер в разделе «СКУД»'
-              : 'Сначала заведите двери в разделе «Доступ»',
+          kind === 'camera' ? t('plansPage.needCameras')
+            : kind === 'controller' ? t('plansPage.needControllers')
+              : t('plansPage.needDoors'),
         )
         return
       }
@@ -416,7 +437,7 @@ function PlanCanvas({ planID, onPlanChanged }: {
       setPending({ x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000, kind })
       setPicker({ title, items })
     } catch (err: any) {
-      toast.error(err?.response?.data?.error || 'Не удалось получить список устройств')
+      toast.error(err?.response?.data?.error || t('plansPage.devicesFailed'))
     }
   }
 
@@ -430,24 +451,24 @@ function PlanCanvas({ planID, onPlanChanged }: {
         x: pending.x,
         y: pending.y,
       })
-      toast.success('Точка добавлена')
+      toast.success(t('plansPage.pointAdded'))
       setPlacing(null)
       setPending(null)
       setPicker(null)
       refetch()
     } catch (err: any) {
-      toast.error(err?.response?.data?.error || 'Не удалось добавить точку')
+      toast.error(err?.response?.data?.error || t('plansPage.pointAddFailed'))
     }
   }
 
   const removePoint = async (p: ACSPlanPoint) => {
     try {
       await acsAPI.deletePlanPoint(planID, p.id)
-      toast.success('Точка убрана')
+      toast.success(t('plansPage.pointRemoved'))
       setSelected(null)
       refetch()
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось убрать точку')
+      toast.error(e?.response?.data?.error || t('plansPage.pointRemoveFailed'))
     }
   }
 
@@ -571,11 +592,11 @@ function PlanCanvas({ planID, onPlanChanged }: {
         rotation: original?.rotation,
         label: original?.label,
       })
-      toast.success('Положение сохранено')
+      toast.success(t('plansPage.positionSaved'))
       setDragPos(null)
       refetch()
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось сохранить положение')
+      toast.error(e?.response?.data?.error || t('plansPage.positionSaveFailed'))
       // Возвращаем точку на прежнее место: иначе на экране она осталась бы
       // там, куда её перетащили, а на сервере — на старом месте, и после
       // обновления страницы она бы «прыгнула» назад.
@@ -635,7 +656,7 @@ function PlanCanvas({ planID, onPlanChanged }: {
   }, [drag, plan])
 
   if (loading) return <div className="spinner" />
-  if (!plan) return <div className="card">План не найден</div>
+  if (!plan) return <div className="card">{t('plansPage.planNotFound')}</div>
 
   return (
     <div className="card" style={{ flex: 1, minWidth: 0 }}>
@@ -645,10 +666,10 @@ function PlanCanvas({ planID, onPlanChanged }: {
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{plan.description}</span>
         )}
         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-          устройств: {(plan.points || []).length}
+          {t('plansPage.devicesCount', { count: (plan.points || []).length })}
           {offlineCount > 0 && (
             <span style={{ color: 'var(--danger)', marginLeft: 8 }}>
-              не на связи: {offlineCount}
+              {t('plansPage.offlineCount', { count: offlineCount })}
             </span>
           )}
         </span>
@@ -657,7 +678,7 @@ function PlanCanvas({ planID, onPlanChanged }: {
           <button
             className="btn btn-outline btn-sm"
             onClick={() => setZoom((z) => Math.max(0.3, z / 1.25))}
-            title="Уменьшить (или колесо мыши)"
+            title={t('plansPage.zoomOutHint')}
           >
             <ZoomOut size={13} />
           </button>
@@ -665,14 +686,14 @@ function PlanCanvas({ planID, onPlanChanged }: {
           <button
             className="btn btn-outline btn-sm"
             onClick={() => setZoom((z) => Math.min(4, z * 1.25))}
-            title="Увеличить (или колесо мыши)"
+            title={t('plansPage.zoomInHint')}
           >
             <ZoomIn size={13} />
           </button>
           <button
             className="btn btn-outline btn-sm"
             onClick={() => setZoom(1)}
-            title="Сбросить масштаб"
+            title={t('plansPage.zoomResetHint')}
           >
             <Maximize2 size={13} />
           </button>
@@ -681,7 +702,7 @@ function PlanCanvas({ planID, onPlanChanged }: {
 
       {/* Панель добавления: выбор вида, затем клик по плану. */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Добавить:</span>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('plansPage.addLabel')}</span>
         {(['camera', 'door', 'controller', 'reader'] as ACSPlanPointKind[]).map((k) => (
           <button
             key={k}
@@ -689,12 +710,12 @@ function PlanCanvas({ planID, onPlanChanged }: {
             onClick={() => setPlacing(placing === k ? null : k)}
           >
             <KindIcon kind={k} size={12} />
-            {PLAN_POINT_TITLES[k]}
+            {t(PLAN_KIND_KEYS[k])}
           </button>
         ))}
         <button className="btn btn-outline btn-sm" onClick={() => fileRef.current?.click()}>
           <Upload size={12} />
-          {plan.image_path ? 'Заменить подложку' : 'Загрузить подложку'}
+          {plan.image_path ? t('plansPage.replaceImage') : t('plansPage.uploadImage')}
         </button>
         <input
           ref={fileRef}
@@ -716,8 +737,7 @@ function PlanCanvas({ planID, onPlanChanged }: {
             background: 'rgba(74,144,217,0.12)', borderLeft: '3px solid #4a90d9',
           }}
         >
-          Кликните по плану в том месте, где стоит {PLAN_POINT_TITLES[placing]}.
-          {' '}Затем укажите устройство из списка.
+          {t('plansPage.clickHint', { what: t(PLAN_KIND_KEYS[placing]) })}
         </div>
       )}
 
@@ -725,8 +745,7 @@ function PlanCanvas({ planID, onPlanChanged }: {
           никто не догадается: значок выглядит как картинка, а не как
           элемент, который можно двигать. */}
       <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8 }}>
-        Колесо мыши — масштаб · перетаскивание фона — сдвиг плана ·
-        перетаскивание значка — переместить устройство
+        {t('plansPage.controlsHint')}
       </div>
 
       {/* Полотно. Прокрутка по обеим осям: при увеличении план не влезает
@@ -766,8 +785,7 @@ function PlanCanvas({ planID, onPlanChanged }: {
                 fontSize: 13, border: '2px dashed var(--border)',
               }}
             >
-              Подложка не загружена. Нажмите «Загрузить подложку» и выберите
-              фото или скан плана этажа — на нём можно будет расставить устройства.
+              {t('plansPage.noImage')}
             </div>
           )}
 
@@ -839,7 +857,8 @@ function PointMarker({ point, selected, dragging, onClick, onDragStart }: {
   onClick: (e: React.MouseEvent) => void
   onDragStart: (e: React.MouseEvent, p: ACSPlanPoint) => void
 }) {
-  const label = point.label || point.device_name || PLAN_POINT_TITLES[point.kind]
+  const { t } = useTranslation()
+  const label = point.label || point.device_name || t(PLAN_KIND_KEYS[point.kind])
 
   // Точки-метки без устройства не имеют состояния: подписи и серый цвет
   // честнее, чем зелёный «работает» у поста охраны.
@@ -855,7 +874,7 @@ function PointMarker({ point, selected, dragging, onClick, onDragStart }: {
         if (e.button !== 0) return
         onDragStart(e, point)
       }}
-      title={`${label}\n${point.status_text || ''}\n\nПеретащите, чтобы переместить`}
+      title={`${label}\n${point.status_text || ''}\n\n${t('plansPage.dragHint')}`}
       style={{
         position: 'absolute',
         left: `${point.x * 100}%`,
@@ -915,6 +934,7 @@ function PointInfo({ point, onClose, onDelete }: {
   onClose: () => void
   onDelete: (p: ACSPlanPoint) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div
       style={{
@@ -925,16 +945,16 @@ function PointInfo({ point, onClose, onDelete }: {
       <KindIcon kind={point.kind} size={16} />
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 13, fontWeight: 500 }}>
-          {point.label || point.device_name || PLAN_POINT_TITLES[point.kind]}
+          {point.label || point.device_name || t(PLAN_KIND_KEYS[point.kind])}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-          {PLAN_POINT_TITLES[point.kind]}
+          {t(PLAN_KIND_KEYS[point.kind])}
           {point.status_text && ` · ${point.status_text}`}
         </div>
       </div>
       <button className="btn btn-outline btn-sm" onClick={() => onDelete(point)}>
         <Trash2 size={12} />
-        Убрать с плана
+        {t('plansPage.removeFromPlan')}
       </button>
       <button className="btn btn-outline btn-sm" onClick={onClose}>
         <X size={12} />
@@ -945,18 +965,17 @@ function PointInfo({ point, onClose, onDelete }: {
 
 /** Пустое состояние: планов ещё нет. */
 function EmptyState() {
+  const { t } = useTranslation()
   return (
     <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
       <div style={{ opacity: 0.3, marginBottom: 16 }}>
         <Layers size={48} />
       </div>
       <p style={{ fontSize: 15, marginBottom: 8, color: 'var(--text-primary)' }}>
-        Планов пока нет
+        {t('plansPage.emptyTitle')}
       </p>
       <p style={{ fontSize: 13, maxWidth: 460, margin: '0 auto' }}>
-        Создайте план этажа, загрузите его фото или скан и расставьте
-        на нём камеры, двери и контроллеры. На схеме будет видно, что
-        где стоит и что потеряло связь.
+        {t('plansPage.emptyText')}
       </p>
     </div>
   )
