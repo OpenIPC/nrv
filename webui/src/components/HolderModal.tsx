@@ -1,12 +1,33 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { acsAPI, ACSDoor, ACSGroup, ACSHolder, ACSHolderInput,
-  KEY_TYPE_HINTS, KEY_TYPE_TITLES, KeyType } from '../api/client'
+  KEY_TYPE_TITLES, KeyType } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import {
   AlertTriangle, Camera, Check, CreditCard, DoorOpen, Image as ImageIcon,
   Phone, Plus, Save, Trash2, User, X,
 } from 'lucide-react'
+
+/**
+ * Ключи переводов для типов карт.
+ *
+ * Названия и пояснения лежат в api/client.ts рядом с кодами типов — в слое,
+ * который о языке интерфейса ничего не знает. Переводим по значениям
+ * (simple, master, blocking): они часть протокола и не меняются, а русские
+ * подписи там могут быть переписаны в любой момент.
+ */
+const KEY_TYPE_TITLE_KEYS: Record<KeyType, string> = {
+  simple: 'holderModal.keySimple',
+  master: 'holderModal.keyMaster',
+  blocking: 'holderModal.keyBlocking',
+}
+
+const KEY_TYPE_HINT_KEYS: Record<KeyType, string> = {
+  simple: 'holderModal.keyHintSimple',
+  master: 'holderModal.keyHintMaster',
+  blocking: 'holderModal.keyHintBlocking',
+}
 
 /**
  * Карточка владельца карты: сведения о человеке и его правах.
@@ -23,6 +44,7 @@ export function HolderModal({ holder, onClose, onSaved }: {
   onSaved: () => void
 }) {
   const toast = useToast()
+  const { t } = useTranslation()
   const fileRef = useRef<HTMLInputElement>(null)
 
   const isNew = !holder
@@ -89,7 +111,7 @@ export function HolderModal({ holder, onClose, onSaved }: {
 
   const save = async () => {
     if (!form.full_name.trim()) {
-      setError('Укажите ФИО')
+      setError(t('holderModal.nameRequired'))
       return
     }
     setSaving(true)
@@ -98,7 +120,7 @@ export function HolderModal({ holder, onClose, onSaved }: {
       const saved = holder
         ? await acsAPI.updateHolder(holder.id, form)
         : await acsAPI.createHolder(form)
-      toast.success(holder ? 'Владелец обновлён' : 'Владелец добавлен')
+      toast.success(holder ? t('holderModal.updated') : t('holderModal.added'))
       onSaved()
       // После создания переходим в режим правки: оператору обычно нужно
       // сразу загрузить фото и привязать карту, а не открывать заново.
@@ -109,7 +131,7 @@ export function HolderModal({ holder, onClose, onSaved }: {
       }
       return saved
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось сохранить')
+      setError(e?.response?.data?.error || t('holderModal.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -117,7 +139,7 @@ export function HolderModal({ holder, onClose, onSaved }: {
 
   const uploadPhoto = async (file: File) => {
     if (!holder) {
-      setError('Сначала сохраните владельца, затем загрузите фотографию')
+      setError(t('holderModal.saveFirst'))
       return
     }
     try {
@@ -125,11 +147,11 @@ export function HolderModal({ holder, onClose, onSaved }: {
       // Счётчик заставляет браузер запросить снимок заново: файл лежит
       // по тому же адресу, и без этого он показал бы старый из кэша.
       setPhotoVersion((v) => v + 1)
-      toast.success('Фотография загружена')
+      toast.success(t('holderModal.photoUploaded'))
       refetch()
       onSaved()
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось загрузить фотографию')
+      setError(e?.response?.data?.error || t('holderModal.photoUploadFailed'))
     }
   }
 
@@ -141,7 +163,7 @@ export function HolderModal({ holder, onClose, onSaved }: {
         style={{ maxWidth: 760, maxHeight: '90vh', overflowY: 'auto' }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>{isNew ? 'Новый владелец карты' : 'Владелец карты'}</h2>
+          <h2>{isNew ? t('holderModal.newTitle') : t('holderModal.title')}</h2>
           <button className="btn btn-outline btn-sm" onClick={onClose}>
             <X size={14} />
           </button>
@@ -168,7 +190,7 @@ export function HolderModal({ holder, onClose, onSaved }: {
                 <img
                   key={photoVersion}
                   src={acsAPI.holderPhotoURL(holder.id)}
-                  alt="Фото владельца"
+                  alt={t('holderModal.photoAlt')}
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
               ) : (
@@ -190,49 +212,49 @@ export function HolderModal({ holder, onClose, onSaved }: {
               style={{ width: '100%', marginTop: 8 }}
               onClick={() => fileRef.current?.click()}
               disabled={isNew}
-              title={isNew ? 'Сначала сохраните владельца' : 'Загрузить фотографию'}
+              title={isNew ? t('holderModal.saveFirstHint') : t('holderModal.uploadPhotoHint')}
             >
               <Camera size={14} />
-              Фото
+              {t('holderModal.photo')}
             </button>
           </div>
 
           {/* Сведения о человеке. */}
           <div style={{ flex: 1, minWidth: 280 }}>
-            <label>ФИО</label>
+            <label>{t('holderModal.fullName')}</label>
             <input
               value={form.full_name}
               onChange={(e) => setForm({ ...form, full_name: e.target.value })}
-              placeholder="Иванов Иван Иванович"
+              placeholder={t('holderModal.fullNamePlaceholder')}
             />
 
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label>Должность</label>
+                <label>{t('holderModal.position')}</label>
                 <input
                   value={form.position}
                   onChange={(e) => setForm({ ...form, position: e.target.value })}
-                  placeholder="Электрик"
+                  placeholder={t('holderModal.positionPlaceholder')}
                 />
               </div>
               <div style={{ flex: 1 }}>
-                <label>Отдел</label>
+                <label>{t('holderModal.department')}</label>
                 <input
                   value={form.department}
                   onChange={(e) => setForm({ ...form, department: e.target.value })}
-                  placeholder="Бухгалтерия"
+                  placeholder={t('holderModal.departmentPlaceholder')}
                 />
               </div>
             </div>
 
-            <label>Телефон</label>
+            <label>{t('holderModal.phone')}</label>
             <input
               value={form.phone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              placeholder="+7 900 000-00-00"
+              placeholder={t('holderModal.phonePlaceholder')}
             />
 
-            <label>Заметка</label>
+            <label>{t('holderModal.note')}</label>
             <input
               value={form.note}
               onChange={(e) => setForm({ ...form, note: e.target.value })}
@@ -255,21 +277,21 @@ export function HolderModal({ holder, onClose, onSaved }: {
                 onChange={(e) => setForm({ ...form, blocked: e.target.checked })}
               />
               <span style={{ fontSize: 13 }}>
-                Доступ закрыт (увольнение, потеря карты)
+                {t('holderModal.accessClosed')}
               </span>
             </label>
           </div>
         </div>
 
         {/* Группы доступа: права задаются здесь, а не по каждой двери. */}
-        <h3 style={{ fontSize: 14, marginTop: 20 }}>Группы доступа</h3>
+        <h3 style={{ fontSize: 14, marginTop: 20 }}>{t('holderModal.groupsTitle')}</h3>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-          Права приходят из групп. Человека достаточно включить в нужный отдел.
+          {t('holderModal.groupsHint')}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {(groups || []).length === 0 && (
             <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-              Групп пока нет — создайте их на вкладке «Группы».
+              {t('holderModal.noGroups')}
             </div>
           )}
           {(groups || []).map((g) => {
@@ -301,16 +323,15 @@ export function HolderModal({ holder, onClose, onSaved }: {
           доступные: оператору нужно видеть и закрытые — иначе непонятно,
           куда человека ещё не пускают.
         */}
-        <h3 style={{ fontSize: 14, marginTop: 20 }}>Доступ по дверям</h3>
+        <h3 style={{ fontSize: 14, marginTop: 20 }}>{t('holderModal.doorsTitle')}</h3>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-          Права считаются по группам. Личное правило перекрывает групповое
-          в обе стороны; запрет важнее разрешения.
+          {t('holderModal.doorsHint')}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {(doorsList || []).length === 0 && (
             <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-              Дверей пока нет — добавьте их на вкладке «Двери».
+              {t('holderModal.noDoors')}
             </div>
           )}
           {(doorsList || []).map((door) => {
@@ -339,7 +360,7 @@ export function HolderModal({ holder, onClose, onSaved }: {
                 <div style={{ display: 'flex', gap: 4 }}>
                   <button
                     className={personal === true ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm'}
-                    title="Лично разрешить эту дверь"
+                    title={t('holderModal.allowHint')}
                     onClick={() => setPersonal(door.id, personal === true ? undefined : true)}
                   >
                     <Check size={12} />
@@ -347,7 +368,7 @@ export function HolderModal({ holder, onClose, onSaved }: {
                   <button
                     className={personal === false ? 'btn btn-sm' : 'btn btn-outline btn-sm'}
                     style={personal === false ? { background: 'var(--danger)' } : undefined}
-                    title="Лично запретить эту дверь"
+                    title={t('holderModal.denyHint')}
                     onClick={() => setPersonal(door.id, personal === false ? undefined : false)}
                   >
                     <X size={12} />
@@ -362,16 +383,16 @@ export function HolderModal({ holder, onClose, onSaved }: {
                 <div style={{ width: 130, fontSize: 11, textAlign: 'right' }}>
                   {personal !== undefined ? (
                     personal ? (
-                      <span style={{ color: 'var(--success)' }}>лично разрешено</span>
+                      <span style={{ color: 'var(--success)' }}>{t('holderModal.personallyAllowed')}</span>
                     ) : (
-                      <span style={{ color: 'var(--danger)' }}>лично запрещено</span>
+                      <span style={{ color: 'var(--danger)' }}>{t('holderModal.personallyDenied')}</span>
                     )
                   ) : right?.source === 'group' ? (
                     <span style={{ color: 'var(--success)' }}>
-                      группа{right.groups?.length ? `: ${right.groups.join(', ')}` : ''}
+                      {t('holderModal.groupSource')}{right.groups?.length ? `: ${right.groups.join(', ')}` : ''}
                     </span>
                   ) : (
-                    <span style={{ color: 'var(--text-secondary)' }}>нет доступа</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('holderModal.noAccess')}</span>
                   )}
                 </div>
               </div>
@@ -382,16 +403,16 @@ export function HolderModal({ holder, onClose, onSaved }: {
         {/* Карты владельца: только при правке, при создании их ещё нет. */}
         {!isNew && full && (
           <>
-            <h3 style={{ fontSize: 14, marginTop: 20 }}>Карты</h3>
+            <h3 style={{ fontSize: 14, marginTop: 20 }}>{t('holderModal.cardsTitle')}</h3>
             <HolderCards holder={full} onChanged={() => { refetch(); onSaved() }} />
           </>
         )}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 24, justifyContent: 'flex-end' }}>
-          <button className="btn btn-outline" onClick={onClose}>Отмена</button>
+          <button className="btn btn-outline" onClick={onClose}>{t('common.cancel')}</button>
           <button className="btn btn-primary" onClick={save} disabled={saving}>
             <Save size={14} />
-            {saving ? 'Сохраняю…' : 'Сохранить'}
+            {saving ? t('holderModal.saving') : t('common.save')}
           </button>
         </div>
       </div>
@@ -407,6 +428,7 @@ export function HolderModal({ holder, onClose, onSaved }: {
  */
 function HolderCards({ holder, onChanged }: { holder: ACSHolder; onChanged: () => void }) {
   const toast = useToast()
+  const { t } = useTranslation()
   const [showAdd, setShowAdd] = useState(false)
   const { data: allCards } = useAsync(() => acsAPI.listCards(), [showAdd])
   const { data: controllers } = useAsync(() => acsAPI.listControllers(), [])
@@ -424,21 +446,21 @@ function HolderCards({ holder, onChanged }: { holder: ACSHolder; onChanged: () =
   const assign = async (cardID: string) => {
     try {
       await acsAPI.assignHolderCard(holder.id, cardID)
-      toast.success('Карта привязана')
+      toast.success(t('holderModal.cardBound'))
       setShowAdd(false)
       onChanged()
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось привязать карту')
+      toast.error(e?.response?.data?.error || t('holderModal.bindFailed'))
     }
   }
 
   const unassign = async (cardID: string) => {
     try {
       await acsAPI.unassignHolderCard(cardID)
-      toast.success('Карта отвязана')
+      toast.success(t('holderModal.cardUnbound'))
       onChanged()
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось отвязать карту')
+      toast.error(e?.response?.data?.error || t('holderModal.unbindFailed'))
     }
   }
 
@@ -449,7 +471,7 @@ function HolderCards({ holder, onChanged }: { holder: ACSHolder; onChanged: () =
   const addFromReader = async (facility: number, card: number) => {
     const ctrl = controllers?.[0]
     if (!ctrl?.id) {
-      toast.error('Нет контроллеров для записи карты')
+      toast.error(t('holderModal.noControllers'))
       return
     }
     try {
@@ -462,7 +484,10 @@ function HolderCards({ holder, onChanged }: { holder: ACSHolder; onChanged: () =
       })
       const created = res.data
       if (created?.id) await acsAPI.assignHolderCard(holder.id, created.id)
-      toast.success(`Ключ ${KEY_TYPE_TITLES[keyType]} ${facility}:${card} записан и привязан`)
+      toast.success(t('holderModal.keyWritten', {
+        type: t(KEY_TYPE_TITLE_KEYS[keyType]),
+        card: `${facility}:${card}`,
+      }))
       onChanged()
     } catch (e: any) {
       // Сервер может ответить 202: карта сохранена, но на контроллер не
@@ -473,11 +498,11 @@ function HolderCards({ holder, onChanged }: { holder: ACSHolder; onChanged: () =
         try {
           await acsAPI.assignHolderCard(holder.id, saved.id)
         } catch { /* привязка ниже сообщит об ошибке */ }
-        toast.error(e?.response?.data?.error || 'Карта сохранена, но не выдана на контроллер')
+        toast.error(e?.response?.data?.error || t('holderModal.cardSavedNotPushed'))
         onChanged()
         return
       }
-      toast.error(e?.response?.data?.error || 'Не удалось записать карту')
+      toast.error(e?.response?.data?.error || t('holderModal.cardWriteFailed'))
     }
   }
 
@@ -501,6 +526,7 @@ function CardReaderInput({ onCard, keyType, onKeyTypeChange }: {
   keyType: KeyType
   onKeyTypeChange: (t: KeyType) => void
 }) {
+  const { t } = useTranslation()
   const [value, setValue] = useState('')
   const [listening, setListening] = useState(false)
   const bufRef = useRef('')
@@ -551,7 +577,7 @@ function CardReaderInput({ onCard, keyType, onKeyTypeChange }: {
           и от него зависит, попадёт ли ключ в контроллер как пропуск. */}
       <div style={{ marginBottom: 6 }}>
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-          Тип ключа
+          {t('holderModal.keyTypeLabel')}
         </label>
         <select
           className="input"
@@ -559,12 +585,13 @@ function CardReaderInput({ onCard, keyType, onKeyTypeChange }: {
           value={keyType}
           onChange={(e) => onKeyTypeChange(e.target.value as KeyType)}
         >
-          {(Object.keys(KEY_TYPE_TITLES) as KeyType[]).map((t) => (
-            <option key={t} value={t}>{KEY_TYPE_TITLES[t]}</option>
+          {/* Переменная переименована в kt: имя t занято функцией перевода. */}
+          {(Object.keys(KEY_TYPE_TITLES) as KeyType[]).map((kt) => (
+            <option key={kt} value={kt}>{t(KEY_TYPE_TITLE_KEYS[kt])}</option>
           ))}
         </select>
         <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
-          {KEY_TYPE_HINTS[keyType]}
+          {t(KEY_TYPE_HINT_KEYS[keyType])}
         </div>
       </div>
 
@@ -573,11 +600,11 @@ function CardReaderInput({ onCard, keyType, onKeyTypeChange }: {
         onClick={() => { bufRef.current = ''; setValue(''); setListening((v) => !v) }}
       >
         <CreditCard size={14} />
-        {listening ? 'Жду карту…' : 'Считать карту считывателем'}
+        {listening ? t('holderModal.waitingCard') : t('holderModal.readWithReader')}
       </button>
       {listening && (
         <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-          Приложите карту к считывателю. {value && <>Принято: <code>{value}</code></>}
+          {t('holderModal.readerHint')} {value && <>{t('holderModal.accepted')} <code>{value}</code></>}
         </div>
       )}
     </div>
@@ -589,7 +616,7 @@ function CardReaderInput({ onCard, keyType, onKeyTypeChange }: {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {cards.length === 0 && (
           <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-            Карт нет. Привяжите существующую или запишите новую в режиме «Запись карт».
+            {t('holderModal.noCards')}
           </div>
         )}
         {cards.map((c) => (
@@ -607,19 +634,19 @@ function CardReaderInput({ onCard, keyType, onKeyTypeChange }: {
                 список. */}
             {c.key_type && c.key_type !== 'simple' && (
               <span
-                title={KEY_TYPE_HINTS[c.key_type]}
+                title={t(KEY_TYPE_HINT_KEYS[c.key_type])}
                 style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4,
                   border: '1px solid var(--warning)', color: 'var(--warning)' }}
               >
-                {KEY_TYPE_TITLES[c.key_type]}
+                {t(KEY_TYPE_TITLE_KEYS[c.key_type])}
               </span>
             )}
             {!c.active && (
-              <span style={{ color: 'var(--warning)', fontSize: 11 }}>заблокирована</span>
+              <span style={{ color: 'var(--warning)', fontSize: 11 }}>{t('holderModal.cardBlocked')}</span>
             )}
             <button
               className="btn btn-outline btn-sm"
-              title="Отвязать карту"
+              title={t('holderModal.unbindHint')}
               onClick={() => c.id && unassign(c.id)}
             >
               <Trash2 size={12} />
@@ -635,14 +662,13 @@ function CardReaderInput({ onCard, keyType, onKeyTypeChange }: {
           onClick={() => setShowAdd(true)}
         >
           <Plus size={14} />
-          Привязать карту
+          {t('holderModal.bindCard')}
         </button>
       ) : (
         <div style={{ marginTop: 8 }}>
           {freeCards.length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              Свободных карт нет. Заведите карту в разделе контроллера или
-              запишите её в режиме «Запись карт».
+              {t('holderModal.noFreeCards')}
             </div>
           ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -658,7 +684,7 @@ function CardReaderInput({ onCard, keyType, onKeyTypeChange }: {
             </div>
           )}
           <button className="btn btn-outline btn-sm" style={{ marginTop: 8 }} onClick={() => setShowAdd(false)}>
-            Отмена
+            {t('common.cancel')}
           </button>
         </div>
       )}
@@ -682,9 +708,10 @@ function CardReaderInput({ onCard, keyType, onKeyTypeChange }: {
  * оператора.
  */
 export function BlockedBadge() {
+  const { t } = useTranslation()
   return (
     <span
-      title="Доступ закрыт по всем картам владельца"
+      title={t('holderModal.blockedBadgeHint')}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
         fontSize: 10, padding: '2px 6px', borderRadius: 4,
@@ -692,7 +719,7 @@ export function BlockedBadge() {
       }}
     >
       <AlertTriangle size={10} />
-      доступ закрыт
+      {t('holderModal.blockedBadge')}
     </span>
   )
 }
