@@ -322,6 +322,23 @@ const SHOTS = [
       await page.waitForTimeout(800)
     },
   },
+  {
+    // Отдельный снимок для инструкции «как сменить язык вручную».
+    //
+    // Окно узкое, а страница прокручена к началу: так в кадр попадает
+    // только переключатель. На общем снимке страницы он теряется среди
+    // настроек времени и сети, и по нему не понять, куда нажимать.
+    file: '30-language-switch.png',
+    title: 'Переключатель языка — как сменить вручную',
+    viewport: { width: 1000, height: 340 },
+    prepare: async (page) => {
+      await page.goto(`${BASE}/server`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(3500)
+      await setLanguage(page, 'Русский')
+      await page.evaluate(() => window.scrollTo(0, 0))
+      await page.waitForTimeout(800)
+    },
+  },
 ]
 
 /**
