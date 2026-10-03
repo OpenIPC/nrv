@@ -34,6 +34,10 @@ const VIEWPORT = { width: 1366, height: 900 }
 const DEMO_DEVICE =
   process.env.HA_DEVICE || '1e128648590b9ac98a8c4e946c014277'
 
+// Камера, у которой есть записи по событиям: попадает на снимок архива.
+const DEMO_CAMERA =
+  process.env.HA_CAMERA || 'ae28710d-f54d-48a4-bb62-028f94dc1a34'
+
 async function login(browser) {
   const context = await browser.newContext({
     viewport: VIEWPORT,
@@ -128,12 +132,15 @@ async function main() {
   })
 
   await shoot(page, '25-ha-archive.png', async (p) => {
-    // Просмотр архива. Открывается как самостоятельная страница ассистента;
-    // сам список файлов подгружается внутри компонента, поэтому ждём
-    // подольше и сразу снимаем — без перехода по папкам, который
-    // целиком упирается в теневую разметку.
-    await p.goto(`${BASE}/media-browser/browser`, { waitUntil: 'domcontentloaded' })
-    await p.waitForTimeout(8000)
+    // Архив: открываем сразу камеру, у которой записи точно есть. Путь
+    // строится так же, как его строит сам ассистент при переходе по
+    // разделам, — иначе список записей не подгрузится.
+    const id = encodeURIComponent(`,camera|${DEMO_CAMERA}`)
+    await p.goto(
+      `${BASE}/media-browser/browser/app%2Cmedia-source%3A%2F%2Fopenipc_nvr%2F${id}`,
+      { waitUntil: 'domcontentloaded' },
+    )
+    await p.waitForTimeout(9000)
   })
 
   await context.close()

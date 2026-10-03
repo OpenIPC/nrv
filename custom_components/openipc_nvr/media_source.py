@@ -38,6 +38,15 @@ _LOGGER = logging.getLogger(__name__)
 # выбран символ, которого в них быть не может.
 SEP = "|"
 
+# Разделитель, которым ассистент склеивает путь при переходе внутрь.
+#
+# При открытии вложенного раздела ассистент собирает адрес из пути
+# родителя и идентификатора потомка через запятую. У корня путь пуст,
+# поэтому к нашему идентификатору спереди добавляется запятая, и разбор
+# «от начала строки» перестаёт совпадать. Ассистент отдавал бы отказ на
+# любом переходе внутрь, хотя список разделов при этом показывается.
+NESTING_SEP = ","
+
 # Сколько записей показывать в камере. Просмотр медиа — не поиск по архиву,
 # а быстрый доступ к последнему: длинный список пришлось бы листать, а
 # глубокий поиск делается в нашем веб-интерфейсе.
@@ -84,7 +93,7 @@ class NvrMediaSource(MediaSource):
                 "Сервер видеонаблюдения недоступен: интеграция не загружена"
             )
 
-        identifier = item.identifier or ""
+        identifier = _own_identifier(item.identifier)
 
         if not identifier:
             return await self._browse_cameras(client)
@@ -98,6 +107,12 @@ class NvrMediaSource(MediaSource):
             recording = await self._find_recording(client, value)
             return _recording_node(recording, value.partition(SEP)[0])
 
+        # Разбор не совпал — это ошибка в нашей же разметке, а не в данных.
+        # Пишем полученное значение в журнал: иначе неисправность выглядит
+        # как пустое окно без единой зацепки.
+        _LOGGER.warning(
+            "Неизвестный раздел архива %r (получено %r)", kind, item.identifier
+        )
         raise MediaSourceError(f"Неизвестный раздел архива: {kind}")
 
     async def _browse_cameras(self, client: NvrApiClient) -> BrowseMedia:
@@ -169,7 +184,7 @@ class NvrMediaSource(MediaSource):
         if client is None:
             raise MediaSourceError("Сервер видеонаблюдения недоступен")
 
-        kind, _, value = (item.identifier or "").partition(SEP)
+        kind, _, value = _own_identifier(item.identifier).partition(SEP)
         if kind != "recording":
             raise Unresolvable("Этот элемент нельзя воспроизвести")
 
@@ -183,6 +198,21 @@ class NvrMediaSource(MediaSource):
         # Обработка адреса средствами ассистента здесь не нужна — она
         # предназначена для файлов, которые раздаёт сам ассистент.
         return PlayMedia(url, _mime_for(recording))
+
+
+def _own_identifier(identifier: str | None) -> str:
+    """Выделяет из пути ассистента наш собственный идентификатор.
+
+    Ассистент передаёт путь накопленным: при каждом переходе внутрь к нему
+    спереди добавляется ещё один раздел. Нам нужен только последний —
+    остальное относится к родительским уровням и разобрано раньше.
+
+    Разбор идёт от конца строки, а не от начала: так он не зависит
+    от числа уровней и от того, добавляет ли ассистент что-то впереди.
+    """
+    if not identifier:
+        return ""
+    return identifier.split(NESTING_SEP)[-1].strip()
 
 
 def _recording_node(rec: dict[str, Any], camera_id: str) -> BrowseMedia:
@@ -202,24 +232,45 @@ def _recording_node(rec: dict[str, Any], camera_id: str) -> BrowseMedia:
 
 
 def _recording_title(rec: dict[str, Any]) -> str:
-    """Читаемое название записи."""
-    start = rec.get("start_time") or ""
-    when = str(start)
-    if start:
-        try:
-            parsed = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
-            # Время показывается в поясе ассистента: оператор сопоставляет
-            # запись с тем, что видел сам, а не с поясом сервера.
-            when = parsed.astimezone().strftime("%d.%m %H:%M:%S")
-        except ValueError:
-            when = str(start)[:19]
+    """Читаемое название записи.
 
+    Сначала идёт то, что вызвало запись, и только потом время. Плитки
+    в просмотре медиа узкие, и подпись обрезается: если начать со времени,
+    у всех записей будет видно только его, а ради чего запись сделана —
+    как раз самое важное — окажется за многоточием.
+    """
+    when = _recording_time(rec)
     detail = str(rec.get("trigger_detail") or "")
+
     if detail:
-        return f"{when} — {_detail_label(detail)}"
+        return f"{_detail_label(detail)} — {when}" if when else _detail_label(detail)
     if rec.get("event_triggered"):
-        return f"{when} — по событию"
+        return f"по событию — {when}" if when else "по событию"
     return when
+
+
+def _recording_time(rec: dict[str, Any]) -> str:
+    """Время записи в компактном виде.
+
+    У записей сегодняшнего дня дату не показываем: она занимает половину
+    подписи и ничего не добавляет — в просмотр попадают свежие записи.
+    """
+    start = rec.get("start_time") or ""
+    if not start:
+        return ""
+
+    try:
+        parsed = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
+    except ValueError:
+        return str(start)[:19]
+
+    # Время показывается в поясе ассистента: оператор сопоставляет запись
+    # с тем, что видел сам, а не с поясом сервера.
+    local = parsed.astimezone()
+    today = datetime.now().astimezone().date()
+    if local.date() == today:
+        return local.strftime("%H:%M:%S")
+    return local.strftime("%d.%m %H:%M")
 
 
 # Понятные названия того, что вызвало запись. Служебные значения детектора
