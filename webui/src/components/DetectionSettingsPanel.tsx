@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Save, Loader2, Video, Camera as CameraIcon, AlertCircle, Crosshair,
   CheckCircle2, Minus, Trash2, SlidersHorizontal, ScanFace,
@@ -8,6 +9,41 @@ import {
   type DetectionSettings, type DetectType, type Point, type RecordMode,
 } from '../api/client'
 import { useToast } from '../context/ToastContext'
+
+/**
+ * Ключи переводов для списков из api/client.ts.
+ *
+ * Подписи типов детекции, классов объектов и шаблонов номеров лежат рядом
+ * с кодами запросов — там, где о языке интерфейса ничего не знают. Значения
+ * (object, person, ru) — часть протокола и не переводятся, поэтому переводим
+ * по ним, а не по тексту подписи.
+ */
+const DETECT_TYPE_KEYS: Record<string, { label: string; hint: string }> = {
+  object: { label: 'detectionPanel.detectObject', hint: 'detectionPanel.detectObjectHint' },
+  line: { label: 'detectionPanel.detectLine', hint: 'detectionPanel.detectLineHint' },
+  face: { label: 'detectionPanel.detectFace', hint: 'detectionPanel.detectFaceHint' },
+  plate: { label: 'detectionPanel.detectPlate', hint: 'detectionPanel.detectPlateHint' },
+}
+
+const CLASS_KEYS: Record<string, string> = {
+  person: 'detectionPanel.classPerson',
+  bicycle: 'detectionPanel.classBicycle',
+  car: 'detectionPanel.classCar',
+  motorcycle: 'detectionPanel.classMotorcycle',
+  bus: 'detectionPanel.classBus',
+  truck: 'detectionPanel.classTruck',
+  dog: 'detectionPanel.classDog',
+  cat: 'detectionPanel.classCat',
+  backpack: 'detectionPanel.classBackpack',
+  suitcase: 'detectionPanel.classSuitcase',
+}
+
+const PATTERN_KEYS: Record<string, string> = {
+  ru: 'detectionPanel.patternRu',
+  by: 'detectionPanel.patternBy',
+  kz: 'detectionPanel.patternKz',
+  any: 'detectionPanel.patternAny',
+}
 
 interface Props {
   cameraId: string
@@ -48,6 +84,7 @@ function toForm(s: DetectionSettings) {
 
 export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props) {
   const { success, error } = useToast()
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState<ReturnType<typeof toForm> | null>(null)
@@ -80,7 +117,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       })
       .catch((e) => {
         if (!cancelled) {
-          const msg = e.response?.data?.error || 'Не удалось загрузить настройки детекции'
+          const msg = e.response?.data?.error || t('detectionPanel.loadFailed')
           setLoadError(msg)
           error(msg)
         }
@@ -99,7 +136,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 20, color: 'var(--text-secondary)' }}>
         <Loader2 size={16} className="spin" />
-        Загрузка настроек детекции...
+        {t('detectionPanel.loading')}
       </div>
     )
   }
@@ -112,14 +149,14 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)' }}>
           <AlertCircle size={16} />
-          {loadError || 'Настройки детекции недоступны'}
+          {loadError || t('detectionPanel.unavailable')}
         </div>
         <button
           className="btn btn-outline btn-sm"
           style={{ alignSelf: 'flex-start' }}
           onClick={() => setRetryToken((n) => n + 1)}
         >
-          Повторить
+          {t('detectionPanel.retry')}
         </button>
       </div>
     )
@@ -196,9 +233,9 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       const res = await detectionAPI.update(cameraId, form)
       setForm(toForm(res.data))
       setDirty(false)
-      success('Настройки детекции сохранены')
+      success(t('detectionPanel.detectionSaved'))
     } catch (e: any) {
-      error(e.response?.data?.error || 'Не удалось сохранить настройки')
+      error(e.response?.data?.error || t('detectionPanel.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -214,11 +251,11 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <h3 style={{ fontSize: 15, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <Crosshair size={18} style={{ color: 'var(--accent)' }} />
-          Настройки детекции
+          {t('detectionPanel.title')}
         </h3>
         <button className="btn btn-primary btn-sm" onClick={save} disabled={saving || !dirty}>
           {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-          {dirty ? 'Сохранить' : 'Сохранено'}
+          {dirty ? t('common.save') : t('detectionPanel.saved')}
         </button>
       </div>
 
@@ -231,29 +268,28 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
             onChange={(e) => patch('enabled', e.target.checked)}
             style={{ width: 18, height: 18, accentColor: 'var(--accent)' }}
           />
-          <span style={{ fontWeight: 500 }}>Детекция включена</span>
+          <span style={{ fontWeight: 500 }}>{t('detectionPanel.enabled')}</span>
         </label>
         <p style={{ margin: '6px 0 0 28px', fontSize: 12, color: 'var(--text-secondary)' }}>
-          {form.enabled
-            ? 'Кадры этой камеры обрабатываются нейросетью'
-            : 'Камера игнорируется детектором — события не создаются'}
+          {form.enabled ? t('detectionPanel.enabledHint') : t('detectionPanel.disabledHint')}
         </p>
       </div>
 
       {/* Типы детекции */}
-      <h4 style={{ fontSize: 14, margin: '0 0 8px' }}>Что искать</h4>
+      <h4 style={{ fontSize: 14, margin: '0 0 8px' }}>{t('detectionPanel.whatToFind')}</h4>
       <div style={{ display: 'grid', gap: 6, marginBottom: 18 }}>
-        {DETECT_TYPES.map((t) => (
-          <label key={t.value} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', padding: '6px 8px', borderRadius: 6, background: form.detect_types.includes(t.value) ? 'rgba(120,140,255,0.08)' : 'transparent' }}>
+        {/* Переменная цикла переименована в dt: имя t занято функцией перевода */}
+        {DETECT_TYPES.map((dt) => (
+          <label key={dt.value} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', padding: '6px 8px', borderRadius: 6, background: form.detect_types.includes(dt.value) ? 'rgba(120,140,255,0.08)' : 'transparent' }}>
             <input
               type="checkbox"
-              checked={form.detect_types.includes(t.value)}
-              onChange={() => patch('detect_types', toggleArrayItem(form.detect_types, t.value))}
+              checked={form.detect_types.includes(dt.value)}
+              onChange={() => patch('detect_types', toggleArrayItem(form.detect_types, dt.value))}
               style={{ marginTop: 3, accentColor: 'var(--accent)' }}
             />
             <span>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>{t.label}</span>
-              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)' }}>{t.hint}</span>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>{t(DETECT_TYPE_KEYS[dt.value]?.label ?? dt.label)}</span>
+              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)' }}>{t(DETECT_TYPE_KEYS[dt.value]?.hint ?? dt.hint)}</span>
             </span>
           </label>
         ))}
@@ -262,7 +298,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       {/* Классы объектов — показываем только если выбран тип "объекты" */}
       {form.detect_types.includes('object') && (
         <>
-          <h4 style={{ fontSize: 14, margin: '0 0 8px' }}>Классы объектов</h4>
+          <h4 style={{ fontSize: 14, margin: '0 0 8px' }}>{t('detectionPanel.objectClasses')}</h4>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
             {OBJECT_CLASSES.map((c) => {
               const active = form.object_classes.includes(c.value)
@@ -274,7 +310,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
                   style={{ fontSize: 12, padding: '4px 10px' }}
                 >
                   {active && <CheckCircle2 size={12} />}
-                  {c.label}
+                  {t(CLASS_KEYS[c.value] ?? c.label)}
                 </button>
               )
             })}
@@ -282,7 +318,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
           {form.object_classes.length === 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--warning)', marginTop: -12, marginBottom: 16 }}>
               <AlertCircle size={13} />
-              Не выбран ни один класс — события создаваться не будут
+              {t('detectionPanel.noClasses')}
             </div>
           )}
         </>
@@ -291,11 +327,11 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       {/* Пересечение линии */}
       {form.detect_types.includes('line') && (
         <>
-          <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>Линия пересечения</h4>
+          <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>{t('detectionPanel.lineTitle')}</h4>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
-            {form.line.length === 0 && 'Кликните по кадру, чтобы поставить первую точку'}
-            {form.line.length === 1 && 'Поставьте вторую точку — линия замкнётся'}
-            {form.line.length === 2 && 'Линия задана. Кликните ещё раз, чтобы начать заново'}
+            {form.line.length === 0 && t('detectionPanel.lineHintEmpty')}
+            {form.line.length === 1 && t('detectionPanel.lineHintOne')}
+            {form.line.length === 2 && t('detectionPanel.lineHintDone')}
           </p>
 
           {hasImage && (
@@ -303,7 +339,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
               onClick={handleImageClick}
               style={{ position: 'relative', marginBottom: 10, borderRadius: 8, overflow: 'hidden', cursor: 'crosshair', border: '1px solid var(--border)', lineHeight: 0 }}
             >
-              <img ref={imgRef} src={snapshotUrl} alt="кадр камеры" style={{ width: '100%', display: 'block', userSelect: 'none' }} draggable={false} />
+              <img ref={imgRef} src={snapshotUrl} alt={t('detectionPanel.frameAlt')} style={{ width: '100%', display: 'block', userSelect: 'none' }} draggable={false} />
               <svg
                 viewBox="0 0 100 100"
                 preserveAspectRatio="none"
@@ -331,26 +367,26 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
           {!hasImage && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
               <AlertCircle size={13} />
-              Кадр недоступен — линию можно будет нарисовать, когда камера отдаёт видео
+              {t('detectionPanel.frameUnavailable')}
             </div>
           )}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Направление учёта:</span>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('detectionPanel.directionLabel')}</span>
             <select
               className="input"
               value={form.line_direction}
               onChange={(e) => patch('line_direction', e.target.value as any)}
               style={{ fontSize: 12, padding: '3px 8px', width: 'auto' }}
             >
-              <option value="both">В обе стороны</option>
-              <option value="forward">Только прямое</option>
-              <option value="backward">Только обратное</option>
+              <option value="both">{t('detectionPanel.dirBoth')}</option>
+              <option value="forward">{t('detectionPanel.dirForward')}</option>
+              <option value="backward">{t('detectionPanel.dirBackward')}</option>
             </select>
             {form.line.length > 0 && (
               <button className="btn btn-outline btn-sm" onClick={clearLine} style={{ fontSize: 12, padding: '3px 8px' }}>
                 <Trash2 size={12} />
-                Убрать линию
+                {t('detectionPanel.removeLine')}
               </button>
             )}
           </div>
@@ -360,11 +396,11 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       {/* Распознавание номеров: зона и правила формата */}
       {form.detect_types.includes('plate') && (
         <>
-          <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>Распознавание номеров</h4>
+          <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>{t('detectionPanel.plateTitle')}</h4>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
-            {form.plate_zone.length === 0 && 'Зона не задана — поиск идёт по всему кадру. Два клика по кадру задают прямоугольник.'}
-            {form.plate_zone.length === 1 && 'Поставьте второй угол прямоугольника'}
-            {form.plate_zone.length >= 3 && 'Зона задана. Кликните ещё раз, чтобы нарисовать заново.'}
+            {form.plate_zone.length === 0 && t('detectionPanel.plateHintEmpty')}
+            {form.plate_zone.length === 1 && t('detectionPanel.plateHintOne')}
+            {form.plate_zone.length >= 3 && t('detectionPanel.plateHintDone')}
           </p>
 
           {hasImage && (
@@ -372,7 +408,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
               onClick={handleZoneClick}
               style={{ position: 'relative', marginBottom: 10, borderRadius: 8, overflow: 'hidden', cursor: 'crosshair', border: '1px solid var(--border)', lineHeight: 0 }}
             >
-              <img ref={imgRef} src={snapshotUrl} alt="кадр камеры" style={{ width: '100%', display: 'block', userSelect: 'none' }} draggable={false} />
+              <img ref={imgRef} src={snapshotUrl} alt={t('detectionPanel.frameAlt')} style={{ width: '100%', display: 'block', userSelect: 'none' }} draggable={false} />
               <svg
                 viewBox="0 0 100 100"
                 preserveAspectRatio="none"
@@ -407,19 +443,18 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
                 style={{ fontSize: 12, padding: '3px 8px' }}
               >
                 <Trash2 size={12} />
-                Убрать зону
+                {t('detectionPanel.removeZone')}
               </button>
             )}
           </div>
 
-          <h5 style={{ fontSize: 13, margin: '0 0 6px' }}>Формат номера</h5>
+          <h5 style={{ fontSize: 13, margin: '0 0 6px' }}>{t('detectionPanel.plateFormat')}</h5>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
-            Без проверки формата OCR принимает за номер надписи из кадра —
-            например логотип камеры в углу.
+            {t('detectionPanel.plateFormatHint')}
           </p>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Шаблон:</span>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('detectionPanel.patternLabel')}</span>
             <select
               className="input"
               value={detectPatternKey(form.plate_pattern)}
@@ -435,15 +470,15 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
               style={{ fontSize: 12, padding: '3px 8px', width: 'auto' }}
             >
               {Object.entries(PLATE_PATTERNS).map(([key, v]) => (
-                <option key={key} value={key}>{v.label}</option>
+                <option key={key} value={key}>{t(PATTERN_KEYS[key] ?? v.label)}</option>
               ))}
-              <option value="custom">Свой шаблон (регулярное выражение)</option>
+              <option value="custom">{t('detectionPanel.patternCustom')}</option>
             </select>
           </div>
 
           <div style={{ display: 'flex', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              Длина от
+              {t('detectionPanel.lengthFrom')}
               <input
                 type="number" min={1} max={20}
                 className="input"
@@ -453,7 +488,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
               />
             </label>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              до
+              {t('detectionPanel.lengthTo')}
               <input
                 type="number" min={1} max={20}
                 className="input"
@@ -476,10 +511,10 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
           )}
 
           <h5 style={{ fontSize: 13, margin: '12px 0 6px' }}>
-            Минимальная уверенность OCR: {(form.plate_min_confidence * 100).toFixed(0)}%
+            {t('detectionPanel.ocrThreshold', { value: (form.plate_min_confidence * 100).toFixed(0) })}
           </h5>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 6px' }}>
-            Номера с уверенностью ниже порога не сохраняются. Поднимите, если в событиях много мусора.
+            {t('detectionPanel.ocrHint')}
           </p>
           <input
             type="range" min="0" max="0.9" step="0.05"
@@ -491,10 +526,9 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       )}
 
       {/* Порог уверенности */}
-      <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>Порог уверенности: {(form.min_confidence * 100).toFixed(0)}%</h4>
+      <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>{t('detectionPanel.confidence', { value: (form.min_confidence * 100).toFixed(0) })}</h4>
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 6px' }}>
-        Объекты с уверенностью ниже порога игнорируются. Меньше — больше находок, но и больше ложных.
-        На реальных камерах большинство объектов имеет уверенность 40–60%: при пороге выше 60% находок почти не будет.
+        {t('detectionPanel.confidenceHint')}
       </p>
       <input
         type="range" min="0.1" max="0.9" step="0.05"
@@ -506,20 +540,17 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       {/* Фильтры точности: отсекают ложные срабатывания по форме объекта */}
       <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>
         <SlidersHorizontal size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
-        Фильтры точности
+        {t('detectionPanel.filters')}
       </h4>
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px' }}>
-        Отсекают ложные рамки: мелкий шум, блики, тени и предметы обстановки.
-        Помогают уменьшить число срабатываний, не поднимая порог уверенности.
+        {t('detectionPanel.filtersHint')}
       </p>
 
       <h4 style={{ fontSize: 13, margin: '0 0 4px', fontWeight: 500 }}>
-        Минимальный размер объекта: {(form.min_object_area * 100).toFixed(2)}% кадра
+        {t('detectionPanel.minArea', { value: (form.min_object_area * 100).toFixed(2) })}
       </h4>
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 6px' }}>
-        Рамки меньше этого размера игнорируются. Подбирайте по самой дальней точке,
-        где нужно замечать человека: замер на камерах показал, что человек вдали
-        занимает около 1,7% кадра, а шум — меньше 0,3%.
+        {t('detectionPanel.minAreaHint')}
       </p>
       <input
         type="range" min="0" max="0.05" step="0.001"
@@ -529,11 +560,12 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       />
 
       <h4 style={{ fontSize: 13, margin: '0 0 4px', fontWeight: 500 }}>
-        Максимальное отношение сторон: {form.max_aspect_ratio === 0 ? 'выключено' : `${form.max_aspect_ratio.toFixed(1)}:1`}
+        {t('detectionPanel.aspect', {
+          value: form.max_aspect_ratio === 0 ? t('detectionPanel.aspectOff') : `${form.max_aspect_ratio.toFixed(1)}:1`,
+        })}
       </h4>
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 6px' }}>
-        Вытянутые рамки — обычно тени, столбы и отражения. Человек и машина
-        укладываются в 5:1. Значение 0 выключает проверку.
+        {t('detectionPanel.aspectHint')}
       </p>
       <input
         type="range" min="0" max="15" step="0.5"
@@ -543,12 +575,12 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       />
 
       <h4 style={{ fontSize: 13, margin: '0 0 4px', fontWeight: 500 }}>
-        Неподвижные объекты: {form.static_seconds === 0 ? 'не отсекать' : `через ${form.static_seconds} с`}
+        {t('detectionPanel.staticObjects', {
+          value: form.static_seconds === 0 ? t('detectionPanel.staticOff') : t('detectionPanel.staticAfter', { sec: form.static_seconds }),
+        })}
       </h4>
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 6px' }}>
-        Объект, который стоит на месте дольше указанного времени, перестаёт
-        считаться целью. Убирает повторные события по стулу, тени или коробке.
-        0 — не отсекать.
+        {t('detectionPanel.staticHint')}
       </p>
       <input
         type="range" min="0" max="300" step="10"
@@ -562,7 +594,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
         <>
           <h4 style={{ fontSize: 14, margin: '0 0 8px' }}>
             <ScanFace size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
-            Распознавание лиц
+            {t('detectionPanel.facesTitle')}
           </h4>
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 10 }}>
@@ -572,18 +604,16 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
               onChange={(e) => patch('face_requires_person', e.target.checked)}
               style={{ accentColor: 'var(--accent)' }}
             />
-            <span style={{ fontSize: 13 }}>Искать лица только при человеке в кадре</span>
+            <span style={{ fontSize: 13 }}>{t('detectionPanel.faceRequiresPerson')}</span>
           </label>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
-            Без этой проверки лицо ищется на каждом кадре, и модель находит его
-            в текстурах и отражениях. На реальной системе это давало в пять раз
-            больше событий по лицам, чем по людям.
+            {t('detectionPanel.faceRequiresPersonHint')}
           </p>
 
           {form.face_requires_person && (
             <>
               <h4 style={{ fontSize: 13, margin: '0 0 4px', fontWeight: 500 }}>
-                Уверенность человека для поиска лиц: {(form.face_min_confidence * 100).toFixed(0)}%
+                {t('detectionPanel.faceConfidence', { value: (form.face_min_confidence * 100).toFixed(0) })}
               </h4>
               <input
                 type="range" min="0.1" max="0.9" step="0.05"
@@ -599,7 +629,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       {/* Что делать с детекцией */}
       <h4 style={{ fontSize: 14, margin: '0 0 8px' }}>
         <CameraIcon size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
-        Что делать при детекции
+        {t('detectionPanel.whatToDo')}
       </h4>
 
       <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 14 }}>
@@ -609,15 +639,15 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
           onChange={(e) => patch('save_snapshots', e.target.checked)}
           style={{ accentColor: 'var(--accent)' }}
         />
-        <span style={{ fontSize: 13 }}>Сохранять снимок кадра</span>
+        <span style={{ fontSize: 13 }}>{t('detectionPanel.saveSnapshot')}</span>
       </label>
 
-      <h4 style={{ fontSize: 13, margin: '0 0 6px' }}>Режим записи видео</h4>
+      <h4 style={{ fontSize: 13, margin: '0 0 6px' }}>{t('detectionPanel.recordMode')}</h4>
       <div style={{ display: 'grid', gap: 6, marginBottom: 14 }}>
         {([
-          { v: 'off', label: 'Не записывать', hint: 'Только события и снимки' },
-          { v: 'event', label: 'По детекции', hint: 'Запись начинается при обнаружении объекта' },
-          { v: 'always', label: 'Постоянно', hint: 'Непрерывная запись в архив' },
+          { v: 'off', label: t('detectionPanel.recOff'), hint: t('detectionPanel.recOffHint') },
+          { v: 'event', label: t('detectionPanel.recEvent'), hint: t('detectionPanel.recEventHint') },
+          { v: 'always', label: t('detectionPanel.recAlways'), hint: t('detectionPanel.recAlwaysHint') },
         ] as { v: RecordMode; label: string; hint: string }[]).map((r) => (
           <label key={r.v} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
             <input
@@ -639,7 +669,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       {form.record_mode === 'event' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14, padding: 10, background: 'rgba(120,140,255,0.06)', borderRadius: 6 }}>
           <label style={{ fontSize: 12 }}>
-            Секунд до события
+            {t('detectionPanel.prebuffer')}
             <input
               type="number" min={0} max={300}
               className="input"
@@ -649,7 +679,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
             />
           </label>
           <label style={{ fontSize: 12 }}>
-            Секунд после события
+            {t('detectionPanel.postbuffer')}
             <input
               type="number" min={1} max={3600}
               className="input"
@@ -665,7 +695,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       <label style={{ fontSize: 12, display: 'block' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <Minus size={12} />
-          Пауза между событиями, сек
+          {t('detectionPanel.cooldown')}
         </span>
         <input
           type="number" min={0} max={3600}
@@ -675,7 +705,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
           style={{ width: 120, marginTop: 4 }}
         />
         <span style={{ display: 'block', color: 'var(--text-secondary)', marginTop: 4 }}>
-          Защита от потока одинаковых событий с одной камеры
+          {t('detectionPanel.cooldownHint')}
         </span>
       </label>
 
@@ -684,8 +714,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14, padding: 10, borderRadius: 6, background: 'rgba(255,180,80,0.08)', fontSize: 12 }}>
           <Video size={14} style={{ marginTop: 2, flexShrink: 0, color: 'var(--warning)' }} />
           <span>
-            Настройка сохранена. Воркер записи подключается на следующем этапе —
-            сейчас видео в архив не пишется, события и снимки работают.
+            {t('detectionPanel.recordPlanned')}
           </span>
         </div>
       )}
