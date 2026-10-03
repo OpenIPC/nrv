@@ -14,6 +14,7 @@
 import { useTranslation } from 'react-i18next'
 import { Check, Languages } from 'lucide-react'
 import { LANGUAGES, setLanguage, type LanguageCode } from '../i18n'
+import { Flag } from './Flags'
 
 const cardStyle: React.CSSProperties = {
   background: 'var(--card-bg, #1a1d23)',
@@ -49,7 +50,7 @@ export default function LanguageCard() {
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 6,
+                gap: 8,
                 padding: '8px 14px',
                 borderRadius: 8,
                 cursor: 'pointer',
@@ -65,6 +66,7 @@ export default function LanguageCard() {
               }}
             >
               {active && <Check size={14} />}
+              <Flag code={lang.code} />
               {lang.label}
             </button>
           )

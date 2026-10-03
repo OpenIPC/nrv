@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { hostAPI, type HostStatus, type NetworkInterface, type TimeState } from '../api/host'
 import { useToast } from '../context/ToastContext'
 import LanguageCard from '../components/LanguageCard'
@@ -57,10 +58,11 @@ const warningStyle: React.CSSProperties = {
 
 /** Показывает, синхронизировано ли время и какой службой. */
 function SyncBadge({ time }: { time: TimeState }) {
+  const { t } = useTranslation()
   const synced = time.synchronized
   const color = synced ? '#22c55e' : '#f5b545'
   const Icon = synced ? CheckCircle2 : AlertTriangle
-  const text = synced ? 'Время синхронизировано' : 'Синхронизация не подтверждена'
+  const text = synced ? t('serverPage.timeSynced') : t('serverPage.timeNotSynced')
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -69,13 +71,15 @@ function SyncBadge({ time }: { time: TimeState }) {
         {text}
       </span>
       <span style={{ fontSize: 12, color: 'var(--text-secondary, #9aa0aa)' }}>
-        служба: {time.service || '—'} · сервер: {time.local_time || '—'}
+        {t('serverPage.timeService')}: {time.service || '—'} · {t('serverPage.timeServer')}:{' '}
+        {time.local_time || '—'}
       </span>
     </div>
   )
 }
 
 export default function ServerSettingsPage() {
+  const { t } = useTranslation()
   const { success, error: toastError, info } = useToast()
 
   const [status, setStatus] = useState<HostStatus | null>(null)
@@ -131,11 +135,11 @@ export default function ServerSettingsPage() {
       const res = await hostAPI.status()
       applyStatus(res.data)
     } catch {
-      toastError('Не удалось получить состояние сервера')
+      toastError(t('serverPage.statusLoadFailed'))
     } finally {
       setLoading(false)
     }
-  }, [toastError, applyStatus])
+  }, [toastError, applyStatus, t])
 
   useEffect(() => {
     void load()
@@ -174,13 +178,13 @@ export default function ServerSettingsPage() {
       if (res.data.warning) {
         info(res.data.warning)
       } else {
-        success('Настройки времени сохранены')
+        success(t('serverPage.timeSaved'))
       }
       await load()
     } catch (e) {
       const msg =
         (e as { response?: { data?: { error?: string } } })?.response?.data?.error ??
-        'Не удалось сохранить настройки времени'
+        t('serverPage.timeSaveFailed')
       toastError(msg)
       await load()
     } finally {
@@ -191,11 +195,7 @@ export default function ServerSettingsPage() {
   const saveNetwork = async () => {
     // Смена адреса сервера — самая рискованная операция в системе: если
     // ошибиться, сервер потеряет связь с сетью. Поэтому подтверждаем явно.
-    const confirmed = window.confirm(
-      'Изменение сетевых настроек на короткое время прервёт связь с сервером.\n\n' +
-        'Если новый адрес окажется недоступен, настройки откатятся автоматически ' +
-        'в течение минуты. Продолжить?',
-    )
+    const confirmed = window.confirm(t('serverPage.netConfirm'))
     if (!confirmed) return
 
     setSavingNet(true)
@@ -214,12 +214,12 @@ export default function ServerSettingsPage() {
       } else if (res.data.error) {
         toastError(res.data.error)
       } else {
-        success('Сетевые настройки применены')
+        success(t('serverPage.netApplied'))
       }
       await load()
     } catch (e) {
       const resp = (e as { response?: { data?: { error?: string; network?: unknown } } })?.response
-      toastError(resp?.data?.error ?? 'Не удалось применить сетевые настройки')
+      toastError(resp?.data?.error ?? t('serverPage.netFailed'))
       await load()
     } finally {
       setSavingNet(false)
@@ -232,13 +232,13 @@ export default function ServerSettingsPage() {
       const res = await hostAPI.status()
       const ok = res.data.available
       if (ok) {
-        success('Служба на сервере отвечает')
+        success(t('serverPage.agentOk'))
       } else {
-        toastError(res.data.error ?? 'Служба на сервере не отвечает')
+        toastError(res.data.error ?? t('serverPage.agentFail'))
       }
       applyStatus(res.data)
     } catch {
-      toastError('Служба на сервере не отвечает')
+      toastError(t('serverPage.agentFail'))
     } finally {
       setTesting(false)
     }
@@ -248,7 +248,7 @@ export default function ServerSettingsPage() {
     return (
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: 40 }}>
         <Loader2 size={20} className="spin" />
-        Загрузка настроек сервера…
+        {t('serverPage.loading')}
       </div>
     )
   }
@@ -257,12 +257,9 @@ export default function ServerSettingsPage() {
     <div style={{ maxWidth: 900 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
         <Server size={24} />
-        <h1 style={{ margin: 0, fontSize: 22 }}>Сервер</h1>
+        <h1 style={{ margin: 0, fontSize: 22 }}>{t('serverPage.title')}</h1>
       </div>
-      <p style={{ ...hintStyle, marginBottom: 20 }}>
-        Время и сеть этого сервера. Изменения вносит отдельная служба на хосте —
-        сам видеосервер системных прав не имеет.
-      </p>
+      <p style={{ ...hintStyle, marginBottom: 20 }}>{t('serverPage.intro')}</p>
 
       {/* Переключатель языка стоит первым на странице намеренно:
           человек, который не читает по-русски, до остальных настроек
@@ -273,12 +270,12 @@ export default function ServerSettingsPage() {
         <div style={warningStyle}>
           <ShieldAlert size={20} style={{ flexShrink: 0, marginTop: 1 }} />
           <div>
-            <strong>Служба управления сервером не отвечает.</strong>
+            <strong>{t('serverPage.agentDownTitle')}</strong>
             <div style={{ marginTop: 6 }}>
-              {status?.error ?? 'Проверьте, установлена и запущена ли служба nvr-agent на сервере.'}
+              {status?.error ?? t('serverPage.agentDownHint')}
             </div>
             <div style={{ marginTop: 6, opacity: 0.85 }}>
-              Установка выполняется на самом сервере командой{' '}
+              {t('serverPage.agentInstall')}{' '}
               <code>sudo bash host-agent/install.sh</code>.
             </div>
           </div>
@@ -289,16 +286,16 @@ export default function ServerSettingsPage() {
       <div style={cardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
           <Clock size={20} />
-          <h2 style={{ margin: 0, fontSize: 17 }}>Время</h2>
+          <h2 style={{ margin: 0, fontSize: 17 }}>{t('serverPage.timeTitle')}</h2>
           <button
             onClick={ping}
             disabled={testing}
             className="btn"
             style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}
-            title="Проверить связь со службой"
+            title={t('serverPage.timeCheckHint')}
           >
             {testing ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
-            Проверить
+            {t('serverPage.timeCheck')}
           </button>
         </div>
 
@@ -309,7 +306,7 @@ export default function ServerSettingsPage() {
         )}
 
         <div style={{ marginBottom: 16 }}>
-          <label style={labelStyle}>Часовой пояс</label>
+          <label style={labelStyle}>{t('serverPage.timezone')}</label>
           <input
             list="tz-list"
             value={timezone}
@@ -323,14 +320,11 @@ export default function ServerSettingsPage() {
               <option key={z} value={z} />
             ))}
           </datalist>
-          <div style={hintStyle}>
-            По этому поясу сервер группирует дни в архиве и показывает время событий.
-            Смена пояса перезапускает службу времени.
-          </div>
+          <div style={hintStyle}>{t('serverPage.timezoneHint')}</div>
         </div>
 
         <div style={{ marginBottom: 16 }}>
-          <label style={labelStyle}>Серверы времени (NTP)</label>
+          <label style={labelStyle}>{t('serverPage.ntpServers')}</label>
           <input
             value={serversText}
             onChange={(e) => setServersText(e.target.value)}
@@ -338,10 +332,7 @@ export default function ServerSettingsPage() {
             style={inputStyle}
             disabled={!available}
           />
-          <div style={hintStyle}>
-            Через запятую. По этим адресам сервер сверяет свои часы. Пусто — используются
-            серверы по умолчанию.
-          </div>
+          <div style={hintStyle}>{t('serverPage.ntpHint')}</div>
         </div>
 
         <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: available ? 'pointer' : 'default' }}>
@@ -353,18 +344,15 @@ export default function ServerSettingsPage() {
             style={{ marginTop: 3 }}
           />
           <span>
-            <span style={{ fontWeight: 500 }}>Отдавать время камерам</span>
-            <div style={hintStyle}>
-              Сервер будет отвечать на запросы точного времени по сети. Нужно, если камеры
-              берут время отсюда, а не из интернета — например, когда им закрыт выход наружу.
-            </div>
+            <span style={{ fontWeight: 500 }}>{t('serverPage.serveTime')}</span>
+            <div style={hintStyle}>{t('serverPage.serveTimeHint')}</div>
           </span>
         </label>
 
         {time?.tracking && (
           <details style={{ marginTop: 16 }}>
             <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary, #9aa0aa)' }}>
-              Подробности синхронизации
+              {t('serverPage.syncDetails')}
             </summary>
             <pre
               style={{
@@ -389,7 +377,7 @@ export default function ServerSettingsPage() {
           style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 8 }}
         >
           {savingTime ? <Loader2 size={16} className="spin" /> : <Save size={16} />}
-          Сохранить время
+          {t('serverPage.saveTime')}
         </button>
       </div>
 
@@ -397,23 +385,19 @@ export default function ServerSettingsPage() {
       <div style={cardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
           <Network size={20} />
-          <h2 style={{ margin: 0, fontSize: 17 }}>Сеть</h2>
+          <h2 style={{ margin: 0, fontSize: 17 }}>{t('serverPage.netTitle')}</h2>
         </div>
 
         <div style={warningStyle}>
           <AlertTriangle size={20} style={{ flexShrink: 0, marginTop: 1 }} />
           <div>
-            <strong>Смена адреса прерывает связь с сервером.</strong>
-            <div style={{ marginTop: 6 }}>
-              После применения браузер потеряет связь и её нужно будет открыть по новому адресу.
-              Если новый адрес окажется недоступен, настройки вернутся сами в течение минуты —
-              для этого сервер проверяет связь со шлюзом.
-            </div>
+            <strong>{t('serverPage.netWarningTitle')}</strong>
+            <div style={{ marginTop: 6 }}>{t('serverPage.netWarningText')}</div>
           </div>
         </div>
 
         <div style={{ marginBottom: 16 }}>
-          <label style={labelStyle}>Сетевой интерфейс</label>
+          <label style={labelStyle}>{t('serverPage.iface')}</label>
           <select
             value={iface}
             onChange={(e) => setIface(e.target.value)}
@@ -429,13 +413,11 @@ export default function ServerSettingsPage() {
               </option>
             ))}
           </select>
-          <div style={hintStyle}>
-            Интерфейс, через который сервер подключён к сети. Список берётся у системы.
-          </div>
+          <div style={hintStyle}>{t('serverPage.ifaceHint')}</div>
         </div>
 
         <div style={{ marginBottom: 16 }}>
-          <label style={labelStyle}>Режим адреса</label>
+          <label style={labelStyle}>{t('serverPage.addrMode')}</label>
           <div style={{ display: 'flex', gap: 20 }}>
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
               <input
@@ -446,9 +428,9 @@ export default function ServerSettingsPage() {
               />
               <span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Wifi size={14} /> Автоматически (DHCP)
+                  <Wifi size={14} /> {t('serverPage.dhcp')}
                 </span>
-                <div style={hintStyle}>Адрес выдаёт роутер. Удобно и безопасно.</div>
+                <div style={hintStyle}>{t('serverPage.dhcpHint')}</div>
               </span>
             </label>
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
@@ -460,9 +442,9 @@ export default function ServerSettingsPage() {
               />
               <span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Globe size={14} /> Постоянный (статический)
+                  <Globe size={14} /> {t('serverPage.static')}
                 </span>
-                <div style={hintStyle}>Адрес закреплён за сервером.</div>
+                <div style={hintStyle}>{t('serverPage.staticHint')}</div>
               </span>
             </label>
           </div>
@@ -478,7 +460,7 @@ export default function ServerSettingsPage() {
             }}
           >
             <div>
-              <label style={labelStyle}>Адрес</label>
+              <label style={labelStyle}>{t('serverPage.addr')}</label>
               <input
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
@@ -488,7 +470,7 @@ export default function ServerSettingsPage() {
               />
             </div>
             <div>
-              <label style={labelStyle}>Маска</label>
+              <label style={labelStyle}>{t('serverPage.mask')}</label>
               <select
                 value={prefix}
                 onChange={(e) => setPrefix(Number(e.target.value))}
@@ -503,7 +485,7 @@ export default function ServerSettingsPage() {
               </select>
             </div>
             <div>
-              <label style={labelStyle}>Шлюз</label>
+              <label style={labelStyle}>{t('serverPage.gateway')}</label>
               <input
                 value={gateway}
                 onChange={(e) => setGateway(e.target.value)}
@@ -516,7 +498,7 @@ export default function ServerSettingsPage() {
         )}
 
         <div style={{ marginBottom: 8 }}>
-          <label style={labelStyle}>Серверы имён (DNS)</label>
+          <label style={labelStyle}>{t('serverPage.dns')}</label>
           <input
             value={dnsText}
             onChange={(e) => setDnsText(e.target.value)}
@@ -524,16 +506,13 @@ export default function ServerSettingsPage() {
             style={inputStyle}
             disabled={!available}
           />
-          <div style={hintStyle}>
-            Через запятую. Нужны, чтобы сервер находил другие узлы по именам. Пусто —
-            используются серверы от роутера.
-          </div>
+          <div style={hintStyle}>{t('serverPage.dnsHint')}</div>
         </div>
 
         {network?.config?.file && (
           <div style={{ ...hintStyle, display: 'flex', alignItems: 'center', gap: 6, marginTop: 12 }}>
             <Info size={13} />
-            Текущий файл настроек сети: {network.config.file}
+            {t('serverPage.netFile')}: {network.config.file}
           </div>
         )}
 
@@ -544,19 +523,19 @@ export default function ServerSettingsPage() {
           style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 8 }}
         >
           {savingNet ? <Loader2 size={16} className="spin" /> : <Save size={16} />}
-          Применить настройки сети
+          {t('serverPage.applyNet')}
         </button>
 
         <div style={{ ...hintStyle, display: 'flex', alignItems: 'center', gap: 6, marginTop: 10 }}>
           <Timer size={13} />
-          Если после применения связь не восстановится за минуту, настройки откатятся сами.
+          {t('serverPage.rollbackHint')}
         </div>
       </div>
 
       {!available && (
         <div style={{ ...hintStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
           <XCircle size={14} />
-          Пока служба недоступна, настройки менять нельзя — иначе изменения негде применить.
+          {t('serverPage.notAvailableHint')}
         </div>
       )}
     </div>

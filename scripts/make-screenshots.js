@@ -284,7 +284,19 @@ const SHOTS = [
     },
   },
   {
-    file: '27-language-zh.png',
+    file: '27-language-en.png',
+    title: 'Настройки сервера: тот же экран по-английски',
+    viewport: { width: 1440, height: 1100 },
+    prepare: async (page) => {
+      await page.goto(`${BASE}/server`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(3500)
+      await setLanguage(page, 'English')
+      await page.evaluate(() => window.scrollTo(0, 0))
+      await page.waitForTimeout(800)
+    },
+  },
+  {
+    file: '28-language-zh.png',
     title: 'Настройки сервера: тот же экран по-китайски',
     viewport: { width: 1440, height: 1100 },
     prepare: async (page) => {
@@ -299,7 +311,7 @@ const SHOTS = [
     },
   },
   {
-    file: '28-language-ko.png',
+    file: '29-language-ko.png',
     title: 'Настройки сервера: тот же экран по-корейски',
     viewport: { width: 1440, height: 1100 },
     prepare: async (page) => {
@@ -436,7 +448,15 @@ async function main() {
   await page.waitForTimeout(2500)
 
   const done = []
-  for (const shot of SHOTS) {
+  // Фильтр по части имени файла: при правке одной страницы пересъёмка
+  // всех тридцати снимков занимает минуты и заново трогает файлы, к
+  // которым правка отношения не имеет. Запуск: NVR_ONLY=language node ...
+  const only = process.env.NVR_ONLY || ''
+  const shots = only ? SHOTS.filter((s) => s.file.includes(only)) : SHOTS
+  if (only && shots.length === 0) {
+    console.log(`Нет снимков с «${only}» в имени.`)
+  }
+  for (const shot of shots) {
     try {
       // Размер окна можно задать для отдельного снимка: длинные блоки не
       // помещаются в общий вьюпорт, и без этого снимок обрывался бы.
@@ -460,7 +480,7 @@ async function main() {
   }
 
   await browser.close()
-  console.log(`\nСохранено снимков: ${done.length} из ${SHOTS.length}`)
+  console.log(`\nСохранено снимков: ${done.length} из ${shots.length}`)
   console.log(`Каталог: ${OUT}`)
 }
 
