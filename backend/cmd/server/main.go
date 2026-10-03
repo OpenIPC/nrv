@@ -224,6 +224,11 @@ func main() {
 	notificationRepo := postgres.NewNotificationRepo(db)
 	notifier := notify.NewService(detectionSettingsRepo, storageSvc, notificationRepo)
 
+	// Подписки на события для внешних систем (умный дом, мобильное приложение).
+	// Заведены отдельно от уведомлений: здесь получателем выступает программа,
+	// и полезный груз — описание события, а не текст для человека.
+	webhookSvc := service.NewWebhookService(postgres.NewWebhookRepo(db))
+
 	// Агент управления хостом: через него меняются часовой пояс и сеть.
 	// Сам бэкенд системных прав не имеет — изменения выполняет служба
 	// на хосте, а здесь только клиент к её сокету.
@@ -269,6 +274,7 @@ func main() {
 	if detSubscriber != nil {
 		detSubscriber.WithRecording(recordingMgr)
 		detSubscriber.WithNotifier(notifierAdapter{svc: notifier})
+		detSubscriber.WithWebhooks(webhookSvc)
 	}
 
 	// Съёмка по событиям доступа: подключаем камеры, хранилище и запись.
@@ -485,8 +491,9 @@ func main() {
 		ImageProfile:       imageProfileSvc,
 		// Сервис создан выше — по нему работает страница уведомлений:
 		// проверка связи и журнал отправок.
-		Notifier:  notifier,
-		HostAgent: hostAgent,
+		Notifier:   notifier,
+		WebhookSvc: webhookSvc,
+		HostAgent:  hostAgent,
 	})
 
 	// HTTP-сервер

@@ -1,0 +1,59 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Сервер OpenIPC NVR",
+        "description": "Укажите адрес сервера видеонаблюдения и учётные данные администратора. Учётные данные RTSP нужны, если поток смотрится через прокси — он вынесен на отдельный порт специально для внешних систем.",
+        "data": {
+          "host": "Адрес сервера",
+          "port": "Порт API",
+          "username": "Логин",
+          "password": "Пароль",
+          "use_rtsp_proxy": "Смотреть поток через RTSP-прокси",
+          "rtsp_username": "Логин RTSP",
+          "rtsp_password": "Пароль RTSP"
+        }
+      },
+      "reconfigure": {
+        "title": "Изменение параметров сервера",
+        "description": "Изменение адреса или учётных данных сервера.",
+        "data": {
+          "host": "Адрес сервера",
+          "port": "Порт API",
+          "username": "Логин",
+          "password": "Пароль",
+          "use_rtsp_proxy": "Смотреть поток через RTSP-прокси",
+          "rtsp_username": "Логин RTSP",
+          "rtsp_password": "Пароль RTSP"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Сервер отклонил логин или пароль.",
+      "cannot_connect": "Не удалось подключиться к серверу. Проверьте адрес и порт.",
+      "unknown": "Непредвиденная ошибка при подключении к серверу."
+    },
+    "abort": {
+      "already_configured": "Этот сервер уже добавлен.",
+      "reconfigure_successful": "Параметры сервера обновлены."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "online_cameras": { "name": "Камер онлайн" },
+      "events_24h": { "name": "Событий за сутки" },
+      "acs_online": { "name": "Контроллеров СКУД онлайн" },
+      "disk_used_percent": { "name": "Занято на диске" },
+      "disk_free_gb": { "name": "Свободно на диске" }
+    },
+    "binary_sensor": {
+      "motion": { "name": "Детекция" }
+    },
+    "camera": {
+      "camera": { "name": "Поток" }
+    },
+    "event": {
+      "detection": { "name": "Детекция" }
+    }
+  }
+}

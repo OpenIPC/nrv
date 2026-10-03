@@ -1,0 +1,13 @@
+{
+  "domain": "openipc_nvr",
+  "name": "OpenIPC NVR",
+  "codeowners": ["@himik19872"],
+  "config_flow": true,
+  "dependencies": ["http", "frontend", "webhook"],
+  "documentation": "https://github.com/himik19872/OpenIPC-NRV",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/himik19872/OpenIPC-NRV/issues",
+  "requirements": [],
+  "version": "0.2.0"
+}

@@ -81,6 +81,11 @@ type RouterConfig struct {
 	ExternalRTSPSvc *service.ExternalRTSPService
 	// Notifier отправляет уведомления о событиях (Telegram)
 	Notifier *notify.Service
+	// WebhookSvc рассылает события внешним подписчикам.
+	//
+	// Отдельно от Notifier: уведомление в мессенджер и вебхук решают
+	// разные задачи — первое адресовано человеку, второе чужой программе.
+	WebhookSvc *service.WebhookService
 	// HostAgent обращается к службе на хосте для смены времени и сети
 	HostAgent *hostagent.Client
 }
@@ -153,6 +158,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		postgres.NewNotificationRepo(cfg.DB),
 		cfg.Notifier,
 	)
+	webhookH := handlers.NewWebhookHandler(cfg.WebhookSvc)
 
 	// Настройки времени и сети: изменения выполняет служба на хосте,
 	// бэкенд только передаёт ей команды и показывает результат.
@@ -361,6 +367,16 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// пороги, а каналы доставки общие с Telegram и MAX.
 			r.Get("/settings/notifications/system", notifyH.GetSystem)
 			r.Patch("/settings/notifications/system", notifyH.UpdateSystem)
+
+			// Подписки на события (вебхуки).
+			//
+			// Адрес приёмника — ключ подписки: повторная регистрация того же
+			// адреса обновляет запись, а не создаёт вторую. Так интеграция
+			// умного дома, зарегистрировавшаяся после перезапуска, не
+			// заводит дубль, из-за которого события шли бы в два потока.
+			r.Get("/webhooks", webhookH.List)
+			r.Post("/webhooks", webhookH.Upsert)
+			r.Delete("/webhooks/{id}", webhookH.Delete)
 
 			// Время и сеть сервера. Изменения выполняет служба на хосте:
 			// у контейнера системных прав нет намеренно.

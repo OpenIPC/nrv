@@ -61,6 +61,7 @@ type DetectionSubscriber struct {
 	recorder  EventRecorder
 	recognize RecognitionMatcher
 	notifier  Notifier
+	webhooks  WebhookDispatcher
 }
 
 // Notifier отправляет уведомления о событиях во внешние каналы.
@@ -119,6 +120,57 @@ func (s *DetectionSubscriber) WithRecognition(m RecognitionMatcher) *DetectionSu
 // WithNotifier подключает уведомления о событиях.
 func (s *DetectionSubscriber) WithNotifier(n Notifier) *DetectionSubscriber {
 	s.notifier = n
+	return s
+}
+
+// WebhookDispatcher рассылает события внешним подписчикам.
+//
+// Отдельный интерфейс, а не переиспользование Notifier: у вебхуков другой
+// получатель и другой полезный груз. Уведомление в мессенджер — это текст
+// и вложение для человека, а вебхук — структурированное описание события,
+// по которому чужая автоматизация принимает решение и не читает картинку.
+// Ответственность за фильтрацию (какие события нужны) лежит на подписчике:
+// подписчик не знает про подписки и их настройки.
+type WebhookDispatcher interface {
+	// Dispatch отправляет событие подходящим подпискам.
+	// Вызов не блокирующий: сетевые задержки получателя не должны
+	// задерживать обработку следующих детекций.
+	Dispatch(ctx context.Context, ev WebhookEvent)
+}
+
+// WebhookEvent — событие, как его получает внешний подписчик.
+//
+// Поля намеренно плоские и с готовыми строками (имя камеры, время в RFC3339):
+// принимающая сторона может не знать наших справочников и не обращаться
+// повторно к API, чтобы показать уведомление.
+type WebhookEvent struct {
+	// Type — тип события: detection, access, system.
+	Type string
+	// ID — идентификатор события в нашей базе.
+	ID uuid.UUID
+	// CameraID и CameraName описывают источник события.
+	CameraID   uuid.UUID
+	CameraName string
+	// ObjectClass — что обнаружено (person, car, truck...).
+	ObjectClass string
+	Confidence  float64
+	// Time — момент события.
+	Time time.Time
+	// TriggerType и TriggerDetail — что именно вызвало событие.
+	TriggerType   string
+	TriggerDetail string
+	// MatchType и MatchedName заполнены, если событие
+	// сопоставлено со справочником лиц или номеров.
+	MatchType   string
+	MatchedName string
+	// SnapshotURL — путь снимка события относительно API.
+	// Пустой, если снимок сохранить не удалось.
+	SnapshotURL string
+}
+
+// WithWebhooks подключает рассылку событий внешним подписчикам.
+func (s *DetectionSubscriber) WithWebhooks(d WebhookDispatcher) *DetectionSubscriber {
+	s.webhooks = d
 	return s
 }
 
@@ -306,6 +358,32 @@ func (s *DetectionSubscriber) saveEvent(ctx context.Context, ev *DetectionEvent)
 			Confidence: ev.Confidence,
 			Time:       eventTime,
 			Snapshot:   SnapshotFromBase64(ev.SnapshotJPEG),
+		})
+	}
+
+	// Рассылка внешним подписчикам — сразу после сохранения, а не вместе
+	// с уведомлением: умный дом ждёт событие мгновенно, и задерживать его
+	// сборкой клипа или отправкой в мессенджер нельзя. Имя камеры берём
+	// уже полученным — это лишний запрос к базе на каждое событие.
+	if s.webhooks != nil {
+		snapshotURL := ""
+		if snapshotPath != "" {
+			snapshotURL = "/api/v1/events/" + eventID.String() + "/snapshot"
+		}
+
+		s.webhooks.Dispatch(context.Background(), WebhookEvent{
+			Type:          "detection",
+			ID:            eventID,
+			CameraID:      cameraID,
+			CameraName:    s.cameraName(ctx, cameraID),
+			ObjectClass:   ev.ObjectClass,
+			Confidence:    ev.Confidence,
+			Time:          eventTime,
+			TriggerType:   string(trigger),
+			TriggerDetail: detail,
+			MatchType:     string(match.Type),
+			MatchedName:   match.Name,
+			SnapshotURL:   snapshotURL,
 		})
 	}
 
