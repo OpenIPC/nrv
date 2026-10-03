@@ -25,7 +25,9 @@ from homeassistant.components.media_source import (
     MediaSourceItem,
     PlayMedia,
     Unresolvable,
+    generate_media_source_id,
 )
+from homeassistant.components.media_source.const import URI_SCHEME
 from homeassistant.core import HomeAssistant
 
 from .api import NvrApiClient
@@ -40,12 +42,22 @@ SEP = "|"
 
 # Разделитель, которым ассистент склеивает путь при переходе внутрь.
 #
-# При открытии вложенного раздела ассистент собирает адрес из пути
-# родителя и идентификатора потомка через запятую. У корня путь пуст,
-# поэтому к нашему идентификатору спереди добавляется запятая, и разбор
-# «от начала строки» перестаёт совпадать. Ассистент отдавал бы отказ на
-# любом переходе внутрь, хотя список разделов при этом показывается.
+# В адресах вложенных разделов ассистент собирает путь из родителя
+# и потомка, разделяя их запятой. Понимать его нужно для устойчивости:
+# наш собственный идентификатор всегда идёт последним.
 NESTING_SEP = ","
+
+
+def _child_id(identifier: str) -> str:
+    """Собирает адрес вложенного раздела.
+
+    Адрес обязательно полный, со схемой. Ассистент отправляет обратно
+    ровно то, что мы положили в идентификатор потомка, и разбирает его как
+    адрес источника. Внутренний идентификатор без схемы он разобрать
+    не может и отвечает отказом — при этом список верхнего уровня
+    показывается нормально, потому что корень он строит сам.
+    """
+    return generate_media_source_id(DOMAIN, identifier)
 
 # Сколько записей показывать в камере. Просмотр медиа — не поиск по архиву,
 # а быстрый доступ к последнему: длинный список пришлось бы листать, а
@@ -86,9 +98,16 @@ class NvrMediaSource(MediaSource):
         return None
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMedia:
-        """Показывает содержимое архива."""
+        """Показывает содержимое архива.
+
+        Любая наша ошибка здесь превращается ассистентом в короткий отказ
+        без подробностей, и в журнале не остаётся ничего. Поэтому причина
+        записывается в журнал здесь же: иначе неисправность выглядит как
+        пустое окно, и до причины приходится добираться перебором.
+        """
         client = self._client()
         if client is None:
+            _LOGGER.error("Просмотр архива: интеграция не загружена")
             raise MediaSourceError(
                 "Сервер видеонаблюдения недоступен: интеграция не загружена"
             )
@@ -107,11 +126,10 @@ class NvrMediaSource(MediaSource):
             recording = await self._find_recording(client, value)
             return _recording_node(recording, value.partition(SEP)[0])
 
-        # Разбор не совпал — это ошибка в нашей же разметке, а не в данных.
-        # Пишем полученное значение в журнал: иначе неисправность выглядит
-        # как пустое окно без единой зацепки.
-        _LOGGER.warning(
-            "Неизвестный раздел архива %r (получено %r)", kind, item.identifier
+        _LOGGER.error(
+            "Просмотр архива: неизвестный раздел %r (получено %r)",
+            kind,
+            item.identifier,
         )
         raise MediaSourceError(f"Неизвестный раздел архива: {kind}")
 
@@ -120,6 +138,7 @@ class NvrMediaSource(MediaSource):
         try:
             cameras = await client.get_cameras()
         except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Просмотр архива: список камер не получен: %s", err)
             raise MediaSourceError(f"Не удалось получить список камер: {err}") from err
 
         return BrowseMedia(
@@ -134,7 +153,7 @@ class NvrMediaSource(MediaSource):
                     title=str(cam.get("name") or cam.get("ip") or "Камера"),
                     media_class=MediaClass.DIRECTORY,
                     media_content_type="",
-                    media_content_id=f"camera{SEP}{cam.get('id')}",
+                    media_content_id=_child_id(f"camera{SEP}{cam.get('id')}"),
                     can_play=False,
                     can_expand=True,
                 )
@@ -151,6 +170,9 @@ class NvrMediaSource(MediaSource):
                 camera_id=camera_id, limit=RECORDINGS_LIMIT
             )
         except Exception as err:  # noqa: BLE001
+            _LOGGER.error(
+                "Просмотр архива: записи камеры %s не получены: %s", camera_id, err
+            )
             raise MediaSourceError(f"Не удалось получить записи: {err}") from err
 
         # Записи без доступного файла пропускаем: элемент, который не
@@ -161,7 +183,7 @@ class NvrMediaSource(MediaSource):
             title="Записи по событиям",
             media_class=MediaClass.DIRECTORY,
             media_content_type="",
-            media_content_id=identifier,
+            media_content_id=_child_id(identifier),
             can_play=False,
             can_expand=True,
             children=[_recording_node(rec, camera_id) for rec in playable],
@@ -203,16 +225,34 @@ class NvrMediaSource(MediaSource):
 def _own_identifier(identifier: str | None) -> str:
     """Выделяет из пути ассистента наш собственный идентификатор.
 
-    Ассистент передаёт путь накопленным: при каждом переходе внутрь к нему
-    спереди добавляется ещё один раздел. Нам нужен только последний —
-    остальное относится к родительским уровням и разобрано раньше.
+    Ассистент передаёт путь двумя разными способами, и оба надо понимать.
 
-    Разбор идёт от конца строки, а не от начала: так он не зависит
-    от числа уровней и от того, добавляет ли ассистент что-то впереди.
+    При переходе по разделам он отправляет ровно тот идентификатор, который
+    мы положили в элемент: полный адрес источника, например
+    `media-source://openipc_nvr/camera|abc`.
+
+    При открытии страницы сразу на нужном разделе — после перезагрузки или
+    по закладке — он передаёт накопленный путь, где разделы склеены запятой,
+    например `,media-source://openipc_nvr/camera|abc`. Внутри последнего
+    раздела снова лежит полный адрес.
+
+    Поэтому разбор идёт с конца строки и снимает оболочку адреса, если она
+    есть. Без этого список открывался бы по клику, но ломался при
+    перезагрузке страницы — а это первое, что делает человек, если что-то
+    показалось неладным.
     """
     if not identifier:
         return ""
-    return identifier.split(NESTING_SEP)[-1].strip()
+
+    last = identifier.split(NESTING_SEP)[-1].strip()
+
+    if last.startswith(URI_SCHEME):
+        _, _, rest = last.partition("://")
+        # rest выглядит как «openipc_nvr/camera|abc» — отбрасываем имя домена.
+        _, _, inner = rest.partition("/")
+        return inner
+
+    return last
 
 
 def _recording_node(rec: dict[str, Any], camera_id: str) -> BrowseMedia:
@@ -225,7 +265,9 @@ def _recording_node(rec: dict[str, Any], camera_id: str) -> BrowseMedia:
         title=_recording_title(rec),
         media_class=MediaClass.VIDEO,
         media_content_type=_mime_for(rec),
-        media_content_id=f"recording{SEP}{camera_id}{SEP}{rec.get('id')}",
+        media_content_id=_child_id(
+            f"recording{SEP}{camera_id}{SEP}{rec.get('id')}"
+        ),
         can_play=True,
         can_expand=False,
     )

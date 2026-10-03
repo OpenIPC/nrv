@@ -130,9 +130,24 @@ class NvrApiClient:
         data = await self._request("GET", "/api/v1/stats")
         return data if isinstance(data, dict) else {}
 
-    async def get_events(self, page_size: int = 50) -> list[dict[str, Any]]:
+    # Предел размера страницы у сервера — сто записей.
+    #
+    # Большее значение он не принимает и молча отдаёт страницу обычного
+    # размера, поэтому запрашивать больше бессмысленно: ответ придёт
+    # с двадцатью записями, и причина недобора видна не будет.
+    MAX_PAGE_SIZE = 100
+
+    async def get_events(
+        self, page_size: int = 50, page: int = 1
+    ) -> list[dict[str, Any]]:
+        """Страница событий детекции.
+
+        События идут от новых к старым, поэтому за более длинным периодом
+        нужно обращаться к следующим страницам.
+        """
+        size = min(max(1, page_size), self.MAX_PAGE_SIZE)
         data = await self._request(
-            "GET", f"/api/v1/events?page_size={page_size}"
+            "GET", f"/api/v1/events?page_size={size}&page={max(1, page)}"
         )
         if isinstance(data, dict):
             events = data.get("events")

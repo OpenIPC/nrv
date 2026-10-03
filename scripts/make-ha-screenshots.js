@@ -132,12 +132,17 @@ async function main() {
   })
 
   await shoot(page, '25-ha-archive.png', async (p) => {
-    // Архив: открываем сразу камеру, у которой записи точно есть. Путь
-    // строится так же, как его строит сам ассистент при переходе по
-    // разделам, — иначе список записей не подгрузится.
-    const id = encodeURIComponent(`,camera|${DEMO_CAMERA}`)
+    // Архив: открываем сразу камеру, у которой записи точно есть.
+    //
+    // Адрес строится так же, как его строит сам ассистент: путь
+    // накапливается, и разделы разделяются запятой, а идентификатор
+    // раздела — полный адрес источника. Сокращённая запись откроет
+    // пустое окно, потому что ассистент разберёт её иначе.
+    const inner = encodeURIComponent(
+      `media-source://openipc_nvr/camera|${DEMO_CAMERA}`,
+    )
     await p.goto(
-      `${BASE}/media-browser/browser/app%2Cmedia-source%3A%2F%2Fopenipc_nvr%2F${id}`,
+      `${BASE}/media-browser/browser/app%2Cmedia-source%3A%2F%2Fopenipc_nvr%2F%2C${inner}`,
       { waitUntil: 'domcontentloaded' },
     )
     await p.waitForTimeout(9000)

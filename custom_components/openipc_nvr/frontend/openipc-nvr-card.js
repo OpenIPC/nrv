@@ -18,6 +18,19 @@
 
 const DEFAULT_ENTITY = "sensor.server_videonabliudeniia_poslednie_sobytiia";
 
+// Адрес, по которому карточка запрашивает историю событий.
+//
+// Список в описании датчика короткий: описание сущности целиком лежит
+// в памяти ассистента и пишется в его базу, поэтому десятки событий
+// с подробностями её раздувают. Здесь же запрашивается столько, сколько
+// нужно карточке, и только при её открытии.
+const EVENTS_API = "openipc_nvr/events";
+
+// Как часто перезапрашивать события. Свежие приходят через шину ассистента
+// и обновляют описание датчика, а этот запрос нужен для истории за сутки:
+// обновлять её чаще некуда.
+const REFRESH_MS = 120000;
+
 // Через сколько перерисовывать подписи времени. События приходят редко,
 // а подписи «2 мин назад» устаревают сами по себе — без этого списка
 // пришлось бы ждать нового события, чтобы время обновилось.
@@ -29,6 +42,10 @@ class OpenIpcNvrEventsCard extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._events = [];
     this._timer = null;
+    this._refreshTimer = null;
+    // События с сервера. Пусто, пока запрос не выполнен или не удался:
+    // тогда показывается то, что есть в описании датчика.
+    this._fromServer = null;
   }
 
   setConfig(config) {
@@ -40,15 +57,56 @@ class OpenIpcNvrEventsCard extends HTMLElement {
       hours: config.hours || 24,
       limit: config.limit || 24,
     };
-    // Ширина плитки считается от числа столбцов: сетка должна заполнять
-    // карточку целиком, а не оставлять пустое место справа.
+    // Настройки изменились — прежний ответ к ним не относится.
+    this._fromServer = null;
+    this._lastJson = null;
     this._render();
+    this._fetchEvents();
+  }
+
+  async _fetchEvents() {
+    if (!this._hass || !this._config) return;
+
+    const parts = [
+      `hours=${this._config.hours}`,
+      `limit=${this._config.limit}`,
+    ];
+    if (this._config.camera) {
+      parts.push(`camera_id=${encodeURIComponent(this._config.camera)}`);
+    }
+
+    try {
+      // callApi сам подставляет ключ сессии и префикс адреса ассистента.
+      const data = await this._hass.callApi(
+        "GET",
+        `${EVENTS_API}?${parts.join("&")}`,
+      );
+      this._fromServer = Array.isArray(data?.events) ? data.events : [];
+    } catch (err) {
+      // Отказ запроса не должен оставлять карточку пустой: показываем
+      // то, что успело попасть в описание датчика, и пробуем позже.
+      console.warn("openipc-nvr-events: история не получена", err);
+      this._fromServer = null;
+    }
+
+    this._lastJson = null;
+    this._apply();
   }
 
   set hass(hass) {
     this._hass = hass;
-    const events = this._collect(hass);
 
+    // Запрос истории — один раз при появлении и дальше по таймеру.
+    if (!this._refreshTimer) {
+      this._fetchEvents();
+      this._refreshTimer = setInterval(() => this._fetchEvents(), REFRESH_MS);
+    }
+
+    this._apply();
+  }
+
+  _apply() {
+    const events = this._collect();
     // Сравнение по содержимому, а не по ссылке: ассистент присылает новый
     // объект при каждом обновлении состояния, и перерисовка по ссылке
     // заставляла бы картинки мигать несколько раз в минуту.
@@ -68,14 +126,16 @@ class OpenIpcNvrEventsCard extends HTMLElement {
 
   disconnectedCallback() {
     clearInterval(this._timer);
+    clearInterval(this._refreshTimer);
     this._timer = null;
+    this._refreshTimer = null;
   }
 
-  _collect(hass) {
-    const state = hass.states[this._config.entity];
-    if (!state) return [];
+  _collect() {
+    const all = this._fromServer !== null
+      ? this._fromServer
+      : this._fromSensor();
 
-    const all = state.attributes.events || [];
     const since = Date.now() - this._config.hours * 3600 * 1000;
 
     return all
@@ -87,6 +147,11 @@ class OpenIpcNvrEventsCard extends HTMLElement {
         return !Number.isNaN(ts) && ts >= since;
       })
       .slice(0, this._config.limit);
+  }
+
+  _fromSensor() {
+    const state = this._hass?.states?.[this._config.entity];
+    return state?.attributes?.events || [];
   }
 
   _render() {

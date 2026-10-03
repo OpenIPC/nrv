@@ -68,6 +68,13 @@ async def async_setup_frontend(hass: HomeAssistant) -> None:
     if hass.data.get(_FRONTEND_KEY):
         return
 
+    # Адрес, по которому карточка запрашивает события. Регистрируется
+    # здесь же: он относится к панели, а не к отдельной записи настройки,
+    # и нужен ровно один на весь ассистент.
+    from .views import NvrEventsView
+
+    hass.http.register_view(NvrEventsView(hass))
+
     try:
         await hass.http.async_register_static_paths(
             [

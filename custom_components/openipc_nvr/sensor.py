@@ -22,32 +22,16 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import CLASS_LABELS, DOMAIN
 from .coordinator import NvrCoordinator
 
 # Сколько последних событий отдаётся в описании датчика.
 #
 # Список лежит в состоянии сущности, а оно хранится целиком в памяти
 # ассистента. Сотни событий с подробностями заметно утяжелили бы её.
-# Двадцати хватает ленте карточки — глубже события смотрят в нашем
-# веб-интерфейсе.
+# Двадцати хватает, чтобы показать последнее и запустить автоматизацию;
+# лента за сутки берётся карточкой у сервера, а не из состояния.
 MAX_EVENTS_IN_STATE = 20
-
-# Понятные названия того, что обнаружено. Служебные значения детектора
-# заменяются словами: в панели нужен «человек», а не «person».
-CLASS_LABELS = {
-    "person": "человек",
-    "car": "автомобиль",
-    "truck": "грузовик",
-    "bus": "автобус",
-    "motorcycle": "мотоцикл",
-    "bicycle": "велосипед",
-    "dog": "собака",
-    "cat": "кошка",
-    "face": "лицо",
-    "plate": "номер",
-    "bird": "птица",
-}
 
 
 async def async_setup_entry(
