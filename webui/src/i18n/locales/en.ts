@@ -1067,4 +1067,69 @@ export default {
     emptyText:
       'Create a floor plan, upload its photo or scan and place cameras, doors and controllers on it. The layout will show what is where and what has lost its connection.',
   },
+
+  cameraSettings: {
+    loadFailed: 'Could not read the camera settings',
+    noChanges: 'Nothing to save',
+    applied: 'Camera settings applied',
+    saveFailed: 'Could not save the settings',
+    onlyOpenIPC:
+      'These settings are available only on cameras running OpenIPC + Majestic firmware. Cameras with the older build can be configured over SSH.',
+
+    camera: 'Camera',
+    deviceSensor: 'Sensor',
+    deviceFirmware: 'Firmware',
+    deviceBuild: 'Build',
+    deviceKernel: 'Kernel',
+    deviceFlash: 'Flash',
+
+    groupVideo: 'Video',
+    mainFps: 'Main stream FPS',
+    mainBitrate: 'Main stream bitrate, kbps',
+    frameSize: 'Frame size',
+    codec: 'Codec',
+    subFps: 'Sub stream FPS',
+    subBitrate: 'Sub stream bitrate, kbps',
+    subEnabled: 'Sub stream enabled',
+
+    groupImage: 'Image',
+    brightness: 'Brightness',
+    contrast: 'Contrast',
+    saturation: 'Saturation',
+    hue: 'Hue',
+    mirror: 'Mirror',
+    flip: 'Flip',
+    antiFlicker: 'Anti-flicker',
+    antiFlickerOff: 'Off',
+    hz50: '50 Hz',
+    hz60: '60 Hz',
+
+    groupNight: 'Night mode',
+    nightGray: 'Black and white at night',
+    irCut: 'IR-cut filter',
+    irAuto: 'Auto',
+    irOn: 'On',
+    irOff: 'Off',
+    nightDelay: 'Delay before switching to night, s',
+    dayDelay: 'Delay before switching to day, s',
+
+    groupOsd: 'Overlay text (OSD)',
+    osdEnabled: 'Show overlay',
+    osdText: 'Text',
+    osdBgAlpha: 'Background opacity',
+    osdOutline: 'Text outline',
+
+    applying: 'Applying…',
+    apply: 'Apply',
+    reset: 'Discard',
+    changedCount: 'Settings changed: {{count}}',
+    noChanged: 'No changes',
+  },
+
+  vendorBadge: {
+    openipcHint: 'OpenIPC firmware: the settings scheme, logs, NTP, watchdog and recording modes are available',
+    genericHint: '{{label}}: configured through its own API only, the OpenIPC sections are unavailable',
+    unknownLabel: 'vendor?',
+    unknownHint: 'the vendor is not identified: the OpenIPC sections stay hidden until it is',
+  },
 }

@@ -1041,4 +1041,69 @@ export default {
     emptyText:
       '층 평면도를 만들고 사진이나 스캔본을 올린 뒤 카메라, 문, 컨트롤러를 배치하십시오. 무엇이 어디에 있고 무엇이 연결을 잃었는지 보입니다.',
   },
+
+  cameraSettings: {
+    loadFailed: '카메라 설정을 읽을 수 없습니다',
+    noChanges: '저장할 변경 사항이 없습니다',
+    applied: '카메라 설정이 적용되었습니다',
+    saveFailed: '설정을 저장할 수 없습니다',
+    onlyOpenIPC:
+      '이 설정은 OpenIPC + Majestic 펌웨어가 설치된 카메라에서만 사용할 수 있습니다. 구형 빌드의 카메라는 SSH로 설정하십시오.',
+
+    camera: '카메라',
+    deviceSensor: '센서',
+    deviceFirmware: '펌웨어',
+    deviceBuild: '빌드',
+    deviceKernel: '커널',
+    deviceFlash: '플래시',
+
+    groupVideo: '비디오',
+    mainFps: '메인 스트림 FPS',
+    mainBitrate: '메인 스트림 비트레이트, kbps',
+    frameSize: '해상도',
+    codec: '코덱',
+    subFps: '서브 스트림 FPS',
+    subBitrate: '서브 스트림 비트레이트, kbps',
+    subEnabled: '서브 스트림 사용',
+
+    groupImage: '이미지',
+    brightness: '밝기',
+    contrast: '대비',
+    saturation: '채도',
+    hue: '색조',
+    mirror: '좌우 반전',
+    flip: '상하 반전',
+    antiFlicker: '플리커 방지',
+    antiFlickerOff: '사용 안 함',
+    hz50: '50 Hz',
+    hz60: '60 Hz',
+
+    groupNight: '야간 모드',
+    nightGray: '야간 흑백',
+    irCut: 'IR 컷 필터',
+    irAuto: '자동',
+    irOn: '사용',
+    irOff: '사용 안 함',
+    nightDelay: '야간 전환 지연, 초',
+    dayDelay: '주간 전환 지연, 초',
+
+    groupOsd: '영상 자막(OSD)',
+    osdEnabled: '자막 표시',
+    osdText: '텍스트',
+    osdBgAlpha: '배경 불투명도',
+    osdOutline: '텍스트 외곽선',
+
+    applying: '적용 중…',
+    apply: '적용',
+    reset: '변경 취소',
+    changedCount: '변경된 설정: {{count}}개',
+    noChanged: '변경 없음',
+  },
+
+  vendorBadge: {
+    openipcHint: 'OpenIPC 펌웨어: 설정 체계, 로그, NTP, 감시 기능과 녹화 모드를 사용할 수 있습니다',
+    genericHint: '{{label}}: 자체 API로만 설정할 수 있으며 OpenIPC 항목은 사용할 수 없습니다',
+    unknownLabel: '제조사?',
+    unknownHint: '제조사를 확인할 수 없습니다: 확인될 때까지 OpenIPC 항목은 숨겨집니다',
+  },
 }

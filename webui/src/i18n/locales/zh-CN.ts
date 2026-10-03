@@ -1017,4 +1017,69 @@ export default {
     emptyText:
       '新建一张楼层图，上传它的照片或扫描件，然后在上面布置摄像头、门和控制器。这样就能看出什么放在哪里、什么失联了。',
   },
+
+  cameraSettings: {
+    loadFailed: '无法读取摄像机设置',
+    noChanges: '没有需要保存的更改',
+    applied: '摄像机设置已应用',
+    saveFailed: '无法保存设置',
+    onlyOpenIPC:
+      '只有运行 OpenIPC + Majestic 固件的摄像机才能使用这些设置。旧版固件的摄像机可通过 SSH 配置。',
+
+    camera: '摄像机',
+    deviceSensor: '传感器',
+    deviceFirmware: '固件',
+    deviceBuild: '编译版本',
+    deviceKernel: '内核',
+    deviceFlash: '闪存',
+
+    groupVideo: '视频',
+    mainFps: '主码流帧率',
+    mainBitrate: '主码流码率，kbps',
+    frameSize: '分辨率',
+    codec: '编码',
+    subFps: '子码流帧率',
+    subBitrate: '子码流码率，kbps',
+    subEnabled: '启用子码流',
+
+    groupImage: '图像',
+    brightness: '亮度',
+    contrast: '对比度',
+    saturation: '饱和度',
+    hue: '色调',
+    mirror: '左右镜像',
+    flip: '上下翻转',
+    antiFlicker: '抗闪烁',
+    antiFlickerOff: '关闭',
+    hz50: '50 赫兹',
+    hz60: '60 赫兹',
+
+    groupNight: '夜间模式',
+    nightGray: '夜间黑白',
+    irCut: '红外滤光片',
+    irAuto: '自动',
+    irOn: '开启',
+    irOff: '关闭',
+    nightDelay: '切换到夜间的延迟，秒',
+    dayDelay: '切换到白天的延迟，秒',
+
+    groupOsd: '视频叠加文字（OSD）',
+    osdEnabled: '显示叠加文字',
+    osdText: '文字',
+    osdBgAlpha: '背景不透明度',
+    osdOutline: '文字描边',
+
+    applying: '正在应用…',
+    apply: '应用',
+    reset: '放弃更改',
+    changedCount: '已修改 {{count}} 项设置',
+    noChanged: '没有更改',
+  },
+
+  vendorBadge: {
+    openipcHint: 'OpenIPC 固件：可使用设置方案、日志、NTP、看门狗和录像模式',
+    genericHint: '{{label}}：只能用自带 API 设置，OpenIPC 相关分区不可用',
+    unknownLabel: '厂商？',
+    unknownHint: '未能识别厂商：在识别之前 OpenIPC 相关分区保持隐藏',
+  },
 }

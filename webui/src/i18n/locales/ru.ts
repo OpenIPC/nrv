@@ -1077,4 +1077,69 @@ export default {
     emptyText:
       'Создайте план этажа, загрузите его фото или скан и расставьте на нём камеры, двери и контроллеры. На схеме будет видно, что где стоит и что потеряло связь.',
   },
+
+  cameraSettings: {
+    loadFailed: 'Не удалось прочитать настройки камеры',
+    noChanges: 'Нет изменений для сохранения',
+    applied: 'Настройки камеры применены',
+    saveFailed: 'Не удалось сохранить настройки',
+    onlyOpenIPC:
+      'Настройки доступны только на камерах с прошивкой OpenIPC + Majestic. Для камер со старой сборкой управление возможно по SSH.',
+
+    camera: 'Камера',
+    deviceSensor: 'Сенсор',
+    deviceFirmware: 'Прошивка',
+    deviceBuild: 'Сборка',
+    deviceKernel: 'Ядро',
+    deviceFlash: 'Флеш',
+
+    groupVideo: 'Видео',
+    mainFps: 'FPS основного потока',
+    mainBitrate: 'Битрейт основного, кбит/с',
+    frameSize: 'Размер кадра',
+    codec: 'Кодек',
+    subFps: 'FPS доп. потока',
+    subBitrate: 'Битрейт доп., кбит/с',
+    subEnabled: 'Доп. поток включён',
+
+    groupImage: 'Изображение',
+    brightness: 'Яркость',
+    contrast: 'Контраст',
+    saturation: 'Насыщенность',
+    hue: 'Оттенок',
+    mirror: 'Отзеркалить',
+    flip: 'Перевернуть',
+    antiFlicker: 'Антимерцание',
+    antiFlickerOff: 'Выключено',
+    hz50: '50 Гц',
+    hz60: '60 Гц',
+
+    groupNight: 'Ночной режим',
+    nightGray: 'Чёрно-белое ночью',
+    irCut: 'ИК-фильтр',
+    irAuto: 'Авто',
+    irOn: 'Включён',
+    irOff: 'Выключен',
+    nightDelay: 'Задержка перехода в ночь, с',
+    dayDelay: 'Задержка перехода в день, с',
+
+    groupOsd: 'Надпись на видео (OSD)',
+    osdEnabled: 'Показывать надпись',
+    osdText: 'Текст',
+    osdBgAlpha: 'Прозрачность фона',
+    osdOutline: 'Обводка текста',
+
+    applying: 'Применяю…',
+    apply: 'Применить',
+    reset: 'Отменить',
+    changedCount: 'Изменено настроек: {{count}}',
+    noChanged: 'Изменений нет',
+  },
+
+  vendorBadge: {
+    openipcHint: 'прошивка OpenIPC: доступны схема настроек, логи, NTP, присмотр и режимы съёмки',
+    genericHint: '{{label}}: настройка только своим API, разделы OpenIPC недоступны',
+    unknownLabel: 'вендор?',
+    unknownHint: 'производитель не определён: разделы OpenIPC скрыты, пока он не опознан',
+  },
 }

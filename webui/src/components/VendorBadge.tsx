@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { CameraVendor } from '../api/client'
 
 /**
@@ -18,7 +19,8 @@ export default function VendorBadge({ vendor, verbose = false }: {
   /** Показывать и название, и подпись — для карточки камеры. */
   verbose?: boolean
 }) {
-  const { label, color, hint } = vendorInfo(vendor)
+  const { t } = useTranslation()
+  const { label, color, hint } = vendorInfo(vendor, t)
 
   return (
     <span
@@ -46,7 +48,7 @@ export default function VendorBadge({ vendor, verbose = false }: {
  * и это не поломка. Но и молчать о нём нельзя — именно от него зависит,
  * какие разделы карточки доступны.
  */
-function vendorInfo(vendor?: CameraVendor): { label: string; color: string; hint: string } {
+function vendorInfo(vendor: CameraVendor | undefined, t: (key: string, opts?: any) => string): { label: string; color: string; hint: string } {
   // Названия совпадают с тем, что отдаёт сервер в VendorTitle, чтобы
   // подпись и метка не расходились на разных страницах.
   const titles: Record<string, string> = {
@@ -65,7 +67,7 @@ function vendorInfo(vendor?: CameraVendor): { label: string; color: string; hint
     return {
       label: 'OpenIPC',
       color: '#4ade80',
-      hint: 'прошивка OpenIPC: доступны схема настроек, логи, NTP, присмотр и режимы съёмки',
+      hint: t('vendorBadge.openipcHint'),
     }
   }
 
@@ -74,7 +76,7 @@ function vendorInfo(vendor?: CameraVendor): { label: string; color: string; hint
     return {
       label,
       color: '#60a5fa',
-      hint: `${label}: настройка только своим API, разделы OpenIPC недоступны`,
+      hint: t('vendorBadge.genericHint', { label }),
     }
   }
 
@@ -82,8 +84,8 @@ function vendorInfo(vendor?: CameraVendor): { label: string; color: string; hint
   // может быть много, и это не поломка. Но и молчать нельзя — именно от
   // вендора зависит, какие разделы карточки доступны.
   return {
-    label: 'вендор?',
+    label: t('vendorBadge.unknownLabel'),
     color: '#94a3b8',
-    hint: 'производитель не определён: разделы OpenIPC скрыты, пока он не опознан',
+    hint: t('vendorBadge.unknownHint'),
   }
 }
