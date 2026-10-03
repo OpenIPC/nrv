@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { hostAPI, type HostStatus, type NetworkInterface, type TimeState } from '../api/host'
 import { useToast } from '../context/ToastContext'
+import LanguageCard from '../components/LanguageCard'
 import {
   Clock, Network, Server, Loader2, Save, RefreshCw, CheckCircle2, XCircle,
   AlertTriangle, Wifi, Globe, Info, ShieldAlert, Timer,
@@ -262,6 +263,11 @@ export default function ServerSettingsPage() {
         Время и сеть этого сервера. Изменения вносит отдельная служба на хосте —
         сам видеосервер системных прав не имеет.
       </p>
+
+      {/* Переключатель языка стоит первым на странице намеренно:
+          человек, который не читает по-русски, до остальных настроек
+          просто не доберётся, если не поймёт, что здесь написано. */}
+      <LanguageCard />
 
       {!available && (
         <div style={warningStyle}>

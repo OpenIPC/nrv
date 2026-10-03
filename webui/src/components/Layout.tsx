@@ -1,4 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '../hooks/useApi'
 import {
   LayoutDashboard, Video, AlertTriangle, HardDrive,
@@ -6,46 +7,50 @@ import {
   LayoutGrid, Bell, Server, ScrollText, Activity, Users, Map, EthernetPort
 } from 'lucide-react'
 
+// Ключи перевода, а не готовые подписи: подпись берётся из словаря
+// в момент отрисовки, поэтому смена языка перерисовывает меню сразу,
+// без перезагрузки страницы.
 const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Дашборд' },
+  { to: '/', icon: LayoutDashboard, key: 'nav.dashboard' },
   // Сетка идёт сразу после дашборда и перед списком камер: это основной
   // режим наблюдения, к нему обращаются чаще всего.
-  { to: '/grid', icon: LayoutGrid, label: 'Сетка' },
-  { to: '/cameras', icon: Video, label: 'Камеры' },
-  { to: '/scanner', icon: Search, label: 'Сканер' },
-  { to: '/events', icon: AlertTriangle, label: 'События' },
-  { to: '/audio-events', icon: Volume2, label: 'Звуки' },
-  { to: '/recordings', icon: HardDrive, label: 'Архив' },
+  { to: '/grid', icon: LayoutGrid, key: 'nav.grid' },
+  { to: '/cameras', icon: Video, key: 'nav.cameras' },
+  { to: '/scanner', icon: Search, key: 'nav.scanner' },
+  { to: '/events', icon: AlertTriangle, key: 'nav.events' },
+  { to: '/audio-events', icon: Volume2, key: 'nav.audioEvents' },
+  { to: '/recordings', icon: HardDrive, key: 'nav.recordings' },
   // Логи стоят после архива: и то, и другое нужно при разборе
   // происшествия — сначала смотрят запись, потом объяснение к ней.
-  { to: '/logs', icon: ScrollText, label: 'Логи' },
+  { to: '/logs', icon: ScrollText, key: 'nav.logs' },
   // Присмотр стоит рядом с логами: обе страницы нужны при разборе
   // одной и той же ситуации — сначала смотрят логи, потом стример.
-  { to: '/majestic', icon: Activity, label: 'Стример' },
-  { to: '/recognition', icon: ScanFace, label: 'Распознавание' },
-  { to: '/acs', icon: Shield, label: 'СКУД' },
+  { to: '/majestic', icon: Activity, key: 'nav.majestic' },
+  { to: '/recognition', icon: ScanFace, key: 'nav.recognition' },
+  { to: '/acs', icon: Shield, key: 'nav.acs' },
   // Планы помещений: схемы этажей с расстановкой устройств. Отдельно от
   // СКУД: там права и доступы, здесь место и состояние оборудования.
-  { to: '/plans', icon: Map, label: 'Планы' },
+  { to: '/plans', icon: Map, key: 'nav.plans' },
   // Коммутаторы рядом с планами: там видно, где стоит устройство, здесь —
   // есть ли у него питание и связь. Вместе они отвечают на вопрос «почему
   // камера пропала» без похода к потолку.
-  { to: '/switches', icon: EthernetPort, label: 'Коммутаторы' },
+  { to: '/switches', icon: EthernetPort, key: 'nav.switches' },
   // Доступ рядом со СКУД, но отдельно: там железо и события, здесь люди,
   // группы и права. Оператору, который выдаёт пропуск, не нужно
   // разбираться в настройках контроллеров.
-  { to: '/access', icon: Users, label: 'Доступ' },
-  { to: '/external-access', icon: Share2, label: 'Внешний доступ' },
+  { to: '/access', icon: Users, key: 'nav.access' },
+  { to: '/external-access', icon: Share2, key: 'nav.externalAccess' },
   // Уведомления рядом с настройками: это тоже настройка сервера,
   // но со своей страницей из-за проверки связи и журнала отправок.
-  { to: '/notifications', icon: Bell, label: 'Уведомления' },
+  { to: '/notifications', icon: Bell, key: 'nav.notifications' },
   // Настройки сервера — системные (время и сеть): держим их отдельно от
   // настроек камер, потому что ошибка здесь может прервать связь с сервером.
-  { to: '/server', icon: Server, label: 'Сервер' },
-  { to: '/settings', icon: Settings, label: 'Настройки' },
+  { to: '/server', icon: Server, key: 'nav.server' },
+  { to: '/settings', icon: Settings, key: 'nav.settings' },
 ]
 
 export default function Layout({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation()
   const { logout } = useAuth()
   const navigate = useNavigate()
 
@@ -72,7 +77,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               }
             >
               <item.icon size={20} />
-              <span>{item.label}</span>
+              <span>{t(item.key)}</span>
             </NavLink>
           ))}
         </nav>
@@ -82,7 +87,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           style={{ background: 'none', width: '100%', textAlign: 'left' }}
         >
           <LogOut size={20} />
-          <span>Выйти</span>
+          <span>{t('nav.logout')}</span>
         </button>
       </aside>
       <main className="main-content">

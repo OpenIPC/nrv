@@ -267,7 +267,69 @@ const SHOTS = [
       await page.waitForTimeout(1500)
     },
   },
+  {
+    file: '26-language-ru.png',
+    title: 'Настройки сервера: переключатель языка',
+    viewport: { width: 1440, height: 1100 },
+    prepare: async (page) => {
+      // Порядок именно такой: сначала переходим на страницу, потом
+      // переключаем язык. Переключатель есть только здесь, и попытка
+      // нажать его на другой странице ничего не делает — снимок молча
+      // получился бы на прежнем языке.
+      await page.goto(`${BASE}/server`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(4500)
+      await setLanguage(page, 'Русский')
+      await page.evaluate(() => window.scrollTo(0, 0))
+      await page.waitForTimeout(800)
+    },
+  },
+  {
+    file: '27-language-zh.png',
+    title: 'Настройки сервера: тот же экран по-китайски',
+    viewport: { width: 1440, height: 1100 },
+    prepare: async (page) => {
+      // Тот же экран на другом языке: по снимку видно, что перевод
+      // применяется целиком, включая боковое меню, а не только к надписи
+      // в самой карточке.
+      await page.goto(`${BASE}/server`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(3500)
+      await setLanguage(page, '简体中文')
+      await page.evaluate(() => window.scrollTo(0, 0))
+      await page.waitForTimeout(800)
+    },
+  },
+  {
+    file: '28-language-ko.png',
+    title: 'Настройки сервера: тот же экран по-корейски',
+    viewport: { width: 1440, height: 1100 },
+    prepare: async (page) => {
+      await page.goto(`${BASE}/server`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(3500)
+      await setLanguage(page, '한국어')
+      await page.evaluate(() => window.scrollTo(0, 0))
+      await page.waitForTimeout(800)
+    },
+  },
 ]
+
+/**
+ * Переключает язык интерфейса.
+ *
+ * Нажатие делается прямо в разметке, а не через поиск элемента: поверх
+ * страницы остаётся слой всплывающих сообщений, и обычное нажатие по
+ * координатам до кнопки не доходит.
+ *
+ * Выбор языка запоминается браузером, поэтому после съёмки возвращаем
+ * русский: иначе следующий снимок в списке оказался бы на чужом языке.
+ */
+async function setLanguage(page, label) {
+  await page.evaluate((text) => {
+    const btn = [...document.querySelectorAll('button')]
+      .find((b) => (b.innerText || '').trim() === text)
+    if (btn) btn.click()
+  }, label)
+  await page.waitForTimeout(1200)
+}
 
 /**
  * Закрывает учётные данные в адресах потоков.
