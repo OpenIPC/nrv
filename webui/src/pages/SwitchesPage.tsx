@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
-  BindProposal, MacTableState, PORT_ACTION_TITLES, PortAction, SwitchDevice,
+  BindProposal, MacTableState, PortAction, SwitchDevice,
   SwitchFound, SwitchMacEntry, SwitchPort, switchAPI,
 } from '../api/client'
 import { useAsync } from '../hooks/useApi'
@@ -25,6 +26,7 @@ import {
  * данные порта.
  */
 export default function SwitchesPage() {
+  const { t } = useTranslation()
   const { data: switches, loading, refetch } = useAsync(() => switchAPI.list(), [])
   const [selectedID, setSelectedID] = useState<string>('')
   const [showSearch, setShowSearch] = useState(false)
@@ -56,25 +58,24 @@ export default function SwitchesPage() {
         <div>
           <h1 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 22, margin: 0 }}>
             <EthernetPort size={22} />
-            Коммутаторы
+            {t('switchesPage.title')}
           </h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '4px 0 0' }}>
-            Питание портов PoE, связь и потребление: видно, пропала камера
-            вместе с питанием или осталась без линии
+            {t('switchesPage.subtitle')}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-outline" onClick={() => setShowJournal(true)} title="Журнал действий с портами">
+          <button className="btn btn-outline" onClick={() => setShowJournal(true)} title={t('switchesPage.journalHint')}>
             <RotateCcw size={14} />
-            Журнал
+            {t('switchesPage.journal')}
           </button>
-          <button className="btn btn-outline" onClick={refetch} title="Обновить состояние">
+          <button className="btn btn-outline" onClick={refetch} title={t('switchesPage.refreshHint')}>
             <RefreshCw size={14} />
-            Обновить
+            {t('switchesPage.refresh')}
           </button>
           <button className="btn btn-primary" onClick={() => setShowSearch(true)}>
             <Plus size={14} />
-            Добавить
+            {t('switchesPage.add')}
           </button>
         </div>
       </div>
@@ -108,7 +109,7 @@ export default function SwitchesPage() {
               device={selected}
               onRefresh={refetch}
               onOpenSettings={() => setShowSettings(true)}
-              onDeleted={() => { setSelectedID(''); refetch(); toast.success('Коммутатор удалён') }}
+              onDeleted={() => { setSelectedID(''); refetch(); toast.success(t('switchesPage.deleted')) }}
             />
           )}
         </div>
@@ -133,6 +134,7 @@ function SwitchList({ switches, selectedID, onSelect }: {
   selectedID: string
   onSelect: (id: string) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div style={{ width: 290, flexShrink: 0 }}>
       <div className="card" style={{ padding: 6 }}>
@@ -168,7 +170,7 @@ function SwitchList({ switches, selectedID, onSelect }: {
                 </span>
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3, paddingLeft: 16 }}>
-                {s.model} · {s.ip} · портов {s.port_count}
+                {s.model} · {s.ip} · {t('switchesPage.portsCount', { count: s.port_count })}
               </div>
               {s.location && (
                 <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 1, paddingLeft: 16 }}>
@@ -188,19 +190,28 @@ function SwitchList({ switches, selectedID, onSelect }: {
 // ---------------------------------------------------------------------------
 
 /**
- * Формулировки результата действия для уведомления.
+ * Ключи формулировок результата действия для уведомления.
  *
- * Отдельно от PORT_ACTION_TITLES: там подпись кнопки («Перезагрузить
- * питанием» — приказ), здесь прошедшее время («питание перезагружено» —
- * отчёт). Подстановка подписи кнопки давала бы «Порт 3: перезагрузить
- * питанием», то есть в уведомлении звучала бы команда вместо результата.
+ * Отдельно от подписей кнопок: там приказ («Перезагрузить питанием»),
+ * здесь отчёт («питание перезагружено»). Подстановка подписи кнопки дала бы
+ * «Порт 3: перезагрузить питанием» — в уведомлении звучала бы команда
+ * вместо результата.
  */
-const PORT_ACTION_DONE: Record<PortAction, string> = {
-  power_on: 'питание включено',
-  power_off: 'питание выключено',
-  power_cycle: 'питание перезагружено',
-  extend_on: 'режим удлинения включён',
-  extend_off: 'обычный режим включён',
+const PORT_ACTION_DONE_KEYS: Record<PortAction, string> = {
+  power_on: 'switchesPage.donePowerOn',
+  power_off: 'switchesPage.donePowerOff',
+  power_cycle: 'switchesPage.donePowerCycle',
+  extend_on: 'switchesPage.doneExtendOn',
+  extend_off: 'switchesPage.doneExtendOff',
+}
+
+/** Ключи подписей действий — нужны в журнале, где действие показано строкой. */
+const PORT_ACTION_TITLE_KEYS: Record<PortAction, string> = {
+  power_on: 'switchesPage.actionPowerOn',
+  power_off: 'switchesPage.actionPowerOff',
+  power_cycle: 'switchesPage.actionPowerCycle',
+  extend_on: 'switchesPage.actionExtendOn',
+  extend_off: 'switchesPage.actionExtendOff',
 }
 
 function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
@@ -213,6 +224,7 @@ function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
   const [busy, setBusy] = useState<number | null>(null)
   const [confirming, setConfirming] = useState<{ port: SwitchPort; action: PortAction } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const { t } = useTranslation()
   const toast = useToast()
 
   const current = data || device
@@ -226,11 +238,14 @@ function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
     setBusy(port.port_number)
     try {
       await switchAPI.portAction(device.id, port.port_number, action)
-      toast.success(`Порт ${port.port_number}: ${PORT_ACTION_DONE[action]}`)
+      toast.success(t('switchesPage.portDone', {
+        port: port.port_number,
+        result: t(PORT_ACTION_DONE_KEYS[action]),
+      }))
       refetch()
       onRefresh()
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Не удалось выполнить действие')
+      toast.error(e.response?.data?.error || t('switchesPage.actionFailed'))
     } finally {
       setBusy(null)
       setConfirming(null)
@@ -243,12 +258,12 @@ function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
       const res = await switchAPI.poll(device.id)
       // Неудачный опрос — не ошибка системы, а состояние устройства:
       // показываем описание причины, а не общее «ошибка».
-      if (res.data.ok) toast.success('Состояние обновлено')
-      else toast.error(res.data.error || 'Коммутатор не ответил')
+      if (res.data.ok) toast.success(t('switchesPage.stateUpdated'))
+      else toast.error(res.data.error || t('switchesPage.switchNoAnswer'))
       refetch()
       onRefresh()
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Не удалось опросить коммутатор')
+      toast.error(e.response?.data?.error || t('switchesPage.pollFailed'))
     } finally {
       setBusy(null)
     }
@@ -259,7 +274,7 @@ function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
       await switchAPI.remove(device.id)
       onDeleted()
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Не удалось удалить коммутатор')
+      toast.error(e.response?.data?.error || t('switchesPage.deleteFailed'))
     }
   }
 
@@ -277,7 +292,7 @@ function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
               <StatusPill online={current.online} />
             </div>
             <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 6 }}>
-              {current.model} · {current.ip} · прошивка {current.firmware || '—'}
+              {current.model} · {current.ip} · {t('switchesPage.firmware')} {current.firmware || '—'}
               {current.location ? ` · ${current.location}` : ''}
             </div>
             <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 2 }}>
@@ -285,13 +300,13 @@ function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-            <button className="btn btn-outline btn-sm" onClick={doPoll} disabled={busy === -1} title="Опросить сейчас">
+            <button className="btn btn-outline btn-sm" onClick={doPoll} disabled={busy === -1} title={t('switchesPage.pollNowHint')}>
               <RefreshCw size={14} />
             </button>
-            <button className="btn btn-outline btn-sm" onClick={onOpenSettings} title="Настройки">
+            <button className="btn btn-outline btn-sm" onClick={onOpenSettings} title={t('switchesPage.settingsHint')}>
               <Settings size={14} />
             </button>
-            <button className="btn btn-outline btn-sm" onClick={() => setConfirmDelete(true)} title="Удалить">
+            <button className="btn btn-outline btn-sm" onClick={() => setConfirmDelete(true)} title={t('switchesPage.deleteHint')}>
               <Trash2 size={14} />
             </button>
           </div>
@@ -308,19 +323,23 @@ function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
         )}
 
         <div style={{ display: 'flex', gap: 20, marginTop: 14, flexWrap: 'wrap' }}>
-          <Metric icon={<Plug size={13} />} label="Портов PoE" value={portsReady ? String(poePorts.length) : '—'} />
-          <Metric icon={<Cable size={13} />} label="Портов с линком" value={portsReady ? `${activeLinks} из ${ports.length}` : '—'} />
-          <Metric icon={<Zap size={13} />} label="Потребление" value={portsReady ? `${totalWatts.toFixed(1)} Вт` : '—'} />
-          <Metric icon={<Gauge size={13} />} label="Напряжение" value={`${current.voltage.toFixed(1)} В`} />
+          <Metric icon={<Plug size={13} />} label={t('switchesPage.metricPoe')} value={portsReady ? String(poePorts.length) : '—'} />
+          <Metric
+            icon={<Cable size={13} />}
+            label={t('switchesPage.metricLinks')}
+            value={portsReady ? t('switchesPage.metricLinksValue', { active: activeLinks, total: ports.length }) : '—'}
+          />
+          <Metric icon={<Zap size={13} />} label={t('switchesPage.metricWatts')} value={portsReady ? `${totalWatts.toFixed(1)} ${t('switchesPage.unitWatt')}` : '—'} />
+          <Metric icon={<Gauge size={13} />} label={t('switchesPage.metricVoltage')} value={`${current.voltage.toFixed(1)} ${t('switchesPage.unitVolt')}`} />
           {current.temperature > 0 && (
-            <Metric icon={<Thermometer size={13} />} label="Температура" value={`${current.temperature.toFixed(1)} °C`} />
+            <Metric icon={<Thermometer size={13} />} label={t('switchesPage.metricTemp')} value={`${current.temperature.toFixed(1)} °C`} />
           )}
-          <Metric icon={<Camera size={13} />} label="Камер привязано" value={String(current.camera_count)} />
+          <Metric icon={<Camera size={13} />} label={t('switchesPage.metricCameras')} value={String(current.camera_count)} />
         </div>
       </div>
 
       <div className="card">
-        <h3 style={{ margin: '0 0 12px', fontSize: 15 }}>Порты</h3>
+        <h3 style={{ margin: '0 0 12px', fontSize: 15 }}>{t('switchesPage.ports')}</h3>
         {loading && !ports.length ? (
           <div className="spinner" />
         ) : (
@@ -375,6 +394,7 @@ function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; 
 }
 
 function StatusPill({ online }: { online: boolean }) {
+  const { t } = useTranslation()
   return (
     <span style={{
       fontSize: 11,
@@ -384,7 +404,7 @@ function StatusPill({ online }: { online: boolean }) {
       color: online ? 'var(--success)' : 'var(--danger)',
       fontWeight: 600,
     }}>
-      {online ? 'на связи' : 'нет связи'}
+      {online ? t('switchesPage.online') : t('switchesPage.offline')}
     </span>
   )
 }
@@ -398,17 +418,18 @@ function PortsTable({ ports, busy, onAction }: {
   busy: number | null
   onAction: (port: SwitchPort, action: PortAction) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
           <tr style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'left' }}>
-            <th style={thStyle}>Порт</th>
-            <th style={thStyle}>Связь</th>
-            <th style={thStyle}>Питание</th>
-            <th style={thStyle}>Потребление</th>
-            <th style={thStyle}>Устройство</th>
-            <th style={{ ...thStyle, textAlign: 'right' }}>Действия</th>
+            <th style={thStyle}>{t('switchesPage.thPort')}</th>
+            <th style={thStyle}>{t('switchesPage.thLink')}</th>
+            <th style={thStyle}>{t('switchesPage.thPower')}</th>
+            <th style={thStyle}>{t('switchesPage.thWatts')}</th>
+            <th style={thStyle}>{t('switchesPage.thDevice')}</th>
+            <th style={{ ...thStyle, textAlign: 'right' }}>{t('switchesPage.thActions')}</th>
           </tr>
         </thead>
         <tbody>
@@ -432,12 +453,13 @@ function PortRow({ port, busy, onAction }: {
   busy: boolean
   onAction: (port: SwitchPort, action: PortAction) => void
 }) {
+  const { t } = useTranslation()
   return (
     <tr style={{ borderBottom: '1px solid var(--border)' }}>
       <td style={tdStyle}>
         <span style={{ fontWeight: 600 }}>{port.port_number}</span>
         {port.is_uplink && (
-          <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--warning)' }} title="Транзитный порт: через него идёт канал связи с сервером">
+          <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--warning)' }} title={t('switchesPage.uplinkHint')}>
             uplink
           </span>
         )}
@@ -445,19 +467,19 @@ function PortRow({ port, busy, onAction }: {
       <td style={tdStyle}>
         {port.link_up ? (
           <span style={{ color: 'var(--success)' }}>
-            {port.speed_mbps >= 1000 ? '1 Гбит' : `${port.speed_mbps} Мбит`}
+            {port.speed_mbps >= 1000 ? t('switchesPage.speedGbit') : t('switchesPage.speedMbit', { speed: port.speed_mbps })}
           </span>
         ) : (
-          <span style={{ color: 'var(--text-secondary)' }}>нет</span>
+          <span style={{ color: 'var(--text-secondary)' }}>{t('switchesPage.noLink')}</span>
         )}
       </td>
       <td style={tdStyle}>
         {!port.poe_capable ? (
           <span style={{ color: 'var(--text-secondary)' }}>—</span>
         ) : port.poe_enabled ? (
-          <span style={{ color: 'var(--success)' }}>вкл</span>
+          <span style={{ color: 'var(--success)' }}>{t('switchesPage.powerOn')}</span>
         ) : (
-          <span style={{ color: 'var(--text-secondary)' }}>выкл</span>
+          <span style={{ color: 'var(--text-secondary)' }}>{t('switchesPage.powerOff')}</span>
         )}
       </td>
       <td style={tdStyle}>
@@ -467,8 +489,8 @@ function PortRow({ port, busy, onAction }: {
             различие было заметно. */}
         {port.poe_capable && port.poe_enabled
           ? port.poe_watts > 0
-            ? `${port.poe_watts.toFixed(1)} Вт`
-            : <span style={{ color: 'var(--warning)' }}>0 Вт</span>
+            ? `${port.poe_watts.toFixed(1)} ${t('switchesPage.unitWatt')}`
+            : <span style={{ color: 'var(--warning)' }}>0 {t('switchesPage.unitWatt')}</span>
           : '—'}
       </td>
       <td style={tdStyle}>
@@ -484,7 +506,7 @@ function PortRow({ port, busy, onAction }: {
             {port.camera_name}
           </a>
         ) : port.link_up ? (
-          <span style={{ color: 'var(--text-secondary)' }}>устройство не привязано</span>
+          <span style={{ color: 'var(--text-secondary)' }}>{t('switchesPage.deviceNotBound')}</span>
         ) : (
           <span style={{ color: 'var(--text-secondary)' }}>—</span>
         )}
@@ -497,7 +519,7 @@ function PortRow({ port, busy, onAction }: {
                 className="btn btn-outline btn-sm"
                 disabled={busy}
                 onClick={() => onAction(port, 'power_off')}
-                title="Выключить питание"
+                title={t('switchesPage.powerOffTitle')}
               >
                 <Plug size={13} />
               </button>
@@ -506,7 +528,7 @@ function PortRow({ port, busy, onAction }: {
                 className="btn btn-outline btn-sm"
                 disabled={busy}
                 onClick={() => onAction(port, 'power_on')}
-                title="Включить питание"
+                title={t('switchesPage.powerOnTitle')}
               >
                 <Zap size={13} />
               </button>
@@ -515,7 +537,7 @@ function PortRow({ port, busy, onAction }: {
               className="btn btn-outline btn-sm"
               disabled={busy}
               onClick={() => onAction(port, 'power_cycle')}
-              title="Перезагрузить питанием: снять и снова подать"
+              title={t('switchesPage.powerCycleTitle')}
             >
               <RotateCcw size={13} />
             </button>
@@ -524,7 +546,7 @@ function PortRow({ port, busy, onAction }: {
           // Неактивная кнопка без объяснения заставляет искать причину
           // наугад, поэтому показываем текст причины.
           <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-            {port.power_control_note || 'управление недоступно'}
+            {port.power_control_note || t('switchesPage.powerControlUnavailable')}
           </span>
         )}
       </td>
@@ -559,6 +581,7 @@ function MacTableCard({ device, onBound }: {
   const [proposals, setProposals] = useState<BindProposal[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [applying, setApplying] = useState(false)
+  const { t } = useTranslation()
   const toast = useToast()
 
   const entries = device.mac_entries || []
@@ -570,7 +593,7 @@ function MacTableCard({ device, onBound }: {
       const res = await switchAPI.bindProposals(device.id)
       setProposals(res.data)
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Не удалось получить предложения')
+      toast.error(e.response?.data?.error || t('switchesPage.proposalsFailed'))
     } finally {
       setLoading(false)
     }
@@ -580,11 +603,11 @@ function MacTableCard({ device, onBound }: {
     setApplying(true)
     try {
       const res = await switchAPI.applyBindings(device.id)
-      toast.success(`Привязано камер: ${res.data.applied}`)
+      toast.success(t('switchesPage.bindingsApplied', { count: res.data.applied }))
       setProposals(null)
       onBound()
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Не удалось применить привязки')
+      toast.error(e.response?.data?.error || t('switchesPage.applyFailed'))
     } finally {
       setApplying(false)
     }
@@ -594,11 +617,10 @@ function MacTableCard({ device, onBound }: {
   if (state === 'unsupported') {
     return (
       <div className="card" style={{ marginTop: 16 }}>
-        <h3 style={{ margin: '0 0 8px', fontSize: 15 }}>Устройства на портах</h3>
+        <h3 style={{ margin: '0 0 8px', fontSize: 15 }}>{t('switchesPage.macTitle')}</h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0 }}>
-          {device.mac_table_note || 'Модель не поддерживает чтение таблицы MAC.'}{' '}
-          Какие устройства подключены к портам, эта модель сообщить не может —
-          привязку камер задайте вручную в их карточках.
+          {device.mac_table_note || t('switchesPage.macUnsupported')}{' '}
+          {t('switchesPage.macUnsupportedTail')}
         </p>
       </div>
     )
@@ -611,11 +633,11 @@ function MacTableCard({ device, onBound }: {
   return (
     <div className="card" style={{ marginTop: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <h3 style={{ margin: 0, fontSize: 15 }}>Устройства на портах</h3>
+        <h3 style={{ margin: 0, fontSize: 15 }}>{t('switchesPage.macTitle')}</h3>
         {state === 'ok' && withPort.length > 0 && (
           <button className="btn btn-outline btn-sm" onClick={findProposals} disabled={loading}>
             <Link2 size={14} />
-            {loading ? 'Ищу…' : 'Определить привязки камер'}
+            {loading ? t('switchesPage.finding') : t('switchesPage.findProposals')}
           </button>
         )}
       </div>
@@ -624,29 +646,27 @@ function MacTableCard({ device, onBound }: {
         <div style={warnBoxStyle}>
           <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
           <span>
-            {device.mac_table_note}. Ниже — адреса устройств на этом
-            коммутаторе, но без привязки к портам.
+            {device.mac_table_note}. {t('switchesPage.macNoPortsTail')}
           </span>
         </div>
       )}
 
       {entries.length === 0 ? (
         <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0 }}>
-          Устройства не обнаружены. Таблица заполняется по мере появления
-          трафика и обновляется при опросе.
+          {t('switchesPage.noEntries')}
         </p>
       ) : (
         <>
           <div style={{ display: 'flex', gap: 18, marginBottom: 12, flexWrap: 'wrap' }}>
-            <SmallMetric label="Всего адресов" value={String(entries.length)} />
+            <SmallMetric label={t('switchesPage.metricTotalAddr')} value={String(entries.length)} />
             {state === 'ok' && (
               <>
-                <SmallMetric label="На портах PoE" value={String(withPort.length)} />
-                <SmallMetric label="За транзитным портом" value={String(viaUplink.length)} />
+                <SmallMetric label={t('switchesPage.metricOnPoe')} value={String(withPort.length)} />
+                <SmallMetric label={t('switchesPage.metricViaUplink')} value={String(viaUplink.length)} />
                 {/* Неопознанные устройства — самая полезная часть: это то,
                     чего нет в списке камер, и что стоит проверить. */}
                 <SmallMetric
-                  label="Не опознано"
+                  label={t('switchesPage.metricUnknownAddr')}
                   value={String(unknown.length)}
                   accent={unknown.length > 0}
                 />
@@ -658,9 +678,9 @@ function MacTableCard({ device, onBound }: {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'left' }}>
-                  <th style={thStyle}>Порт</th>
-                  <th style={thStyle}>Адрес</th>
-                  <th style={thStyle}>Устройство</th>
+                  <th style={thStyle}>{t('switchesPage.thPort')}</th>
+                  <th style={thStyle}>{t('switchesPage.thAddress')}</th>
+                  <th style={thStyle}>{t('switchesPage.thDevice')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -681,11 +701,11 @@ function MacTableCard({ device, onBound }: {
                         </a>
                       ) : e.via_uplink ? (
                         <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
-                          за транзитным портом
+                          {t('switchesPage.viaUplink')}
                         </span>
                       ) : (
                         <span style={{ color: 'var(--warning)', fontSize: 12 }}>
-                          не опознано
+                          {t('switchesPage.unknownDevice')}
                         </span>
                       )}
                     </td>
@@ -716,15 +736,14 @@ function ProposalsPanel({ proposals, applying, onClose, onApply }: {
   onClose: () => void
   onApply: () => void
 }) {
+  const { t } = useTranslation()
   if (proposals.length === 0) {
     return (
       <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 10px' }}>
-          Готовых привязок не нашлось: адреса камер либо не совпали с таблицей,
-          либо камеры подключены не к этому коммутатору. Проверьте, что у камер
-          заполнено поле MAC.
+          {t('switchesPage.noProposals')}
         </p>
-        <button className="btn btn-outline btn-sm" onClick={onClose}>Понятно</button>
+        <button className="btn btn-outline btn-sm" onClick={onClose}>{t('switchesPage.gotIt')}</button>
       </div>
     )
   }
@@ -732,15 +751,14 @@ function ProposalsPanel({ proposals, applying, onClose, onApply }: {
   return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
       <p style={{ fontSize: 13, margin: '0 0 10px' }}>
-        Найдено привязок: <strong>{proposals.length}</strong>. Привязка
-        определяется по совпадению адреса камеры с таблицей коммутатора.
+        {t('switchesPage.proposalsFound')} <strong>{proposals.length}</strong>. {t('switchesPage.proposalsExplain')}
       </p>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 12 }}>
         <thead>
           <tr style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'left' }}>
-            <th style={thStyle}>Камера</th>
-            <th style={thStyle}>Порт</th>
-            <th style={thStyle}>Было</th>
+            <th style={thStyle}>{t('switchesPage.thCamera')}</th>
+            <th style={thStyle}>{t('switchesPage.thPort')}</th>
+            <th style={thStyle}>{t('switchesPage.thWas')}</th>
           </tr>
         </thead>
         <tbody>
@@ -755,8 +773,8 @@ function ProposalsPanel({ proposals, applying, onClose, onApply }: {
                 {/* Показываем прежнюю привязку: иначе оператор не поймёт,
                     что привязка сдвинется, а не появится впервые. */}
                 {p.current_port
-                  ? `порт ${p.current_port}${p.current_switch ? ` (${p.current_switch})` : ''}`
-                  : 'не привязана'}
+                  ? `${t('switchesPage.portN', { n: p.current_port })}${p.current_switch ? ` (${p.current_switch})` : ''}`
+                  : t('switchesPage.notBound')}
               </td>
             </tr>
           ))}
@@ -764,11 +782,11 @@ function ProposalsPanel({ proposals, applying, onClose, onApply }: {
       </table>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button className="btn btn-outline btn-sm" onClick={onClose} disabled={applying}>
-          Отмена
+          {t('switchesPage.cancel')}
         </button>
         <button className="btn btn-primary btn-sm" onClick={onApply} disabled={applying}>
           <Link2 size={14} />
-          {applying ? 'Применяю…' : 'Применить'}
+          {applying ? t('switchesPage.applying') : t('switchesPage.apply')}
         </button>
       </div>
     </div>
@@ -814,30 +832,38 @@ function ConfirmAction({ port, action, onCancel, onConfirm }: {
   onConfirm: () => void
 }) {
   const [busy, setBusy] = useState(false)
-  const name = port.camera_name ? `«${port.camera_name}»` : 'устройство'
+  const { t } = useTranslation()
+  const name = port.camera_name ? `«${port.camera_name}»` : t('switchesPage.device')
 
   return (
     <Overlay onClose={onCancel}>
       <h3 style={{ margin: '0 0 10px', fontSize: 16 }}>
-        {action === 'power_cycle' ? 'Перезагрузить питанием?' : 'Выключить питание?'}
+        {action === 'power_cycle' ? t('switchesPage.confirmPowerCycleTitle') : t('switchesPage.confirmPowerOffTitle')}
       </h3>
       <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 6px' }}>
-        Порт {port.port_number}, {name}
-        {port.poe_watts > 0 ? ` (потребление ${port.poe_watts.toFixed(1)} Вт)` : ''}.
+        {t('switchesPage.confirmLine', {
+          port: port.port_number,
+          name,
+          watts: port.poe_watts > 0 ? t('switchesPage.confirmWatts', { watts: port.poe_watts.toFixed(1) }) : '',
+        })}
       </p>
       <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 16px' }}>
         {action === 'power_cycle'
-          ? 'Питание будет снято и подано снова. Устройство отключится примерно на минуту и загрузится заново.'
-          : 'Питание будет снято. Устройство отключится и само не включится — подать питание нужно будет вручную.'}
+          ? t('switchesPage.confirmPowerCycleText')
+          : t('switchesPage.confirmPowerOffText')}
       </p>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <button className="btn btn-outline" onClick={onCancel} disabled={busy}>Отмена</button>
+        <button className="btn btn-outline" onClick={onCancel} disabled={busy}>{t('switchesPage.cancel')}</button>
         <button
           className="btn btn-primary"
           disabled={busy}
           onClick={() => { setBusy(true); onConfirm() }}
         >
-          {busy ? 'Выполняется…' : action === 'power_cycle' ? 'Перезагрузить' : 'Выключить'}
+          {busy
+            ? t('switchesPage.inProgress')
+            : action === 'power_cycle'
+              ? t('switchesPage.reboot')
+              : t('switchesPage.turnOff')}
         </button>
       </div>
     </Overlay>
@@ -850,18 +876,17 @@ function ConfirmDelete({ device, onCancel, onConfirm }: {
   onConfirm: () => void
 }) {
   const [busy, setBusy] = useState(false)
+  const { t } = useTranslation()
   return (
     <Overlay onClose={onCancel}>
-      <h3 style={{ margin: '0 0 10px', fontSize: 16 }}>Удалить коммутатор?</h3>
+      <h3 style={{ margin: '0 0 10px', fontSize: 16 }}>{t('switchesPage.confirmDeleteTitle')}</h3>
       <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 16px' }}>
-        {device.name || device.sn} будет удалён, состояние портов и привязки камер —
-        вместе с ним. Сами камеры останутся, но сведения о том, к какому порту они
-        были подключены, придётся заводить заново.
+        {t('switchesPage.confirmDeleteText', { name: device.name || device.sn })}
       </p>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <button className="btn btn-outline" onClick={onCancel} disabled={busy}>Отмена</button>
+        <button className="btn btn-outline" onClick={onCancel} disabled={busy}>{t('switchesPage.cancel')}</button>
         <button className="btn btn-primary" disabled={busy} onClick={() => { setBusy(true); onConfirm() }}>
-          {busy ? 'Удаляю…' : 'Удалить'}
+          {busy ? t('switchesPage.deleting') : t('common.delete')}
         </button>
       </div>
     </Overlay>
@@ -880,6 +905,7 @@ function SearchModal({ onClose, onAdded }: {
   const [error, setError] = useState('')
   const [adding, setAdding] = useState<string>('')
   const [passwords, setPasswords] = useState<Record<string, string>>({})
+  const { t } = useTranslation()
   const toast = useToast()
 
   const run = async () => {
@@ -889,7 +915,7 @@ function SearchModal({ onClose, onAdded }: {
       const res = await switchAPI.search()
       setFound(res.data)
     } catch (e: any) {
-      setError(e.response?.data?.error || 'Поиск не удался')
+      setError(e.response?.data?.error || t('switchesPage.searchFailed'))
     }
   }
 
@@ -903,10 +929,10 @@ function SearchModal({ onClose, onAdded }: {
         name: dev.name || `${dev.model || dev.sn}`,
         password: passwords[dev.sn] || '',
       })
-      toast.success(`Добавлен ${res.data.name}`)
+      toast.success(t('switchesPage.added', { name: res.data.name }))
       onAdded(res.data.id)
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Не удалось добавить коммутатор')
+      toast.error(e.response?.data?.error || t('switchesPage.addFailed'))
     } finally {
       setAdding('')
     }
@@ -915,11 +941,11 @@ function SearchModal({ onClose, onAdded }: {
   return (
     <Overlay onClose={onClose} wide>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h3 style={{ margin: 0, fontSize: 16 }}>Поиск коммутаторов в сети</h3>
+        <h3 style={{ margin: 0, fontSize: 16 }}>{t('switchesPage.searchTitle')}</h3>
         <div style={{ display: 'flex', gap: 6 }}>
           <button className="btn btn-outline btn-sm" onClick={run}>
             <RefreshCw size={14} />
-            Искать снова
+            {t('switchesPage.searchAgain')}
           </button>
           <button className="btn btn-outline btn-sm" onClick={onClose}><X size={14} /></button>
         </div>
@@ -931,14 +957,12 @@ function SearchModal({ onClose, onAdded }: {
         <div style={{ padding: 30, textAlign: 'center', color: 'var(--text-secondary)' }}>
           <div className="spinner" />
           <p style={{ fontSize: 13, marginTop: 12 }}>
-            Идёт поиск. Коммутаторы отвечают на широковещательный запрос
-            в течение нескольких секунд.
+            {t('switchesPage.searchRunning')}
           </p>
         </div>
       ) : found.length === 0 ? (
         <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
-          Коммутаторы не найдены. Проверьте, что они включены и находятся
-          в той же подсети, что и сервер.
+          {t('switchesPage.searchNone')}
         </p>
       ) : (
         <div>
@@ -955,7 +979,7 @@ function SearchModal({ onClose, onAdded }: {
                 </div>
               </div>
               {dev.added ? (
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>уже добавлен</span>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('switchesPage.alreadyAdded')}</span>
               ) : (
                 <>
                   {/* Пароль нужен только части моделей, и заранее это
@@ -963,7 +987,7 @@ function SearchModal({ onClose, onAdded }: {
                       по-разному. Пустое поле — попытка без входа. */}
                   <input
                     type="password"
-                    placeholder="пароль (если нужен)"
+                    placeholder={t('switchesPage.passwordPlaceholder')}
                     value={passwords[dev.sn] || ''}
                     onChange={(e) => setPasswords({ ...passwords, [dev.sn]: e.target.value })}
                     style={{ width: 170, fontSize: 12 }}
@@ -974,7 +998,7 @@ function SearchModal({ onClose, onAdded }: {
                     onClick={() => add(dev)}
                   >
                     <Download size={13} />
-                    {adding === dev.sn ? 'Добавляю…' : 'Добавить'}
+                    {adding === dev.sn ? t('switchesPage.adding') : t('switchesPage.add')}
                   </button>
                 </>
               )}
@@ -1001,6 +1025,7 @@ function SettingsModal({ device, onClose, onSaved }: {
   const [password, setPassword] = useState('')
   const [changePassword, setChangePassword] = useState(false)
   const [busy, setBusy] = useState(false)
+  const { t } = useTranslation()
   const toast = useToast()
 
   const save = async () => {
@@ -1014,10 +1039,10 @@ function SettingsModal({ device, onClose, onSaved }: {
         // формы стирало бы его у закрытых моделей.
         ...(changePassword ? { password } : {}),
       })
-      toast.success('Настройки сохранены')
+      toast.success(t('switchesPage.saved'))
       onSaved()
     } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Не удалось сохранить')
+      toast.error(e.response?.data?.error || t('switchesPage.saveFailed'))
     } finally {
       setBusy(false)
     }
@@ -1026,33 +1051,30 @@ function SettingsModal({ device, onClose, onSaved }: {
   return (
     <Overlay onClose={onClose} wide>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h3 style={{ margin: 0, fontSize: 16 }}>Настройки коммутатора</h3>
+        <h3 style={{ margin: 0, fontSize: 16 }}>{t('switchesPage.settingsTitle')}</h3>
         <button className="btn btn-outline btn-sm" onClick={onClose}><X size={14} /></button>
       </div>
 
-      <label style={labelStyle}>Название</label>
+      <label style={labelStyle}>{t('switchesPage.name')}</label>
       <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
 
-      <label style={labelStyle}>Расположение</label>
+      <label style={labelStyle}>{t('switchesPage.location')}</label>
       <input
         value={location}
         onChange={(e) => setLocation(e.target.value)}
-        placeholder="Серверная, щит у входа…"
+        placeholder={t('switchesPage.locationPlaceholder')}
         style={inputStyle}
       />
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '-6px 0 12px' }}>
-        Нужно, чтобы при неисправности было понятно, куда идти.
+        {t('switchesPage.locationHint')}
       </p>
 
       <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
         <input type="checkbox" checked={reversed} onChange={(e) => setReversed(e.target.checked)} />
-        Обратный порядок нумерации портов
+        {t('switchesPage.reversed')}
       </label>
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '-6px 0 12px' }}>
-        У части моделей первый порт на корпусе соответствует последнему в ответе
-        устройства. Порядок определяется автоматически по серийному номеру, но
-        правило выведено по известным моделям и на новой может не сработать.
-        Ошибка здесь означает, что команда уйдёт не на тот порт.
+        {t('switchesPage.reversedHint')}
       </p>
 
       <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1061,7 +1083,7 @@ function SettingsModal({ device, onClose, onSaved }: {
           checked={changePassword}
           onChange={(e) => setChangePassword(e.target.checked)}
         />
-        Изменить пароль
+        {t('switchesPage.changePassword')}
       </label>
       {changePassword && (
         <>
@@ -1069,26 +1091,24 @@ function SettingsModal({ device, onClose, onSaved }: {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Пароль коммутатора"
+            placeholder={t('switchesPage.switchPasswordPlaceholder')}
             style={inputStyle}
           />
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '-6px 0 12px' }}>
-            Нужен только моделям, требующим вход. Пароль принимается устройством
-            открытым текстом — протокол не предусматривает иначе. Пустое поле
-            снимает пароль.
+            {t('switchesPage.passwordHint')}
           </p>
         </>
       )}
       {!changePassword && device.has_password && (
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '-6px 0 12px' }}>
-          Пароль задан. Значение не показывается — его можно только заменить.
+          {t('switchesPage.passwordSet')}
         </p>
       )}
 
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
-        <button className="btn btn-outline" onClick={onClose} disabled={busy}>Отмена</button>
+        <button className="btn btn-outline" onClick={onClose} disabled={busy}>{t('switchesPage.cancel')}</button>
         <button className="btn btn-primary" onClick={save} disabled={busy || !name.trim()}>
-          {busy ? 'Сохраняю…' : 'Сохранить'}
+          {busy ? t('switchesPage.saving') : t('switchesPage.save')}
         </button>
       </div>
     </Overlay>
@@ -1100,34 +1120,34 @@ function SettingsModal({ device, onClose, onSaved }: {
 // ---------------------------------------------------------------------------
 
 function JournalModal({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation()
   const { data: events, loading } = useAsync(() => switchAPI.events(undefined, 200), [])
 
   return (
     <Overlay onClose={onClose} wide>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h3 style={{ margin: 0, fontSize: 16 }}>Журнал действий с портами</h3>
+        <h3 style={{ margin: 0, fontSize: 16 }}>{t('switchesPage.journalTitle')}</h3>
         <button className="btn btn-outline btn-sm" onClick={onClose}><X size={14} /></button>
       </div>
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 0 }}>
-        Нужен, чтобы отличить отказ камеры от последствий чужой перезагрузки:
-        при разборе инцидента видно, кто, когда и на каком порту что сделал.
+        {t('switchesPage.journalIntro')}
       </p>
 
       {loading ? (
         <div className="spinner" />
       ) : (events || []).length === 0 ? (
-        <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Записей пока нет.</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{t('switchesPage.noRecords')}</p>
       ) : (
         <div style={{ maxHeight: 420, overflowY: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ color: 'var(--text-secondary)', fontSize: 11, textAlign: 'left' }}>
-                <th style={thStyle}>Время</th>
-                <th style={thStyle}>Коммутатор</th>
-                <th style={thStyle}>Порт</th>
-                <th style={thStyle}>Действие</th>
-                <th style={thStyle}>Кто</th>
-                <th style={thStyle}>Результат</th>
+                <th style={thStyle}>{t('switchesPage.thTime')}</th>
+                <th style={thStyle}>{t('switchesPage.thSwitch')}</th>
+                <th style={thStyle}>{t('switchesPage.thPort')}</th>
+                <th style={thStyle}>{t('switchesPage.thActions')}</th>
+                <th style={thStyle}>{t('switchesPage.thWho')}</th>
+                <th style={thStyle}>{t('switchesPage.thResult')}</th>
               </tr>
             </thead>
             <tbody>
@@ -1139,10 +1159,10 @@ function JournalModal({ onClose }: { onClose: () => void }) {
                     {e.port_number}
                     {e.camera_name ? ` · ${e.camera_name}` : ''}
                   </td>
-                  <td style={tdStyle}>{PORT_ACTION_TITLES[e.action] || e.action}</td>
+                  <td style={tdStyle}>{t(PORT_ACTION_TITLE_KEYS[e.action] ?? e.action, { defaultValue: e.action })}</td>
                   <td style={tdStyle}>{e.actor || '—'}</td>
                   <td style={{ ...tdStyle, color: e.result === 'ok' ? 'var(--success)' : 'var(--danger)' }}>
-                    {e.result === 'ok' ? 'выполнено' : e.message || 'ошибка'}
+                    {e.result === 'ok' ? t('switchesPage.resultOk') : e.message || t('switchesPage.resultError')}
                   </td>
                 </tr>
               ))}
@@ -1184,18 +1204,17 @@ function Overlay({ children, onClose, wide }: {
 }
 
 function EmptyState({ onSearch }: { onSearch: () => void }) {
+  const { t } = useTranslation()
   return (
     <div className="card" style={{ textAlign: 'center', padding: 50 }}>
       <EthernetPort size={34} style={{ color: 'var(--text-secondary)' }} />
-      <h3 style={{ margin: '14px 0 6px', fontSize: 16 }}>Коммутаторы не добавлены</h3>
+      <h3 style={{ margin: '14px 0 6px', fontSize: 16 }}>{t('switchesPage.emptyTitle')}</h3>
       <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 18px', maxWidth: 460, marginInline: 'auto' }}>
-        Добавьте управляемые PoE-коммутаторы — и станет видно, есть ли питание
-        и связь на каждом порту. Это позволит отличать зависшую камеру от
-        обрыва линии и перезагружать камеру питанием, не поднимаясь к ней.
+        {t('switchesPage.emptyText')}
       </p>
       <button className="btn btn-primary" onClick={onSearch}>
         <Search size={14} />
-        Найти коммутаторы в сети
+        {t('switchesPage.emptyAction')}
       </button>
     </div>
   )
