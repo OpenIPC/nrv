@@ -1335,4 +1335,48 @@ export default {
     restarting: '正在重启…',
     restart: '重启',
   },
+
+  recordingsPage: {
+    title: '录像存档',
+    subtitle: '按日历和时间轴查找录像，最多可同时观看 {{count}} 路摄像机',
+    calendarFailed: '无法获取录像日历',
+    limitReached: '最多只能同时观看 {{count}} 路摄像机',
+    noFile: '该录像没有文件——无法导出',
+
+    tracks: '轨道（{{selected}}/{{max}}）：',
+    removeFromScreen: '从画面移除',
+    showOnScreen: '在画面显示',
+    allCameras: '全部摄像机',
+    forDay: '当天：<1>{{count}}</1> 条录像，共 {{duration}}',
+
+    entries: '{{count}} 条录像',
+    noRecords: '无录像',
+    dayTooltip: '录像：{{count}}\n时长：{{duration}}\n事件：{{events}}',
+
+    downloadHint: '把这个片段保存到磁盘',
+    download: '下载',
+
+    timeline: '当天时间轴',
+    scale: '缩放：',
+    noRecordsThatDay: '当天没有录像',
+    legendHint: '单击——观看，双击——下载',
+    clipTooltip: '双击下载该片段',
+
+    cameraFallback: '摄像机',
+
+    durationMin: '{{count}} 分钟',
+    durationHour: '{{count}} 小时',
+    durationHourMin: '{{hours}} 小时 {{minutes}} 分',
+
+    triggers: {
+      object: '目标',
+      plate: '车牌',
+      line: '越线',
+      face: '人脸',
+      acs: '门禁',
+      audio: '声音',
+      manual: '手动',
+      always: '持续',
+    },
+  },
 }

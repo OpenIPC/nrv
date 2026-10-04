@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { Trans, useTranslation } from 'react-i18next'
 import {
   recordingsAPI, camerasAPI,
   type CalendarDay, type TimelineItem, type Camera,
@@ -45,40 +46,53 @@ const TRIGGER_COLORS: Record<string, string> = {
   always: '#8b98a5',
 }
 
-const TRIGGER_LABELS: Record<string, string> = {
-  object: 'объекты',
-  plate: 'номера',
-  line: 'линии',
-  face: 'лица',
-  acs: 'СКУД',
-  audio: 'звуки',
-  manual: 'вручную',
-  always: 'постоянно',
+const TRIGGER_KEYS: Record<string, string> = {
+  object: 'recordingsPage.triggers.object',
+  plate: 'recordingsPage.triggers.plate',
+  line: 'recordingsPage.triggers.line',
+  face: 'recordingsPage.triggers.face',
+  acs: 'recordingsPage.triggers.acs',
+  audio: 'recordingsPage.triggers.audio',
+  manual: 'recordingsPage.triggers.manual',
+  always: 'recordingsPage.triggers.always',
 }
 
-const MONTH_NAMES = [
-  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
-]
+/**
+ * Язык для показа дат, месяцев и дней недели.
+ *
+ * Названия берём у браузера, а не из своих списков: в китайском месяцы и
+ * дни недели выглядят иначе, и держать рядом с кодом ещё четыре набора
+ * названий — лишнее место, где они разойдутся.
+ */
+function dateLocale(lang: string): string {
+  if (lang.startsWith('zh')) return 'zh-CN'
+  if (lang.startsWith('ko')) return 'ko-KR'
+  if (lang.startsWith('en')) return 'en-US'
+  return 'ru-RU'
+}
 
-/** Дни недели с понедельника. */
-const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+/** Дни недели понедельник–воскресенье на выбранном языке. */
+function weekdayNames(locale: string): string[] {
+  // 1 января 2024 года — понедельник, поэтому отсчёт начинается с него.
+  const monday = new Date(2024, 0, 1)
+  return Array.from({ length: 7 }, (_, i) =>
+    new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(
+      new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i),
+    ))
+}
 
 /** Высота одной дорожки на шкале, пикселей. */
 const TRACK_HEIGHT = 34
 
-/** Форматирует секунды в «2 ч 15 мин» или «45 мин». */
-function formatDuration(seconds: number): string {
+/** Форматирует секунды в «2 ч 15 мин». */
+function formatDuration(seconds: number, t: (key: string, opts?: any) => string): string {
   const totalMinutes = Math.round(seconds / 60)
-  if (totalMinutes < 60) return `${totalMinutes} мин`
+  if (totalMinutes < 60) return t('recordingsPage.durationMin', { count: totalMinutes })
   const h = Math.floor(totalMinutes / 60)
   const m = totalMinutes % 60
-  return m > 0 ? `${h} ч ${m} мин` : `${h} ч`
-}
-
-/** Время из ISO-строки в формате ЧЧ:ММ:СС по местному времени. */
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('ru-RU', { hour12: false })
+  return m > 0
+    ? t('recordingsPage.durationHourMin', { hours: h, minutes: m })
+    : t('recordingsPage.durationHour', { count: h })
 }
 
 /** Сегодняшняя дата в формате YYYY-MM-DD по местному времени. */
@@ -94,12 +108,12 @@ function todayIso(): string {
  * Включает камеру, дату и время начала: при экспорте нескольких
  * клипов подряд имена по одному лишь id невозможно различить.
  */
-function clipFileName(cameraName: string, startIso: string): string {
+function clipFileName(cameraName: string, startIso: string, fallback: string): string {
   const d = new Date(startIso)
   const pad = (n: number) => String(n).padStart(2, '0')
   const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
   const time = `${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`
-  const cam = (cameraName || 'камера').replace(/[\\/:*?"<>|]/g, '_')
+  const cam = (cameraName || fallback).replace(/[\\/:*?"<>|]/g, '_')
   return `${cam}_${date}_${time}.mp4`
 }
 
@@ -121,10 +135,26 @@ interface DayCell {
 
 export default function RecordingsPage() {
   const toast = useToast()
+  const { t, i18n } = useTranslation()
+
+  const locale = dateLocale(i18n.language)
+  // Обёртки над модульными функциями: компоненту нужны язык и перевод,
+  // а эти значения меняются вместе с языком интерфейса.
+  const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString(locale, { hour12: false })
+  const fmtDuration = (seconds: number) => formatDuration(seconds, t)
+  const triggerLabel = (key: string) => (TRIGGER_KEYS[key] ? t(TRIGGER_KEYS[key]) : key)
+  const weekdayNamesList = useMemo(() => weekdayNames(locale), [locale])
 
   const now = new Date()
   const [year, setYear] = useState(now.getFullYear())
   const [month, setMonth] = useState(now.getMonth() + 1)
+
+  // Название месяца берём у браузера, как и дни недели: в китайском и
+  // корейском они выглядят иначе, чем в русском списке названий.
+  const monthName = useMemo(
+    () => new Intl.DateTimeFormat(locale, { month: 'long' }).format(new Date(year, month - 1, 1)),
+    [locale, year, month],
+  )
   const [days, setDays] = useState<CalendarDay[]>([])
   const [loadingCalendar, setLoadingCalendar] = useState(false)
 
@@ -181,7 +211,7 @@ export default function RecordingsPage() {
         })
         if (!cancelled) setDays(res.data.days || [])
       } catch {
-        if (!cancelled) toast.error('Не удалось получить календарь записей')
+        if (!cancelled) toast.error(t('recordingsPage.calendarFailed'))
       } finally {
         if (!cancelled) setLoadingCalendar(false)
       }
@@ -189,7 +219,7 @@ export default function RecordingsPage() {
 
     load()
     return () => { cancelled = true }
-  }, [year, month, toast])
+  }, [year, month, toast, t])
 
   /**
    * Загрузка записей дня по каждой выбранной камере.
@@ -210,7 +240,7 @@ export default function RecordingsPage() {
       // что запрос ушёл, вместо пустого места.
       setTracks(ids.map((id, idx) => ({
         cameraID: id,
-        cameraName: id ? (names.get(id) || 'Камера') : 'Все камеры',
+        cameraName: id ? (names.get(id) || t('recordingsPage.cameraFallback')) : t('recordingsPage.allCameras'),
         color: TRACK_COLORS[idx % TRACK_COLORS.length],
         items: [],
         loading: true,
@@ -229,7 +259,7 @@ export default function RecordingsPage() {
         }
         return {
           cameraID: id,
-          cameraName: id ? (names.get(id) || 'Камера') : 'Все камеры',
+          cameraName: id ? (names.get(id) || t('recordingsPage.cameraFallback')) : t('recordingsPage.allCameras'),
           color: TRACK_COLORS[idx % TRACK_COLORS.length],
           items,
           loading: false,
@@ -267,11 +297,11 @@ export default function RecordingsPage() {
     })
 
     if (limitHit) {
-      toast.error(`Одновременно можно смотреть не больше ${MAX_TRACKS} камер`)
+      toast.error(t('recordingsPage.limitReached', { count: MAX_TRACKS }))
       return
     }
     setPlaying(null)
-  }, [toast])
+  }, [toast, t])
 
   /**
    * Сетка календаря на месяц.
@@ -350,18 +380,21 @@ export default function RecordingsPage() {
   /** Экспорт одного клипа. */
   const exportClip = useCallback((item: TimelineItem) => {
     if (!item.file_path) {
-      toast.error('У записи нет файла — экспорт невозможен')
+      toast.error(t('recordingsPage.noFile'))
       return
     }
-    recordingsAPI.download(item.file_path, clipFileName(item.camera_name, item.start_time))
-  }, [toast])
+    recordingsAPI.download(
+      item.file_path,
+      clipFileName(item.camera_name, item.start_time, t('recordingsPage.cameraFallback')),
+    )
+  }, [toast, t])
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <h1>Архив</h1>
-          <p>Поиск записей по календарю и шкале времени, просмотр до {MAX_TRACKS} камер одновременно</p>
+          <h1>{t('recordingsPage.title')}</h1>
+          <p>{t('recordingsPage.subtitle', { count: MAX_TRACKS })}</p>
         </div>
       </div>
 
@@ -370,7 +403,7 @@ export default function RecordingsPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <Video size={16} style={{ color: 'var(--accent)' }} />
           <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-            Дорожки ({selected.length}/{MAX_TRACKS}):
+            {t('recordingsPage.tracks', { selected: selected.length, max: MAX_TRACKS })}
           </span>
 
           {cameras.map((c) => {
@@ -380,7 +413,7 @@ export default function RecordingsPage() {
               <button
                 key={c.id}
                 onClick={() => toggleCamera(c.id)}
-                title={on ? 'Убрать с экрана' : 'Показать на экране'}
+                title={on ? t('recordingsPage.removeFromScreen') : t('recordingsPage.showOnScreen')}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6,
                   padding: '4px 10px', borderRadius: 20, fontSize: 12,
@@ -413,7 +446,7 @@ export default function RecordingsPage() {
               onClick={() => { setSelected([]); setPlaying(null) }}
               style={{ marginLeft: 'auto' }}
             >
-              <X size={12} /> Все камеры
+              <X size={12} /> {t('recordingsPage.allCameras')}
             </button>
           )}
 
@@ -421,8 +454,11 @@ export default function RecordingsPage() {
             marginLeft: selected.length > 0 ? 0 : 'auto',
             fontSize: 13, color: 'var(--text-secondary)',
           }}>
-            За день: <strong style={{ color: 'var(--text-primary)' }}>{allItems.length}</strong> записей,
-            всего {formatDuration(totalDuration)}
+            <Trans
+              i18nKey="recordingsPage.forDay"
+              values={{ count: allItems.length, duration: fmtDuration(totalDuration) }}
+              components={{ 1: <strong style={{ color: 'var(--text-primary)' }} /> }}
+            />
           </span>
         </div>
       </div>
@@ -439,7 +475,7 @@ export default function RecordingsPage() {
             </button>
             <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
               <Calendar size={15} style={{ color: 'var(--accent)' }} />
-              {MONTH_NAMES[month - 1]} {year}
+              {monthName} {year}
               {loadingCalendar && <Loader2 size={13} className="spin" />}
             </span>
             <button className="btn btn-outline btn-sm" onClick={() => shiftMonth(1)}>
@@ -452,7 +488,7 @@ export default function RecordingsPage() {
             display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)',
             gap: 4, marginBottom: 4,
           }}>
-            {WEEKDAYS.map((w) => (
+            {weekdayNamesList.map((w) => (
               <div key={w} style={{
                 textAlign: 'center', fontSize: 11,
                 color: 'var(--text-secondary)', padding: '2px 0',
@@ -477,8 +513,12 @@ export default function RecordingsPage() {
                   key={cell.date}
                   onClick={() => { setSelectedDate(cell.date); setPlaying(null) }}
                   title={cell.info
-                    ? `Записей: ${cell.info.count}\nДлительность: ${formatDuration(cell.info.duration)}\nСобытия: ${cell.info.triggers.map((t) => TRIGGER_LABELS[t] || t).join(', ')}`
-                    : 'Записей нет'}
+                    ? t('recordingsPage.dayTooltip', {
+                        count: cell.info.count,
+                        duration: fmtDuration(cell.info.duration),
+                        events: cell.info.triggers.map((tr) => triggerLabel(tr)).join(', '),
+                      })
+                    : t('recordingsPage.noRecords')}
                   style={{
                     aspectRatio: '1',
                     borderRadius: 6,
@@ -523,15 +563,15 @@ export default function RecordingsPage() {
               <div style={{ marginBottom: 4 }}>
                 <Clock size={12} style={{ verticalAlign: -2 }} /> {selectedDate}
               </div>
-              <div>{selectedDayInfo.count} записей, {formatDuration(selectedDayInfo.duration)}</div>
+              <div>{t('recordingsPage.entries', { count: selectedDayInfo.count })}, {fmtDuration(selectedDayInfo.duration)}</div>
               <div style={{ marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                {selectedDayInfo.triggers.map((t) => (
-                  <span key={t} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                {selectedDayInfo.triggers.map((tr) => (
+                  <span key={tr} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                     <span style={{
                       width: 8, height: 8, borderRadius: 2,
-                      background: TRIGGER_COLORS[t] || '#8b98a5',
+                      background: TRIGGER_COLORS[tr] || '#8b98a5',
                     }} />
-                    {TRIGGER_LABELS[t] || t}
+                    {triggerLabel(tr)}
                   </span>
                 ))}
               </div>
@@ -554,17 +594,17 @@ export default function RecordingsPage() {
                 }} />
                 <span style={{ fontWeight: 600 }}>{playing.item.camera_name}</span>
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {formatTime(playing.item.start_time)} — {formatTime(playing.item.end_time)}
-                  {playing.item.trigger_type && ` · ${TRIGGER_LABELS[playing.item.trigger_type] || playing.item.trigger_type}`}
+                  {fmtTime(playing.item.start_time)} — {fmtTime(playing.item.end_time)}
+                  {playing.item.trigger_type && ` · ${triggerLabel(playing.item.trigger_type)}`}
                 </span>
 
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
                   <button
                     className="btn btn-outline btn-sm"
                     onClick={() => exportClip(playing.item)}
-                    title="Сохранить этот клип на диск"
+                    title={t('recordingsPage.downloadHint')}
                   >
-                    <Download size={12} /> Скачать
+                    <Download size={12} /> {t('recordingsPage.download')}
                   </button>
                   <button className="btn btn-outline btn-sm" onClick={() => setPlaying(null)}>
                     <X size={12} />
@@ -591,13 +631,13 @@ export default function RecordingsPage() {
               display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10,
               flexWrap: 'wrap',
             }}>
-              <span style={{ fontWeight: 600 }}>Шкала дня</span>
+              <span style={{ fontWeight: 600 }}>{t('recordingsPage.timeline')}</span>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                 {selectedDate}
               </span>
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
                 {tracks.some((t) => t.loading) && <Loader2 size={14} className="spin" />}
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Масштаб:</span>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('recordingsPage.scale')}</span>
                 <button className="btn btn-outline btn-sm" onClick={() => setZoom((z) => Math.max(ZOOM_MIN, z / 1.5))}>−</button>
                 <span style={{ fontSize: 12, minWidth: 40, textAlign: 'center' }}>
                   {zoom.toFixed(1)}×
@@ -675,7 +715,7 @@ export default function RecordingsPage() {
                           key={item.id}
                           onClick={() => setPlaying({ item, color: track.color })}
                           onDoubleClick={() => exportClip(item)}
-                          title={`${item.camera_name}\n${formatTime(item.start_time)} — ${formatTime(item.end_time)}${item.trigger_type ? `\n${TRIGGER_LABELS[item.trigger_type] || item.trigger_type}` : ''}\n\nДвойной щелчок — скачать клип`}
+                          title={`${item.camera_name}\n${fmtTime(item.start_time)} — ${fmtTime(item.end_time)}${item.trigger_type ? `\n${triggerLabel(item.trigger_type)}` : ''}\n\n${t('recordingsPage.clipTooltip')}`}
                           style={{
                             position: 'absolute',
                             left, width,
@@ -702,7 +742,7 @@ export default function RecordingsPage() {
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         color: 'var(--text-secondary)', fontSize: 12,
                       }}>
-                        За этот день записей нет
+                        {t('recordingsPage.noRecordsThatDay')}
                       </div>
                     )}
                   </div>
@@ -713,17 +753,17 @@ export default function RecordingsPage() {
                   marginTop: 10, display: 'flex', gap: 14,
                   fontSize: 12, color: 'var(--text-secondary)', flexWrap: 'wrap',
                 }}>
-                  {tracks.length <= 1 && Object.entries(TRIGGER_LABELS).map(([key, label]) => (
+                  {tracks.length <= 1 && Object.keys(TRIGGER_KEYS).map((key) => (
                     <span key={key} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                       <span style={{
                         width: 10, height: 10, borderRadius: 2,
                         background: TRIGGER_COLORS[key],
                       }} />
-                      {label}
+                      {triggerLabel(key)}
                     </span>
                   ))}
                   <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Play size={11} /> щелчок — смотреть, двойной — скачать
+                    <Play size={11} /> {t('recordingsPage.legendHint')}
                   </span>
                 </div>
               </div>

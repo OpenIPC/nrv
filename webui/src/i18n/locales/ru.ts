@@ -1405,4 +1405,49 @@ export default {
     restarting: 'Перезапускаю…',
     restart: 'Перезапустить',
   },
+
+  recordingsPage: {
+    title: 'Архив',
+    subtitle:
+      'Поиск записей по календарю и шкале времени, просмотр до {{count}} камер одновременно',
+    calendarFailed: 'Не удалось получить календарь записей',
+    limitReached: 'Одновременно можно смотреть не больше {{count}} камер',
+    noFile: 'У записи нет файла — экспорт невозможен',
+
+    tracks: 'Дорожки ({{selected}}/{{max}}):',
+    removeFromScreen: 'Убрать с экрана',
+    showOnScreen: 'Показать на экране',
+    allCameras: 'Все камеры',
+    forDay: 'За день: <1>{{count}}</1> записей, всего {{duration}}',
+
+    entries: '{{count}} записей',
+    noRecords: 'Записей нет',
+    dayTooltip: 'Записей: {{count}}\nДлительность: {{duration}}\nСобытия: {{events}}',
+
+    downloadHint: 'Сохранить этот клип на диск',
+    download: 'Скачать',
+
+    timeline: 'Шкала дня',
+    scale: 'Масштаб:',
+    noRecordsThatDay: 'За этот день записей нет',
+    legendHint: 'щелчок — смотреть, двойной — скачать',
+    clipTooltip: 'Двойной щелчок — скачать клип',
+
+    cameraFallback: 'камера',
+
+    durationMin: '{{count}} мин',
+    durationHour: '{{count}} ч',
+    durationHourMin: '{{hours}} ч {{minutes}} мин',
+
+    triggers: {
+      object: 'объекты',
+      plate: 'номера',
+      line: 'линии',
+      face: 'лица',
+      acs: 'СКУД',
+      audio: 'звуки',
+      manual: 'вручную',
+      always: 'постоянно',
+    },
+  },
 }

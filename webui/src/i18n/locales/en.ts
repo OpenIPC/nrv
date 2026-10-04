@@ -1389,4 +1389,48 @@ export default {
     restarting: 'Restarting…',
     restart: 'Restart',
   },
+
+  recordingsPage: {
+    title: 'Archive',
+    subtitle: 'Search recordings by calendar and timeline, watch up to {{count}} cameras at once',
+    calendarFailed: 'Could not fetch the recordings calendar',
+    limitReached: 'You can watch at most {{count}} cameras at once',
+    noFile: 'The recording has no file — export is impossible',
+
+    tracks: 'Tracks ({{selected}}/{{max}}):',
+    removeFromScreen: 'Remove from the screen',
+    showOnScreen: 'Show on the screen',
+    allCameras: 'All cameras',
+    forDay: 'For the day: <1>{{count}}</1> recordings, {{duration}} in total',
+
+    entries: '{{count}} recordings',
+    noRecords: 'No recordings',
+    dayTooltip: 'Recordings: {{count}}\nDuration: {{duration}}\nEvents: {{events}}',
+
+    downloadHint: 'Save this clip to disk',
+    download: 'Download',
+
+    timeline: 'Timeline of the day',
+    scale: 'Scale:',
+    noRecordsThatDay: 'No recordings on this day',
+    legendHint: 'click — watch, double click — download',
+    clipTooltip: 'Double click to download the clip',
+
+    cameraFallback: 'camera',
+
+    durationMin: '{{count}} min',
+    durationHour: '{{count}} h',
+    durationHourMin: '{{hours}} h {{minutes}} min',
+
+    triggers: {
+      object: 'objects',
+      plate: 'plates',
+      line: 'lines',
+      face: 'faces',
+      acs: 'access control',
+      audio: 'sounds',
+      manual: 'manual',
+      always: 'continuous',
+    },
+  },
 }

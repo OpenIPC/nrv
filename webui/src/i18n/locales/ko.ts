@@ -1359,4 +1359,48 @@ export default {
     restarting: '재시작 중…',
     restart: '재시작',
   },
+
+  recordingsPage: {
+    title: '녹화 보관함',
+    subtitle: '달력과 시간 축으로 녹화를 찾고, 최대 {{count}}대까지 동시에 봅니다',
+    calendarFailed: '녹화 달력을 가져올 수 없습니다',
+    limitReached: '동시에 볼 수 있는 카메라는 최대 {{count}}대입니다',
+    noFile: '이 녹화에는 파일이 없습니다 — 내보낼 수 없습니다',
+
+    tracks: '트랙 ({{selected}}/{{max}}):',
+    removeFromScreen: '화면에서 빼기',
+    showOnScreen: '화면에 표시',
+    allCameras: '모든 카메라',
+    forDay: '하루: 녹화 <1>{{count}}</1>건, 합계 {{duration}}',
+
+    entries: '녹화 {{count}}건',
+    noRecords: '녹화 없음',
+    dayTooltip: '녹화: {{count}}\n길이: {{duration}}\n이벤트: {{events}}',
+
+    downloadHint: '이 클립을 디스크에 저장',
+    download: '내려받기',
+
+    timeline: '하루 시간 축',
+    scale: '배율:',
+    noRecordsThatDay: '이 날에는 녹화가 없습니다',
+    legendHint: '클릭 — 보기, 더블클릭 — 내려받기',
+    clipTooltip: '더블클릭하면 클립을 내려받습니다',
+
+    cameraFallback: '카메라',
+
+    durationMin: '{{count}}분',
+    durationHour: '{{count}}시간',
+    durationHourMin: '{{hours}}시간 {{minutes}}분',
+
+    triggers: {
+      object: '객체',
+      plate: '번호판',
+      line: '선',
+      face: '얼굴',
+      acs: '출입 통제',
+      audio: '소리',
+      manual: '수동',
+      always: '상시',
+    },
+  },
 }
