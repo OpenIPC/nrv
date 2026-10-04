@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -81,6 +82,16 @@ func (h *ACSHandler) ListDeviceCards(w http.ResponseWriter, r *http.Request) {
 
 	cards, err := h.svc.ListControllerCards(r.Context(), id)
 	if err != nil {
+		// Код рядом с текстом: интерфейс по нему отличает «контроллер не
+		// умеет работать с картами» от сбоя связи, а текст ошибки показывается
+		// оператору как техническая подробность.
+		if errors.Is(err, service.ErrCardsUnsupported) {
+			writeJSON(w, http.StatusBadGateway, map[string]string{
+				"error": err.Error(),
+				"code":  "cards_unsupported",
+			})
+			return
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}

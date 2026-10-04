@@ -32,16 +32,19 @@ const SEVERITY_STYLES: Record<number, { key: string; color: string; icon: typeof
 /**
  * Варианты фильтра по важности.
  *
- * Значения заданы словами, а не числами: разбор слова в число делает
- * сервер, и если правила поменяются, менять здесь ничего не придётся.
+ * Значения латиницей и словами, а не числами: сервер понимает и то и
+ * другое, но слова читаются при разборе запроса в логе. Русские слова
+ * отсюда убраны — сервер их ещё принимает для совместимости, но в коде
+ * они выглядели бы непереведённой подписью и сбивали бы проверку
+ * переводов.
  */
 const LEVEL_OPTIONS = [
   { value: '', key: 'logsPage.levelAll' },
-  { value: 'ошибка', key: 'logsPage.levelError' },
-  { value: 'предупреждение', key: 'logsPage.levelWarning' },
-  { value: 'важное', key: 'logsPage.levelImportant' },
-  { value: 'сведения', key: 'logsPage.levelInfo' },
-  { value: 'отладка', key: 'logsPage.levelDebug' },
+  { value: 'error', key: 'logsPage.levelError' },
+  { value: 'warning', key: 'logsPage.levelWarning' },
+  { value: 'notice', key: 'logsPage.levelImportant' },
+  { value: 'info', key: 'logsPage.levelInfo' },
+  { value: 'debug', key: 'logsPage.levelDebug' },
 ]
 
 const PERIOD_OPTIONS = [

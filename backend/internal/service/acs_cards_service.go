@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -9,6 +10,15 @@ import (
 	"github.com/nvr/backend/internal/service/acs"
 	"github.com/rs/zerolog/log"
 )
+
+// ErrCardsUnsupported — контроллер не умеет управлять картами.
+//
+// Отдельная ошибка нужна, чтобы интерфейс отличал «контроллер этого не
+// умеет» от сбоя связи: в первом случае список карт с устройства не
+// показывают вовсе, во втором — показывают сообщение об ошибке. Сверять
+// по тексту нельзя: текст переводится, и признак отвалился бы при смене
+// языка интерфейса, а сам список молча считался бы неподдерживаемым.
+var ErrCardsUnsupported = errors.New("контроллер не поддерживает управление картами")
 
 // Управление картами доступа СКУД.
 //
@@ -55,7 +65,7 @@ func (s *ACSService) cardAdapter(ctx context.Context, controllerID uuid.UUID) (a
 
 	cm, ok := acs.CardsFor(adapter)
 	if !ok {
-		return nil, fmt.Errorf("контроллер %s не поддерживает управление картами", ctrl.Vendor)
+		return nil, fmt.Errorf("%s: %w", ctrl.Vendor, ErrCardsUnsupported)
 	}
 	return cm, nil
 }
