@@ -683,7 +683,7 @@ More — in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 | WireGuard tunnels are not managed automatically | `internal/tunnel/wg_manager.go` is a stub, there is no netlink integration | Set up the peers by hand with `wg-quick` |
 | Temperature and graphics card state are visible only through the agent | There is no access to the host's sensors and GPU from inside a container | Install `host-agent` on the host: `sudo install -m 0755 agent.py /opt/nvr-agent/agent.py` |
 | The Korean interface uses the South Korean norm while the flag is the DPRK one | The North Korean norm is a separate language (`ko-KP`) with its own rules and terminology and needs a native speaker. The flag, though, should be that of the customer's country | A temporary measure. A proofreader for the North Korean norm is needed: [docs/TRANSLATIONS.md](docs/TRANSLATIONS.md) |
-| Not every screen is translated | Moving one and a half thousand labels happens page by page; what is not translated is shown in Russian | Nothing breaks: the translated screens work in the chosen language. To help: [docs/TRANSLATIONS.md](docs/TRANSLATIONS.md) |
+| Some error messages stay in Russian | The server builds them from the device's answer rather than from the interface, and they are not labels | Narrows as the migration goes on. List of places: [docs/TRANSLATIONS.md](docs/TRANSLATIONS.md) |
 | Chinese and Korean need a font with CJK glyphs | Vectors are always drawn, but CJK characters are text and are drawn by the system font | Install Noto Sans SC / Noto Sans KR on the machine where the interface is open |
 
 ---
@@ -702,10 +702,10 @@ code.** There are no outside downloads: the server stands on a network where
 there may be no internet at all, and an empty space instead of a flag is a stage
 we have already been through, as it was with the font for CJK glyphs.
 
-**What is not translated is shown in Russian.** One and a half thousand labels
-cannot be moved in one go, and any missed line would show the user a key like
-`nav.cameras` instead of a word. With Russian as the fallback language the
-translation can be added page by page without breaking anything.
+**Every interface label is translated.** Each screen was checked by walking it
+in Chinese and Korean: the only Russian left is camera and controller names,
+which people type in. Russian stays the fallback language, so a label that was
+missed would show a word rather than a key like `nav.cameras`.
 
 **About Korean, honestly.** The text is translated using the **South Korean
 norm** while the switcher carries the **DPRK** flag — at the request of a
