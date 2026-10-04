@@ -85,6 +85,29 @@ const lang = process.argv[3] || 'zh-CN'
     }
   }
 
+  // NVR_EXPECT — строка, которая обязана появиться на экране после нажатий.
+  //
+  // Без неё результат «русских подписей не найдено» ничего не доказывает:
+  // вкладка могла не открыться, и скрипт осмотрел бы прежний экран. Ловушка
+  // не выдуманная — именно так проверка окна настроек камеры один раз
+  // отчиталась об успехе, не открыв вкладку.
+  if (process.env.NVR_EXPECT) {
+    // Ждём появления строки до 15 секунд: часть экранов подгружает данные
+    // запросом к камере, и ответ приходит не мгновенно. Отмечаем удачу,
+    // чтобы отличить «подождали и дождались» от «сразу не было».
+    let ok = false
+    for (let i = 0; i < 30 && !ok; i++) {
+      const body = await page.evaluate(() => document.body.innerText)
+      ok = body.includes(process.env.NVR_EXPECT)
+      if (!ok) await page.waitForTimeout(500)
+    }
+    if (!ok) {
+      console.log(`Ожидаемая строка «${process.env.NVR_EXPECT}» не появилась — экран открыт не тот.`)
+      await browser.close()
+      process.exit(2)
+    }
+  }
+
   const found = await page.evaluate(() => {
     const out = []
     const walk = (node) => {

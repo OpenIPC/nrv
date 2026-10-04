@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   configAPI,
   type CameraConfigView, type ConfigSchema, type SchemaField, type SchemaSection,
@@ -18,26 +19,32 @@ import {
  * Заданный у нас список на части камер был бы нерабочим.
  */
 
-/** Как показывать режим применения — оператору важно знать, что будет. */
-const RELOAD_INFO: Record<string, { label: string; icon: typeof Zap; color: string }> = {
-  live: { label: 'применится сразу', icon: Zap, color: '#34c759' },
-  none: { label: 'применится сразу', icon: Zap, color: '#34c759' },
-  pipeline: { label: 'поток прервётся на несколько секунд', icon: Layers, color: '#ff9f0a' },
-  unknown: { label: 'поток может прерваться', icon: AlertTriangle, color: '#ff9f0a' },
+/**
+ * Как показывать режим применения — оператору важно знать, что будет.
+ *
+ * Здесь ключ перевода, а не готовая фраза: таблица собирается один раз на
+ * модуль, а язык оператор выбирает уже после загрузки страницы.
+ */
+const RELOAD_INFO: Record<string, { key: string; icon: typeof Zap; color: string }> = {
+  live: { key: 'cameraConfig.reloadLive', icon: Zap, color: '#34c759' },
+  none: { key: 'cameraConfig.reloadLive', icon: Zap, color: '#34c759' },
+  pipeline: { key: 'cameraConfig.reloadPipeline', icon: Layers, color: '#ff9f0a' },
+  unknown: { key: 'cameraConfig.reloadUnknown', icon: AlertTriangle, color: '#ff9f0a' },
 }
 
 function reloadInfo(mode: string) {
   if (mode.startsWith('service:')) {
-    return { label: 'служба перезапустится', icon: Power, color: '#ffd60a' }
+    return { key: 'cameraConfig.reloadService', icon: Power, color: '#ffd60a' }
   }
   if (mode.startsWith('channel:')) {
-    return { label: 'поток прервётся на несколько секунд', icon: Layers, color: '#ff9f0a' }
+    return { key: 'cameraConfig.reloadPipeline', icon: Layers, color: '#ff9f0a' }
   }
-  return RELOAD_INFO[mode] || { label: 'поток может прерваться', icon: AlertTriangle, color: '#ff9f0a' }
+  return RELOAD_INFO[mode] || { key: 'cameraConfig.reloadUnknown', icon: AlertTriangle, color: '#ff9f0a' }
 }
 
 export default function CameraConfigPanel({ cameraId }: { cameraId: string }) {
   const toast = useToast()
+  const { t } = useTranslation()
 
   const [view, setView] = useState<CameraConfigView | null>(null)
   const [draft, setDraft] = useState<Record<string, unknown>>({})
@@ -51,13 +58,13 @@ export default function CameraConfigPanel({ cameraId }: { cameraId: string }) {
       const res = await configAPI.get(cameraId, force)
       setView(res.data)
       setDraft({})
-      if (force) toast.success('Схема перечитана с камеры')
+      if (force) toast.success(t('cameraConfig.schemaReloaded'))
       // Первый раздел открываем сразу: пустая форма выглядела бы
       // как отсутствие настроек.
       const first = firstSectionId(res.data.schema)
       setActiveSection(prev => prev || first)
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось прочитать настройки камеры')
+      toast.error(e?.response?.data?.error || t('cameraConfig.loadFailed'))
       setView(null)
     } finally {
       setLoading(false)
@@ -99,11 +106,11 @@ export default function CameraConfigPanel({ cameraId }: { cameraId: string }) {
       setDraft({})
       toast.success(
         changedCount === 1
-          ? 'Настройка применена'
-          : `Применено настроек: ${changedCount}`,
+          ? t('cameraConfig.appliedOne')
+          : t('cameraConfig.appliedMany', { count: changedCount }),
       )
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Камера отклонила настройки')
+      toast.error(e?.response?.data?.error || t('cameraConfig.saveRejected'))
     } finally {
       setSaving(false)
     }
@@ -151,8 +158,7 @@ export default function CameraConfigPanel({ cameraId }: { cameraId: string }) {
     return (
       <div className="card" style={{ marginTop: 16 }}>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
-          Настройки недоступны. Это бывает, когда на камере нет Majestic —
-          управлять такой камерой можно только по SSH.
+          {t('cameraConfig.unavailable')}
         </p>
       </div>
     )
@@ -166,15 +172,18 @@ export default function CameraConfigPanel({ cameraId }: { cameraId: string }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0, fontSize: 15 }}>
           <Layers size={18} style={{ color: 'var(--primary)' }} />
-          Настройки камеры
+          {t('cameraConfig.title')}
         </h3>
 
         <span style={{
           fontSize: 11, color: 'var(--text-secondary)',
           padding: '1px 7px', borderRadius: 10,
           background: 'var(--bg-tertiary, #21262d)',
-        }} title="Разделов и полей, которые поддерживает эта прошивка">
-          {sections.length} разд. · {sections.reduce((n, s) => n + s.fields.length, 0)} пол.
+        }} title={t('cameraConfig.countsHint')}>
+          {t('cameraConfig.counts', {
+            sections: sections.length,
+            fields: sections.reduce((n, s) => n + s.fields.length, 0),
+          })}
         </span>
 
         <button
@@ -182,10 +191,10 @@ export default function CameraConfigPanel({ cameraId }: { cameraId: string }) {
           style={{ marginLeft: 'auto' }}
           onClick={() => load(true)}
           disabled={saving}
-          title="Перечитать схему с камеры — нужно после обновления прошивки"
+          title={t('cameraConfig.reloadHint')}
         >
           <RefreshCw size={13} />
-          Перечитать
+          {t('cameraConfig.reload')}
         </button>
       </div>
 
@@ -261,7 +270,7 @@ export default function CameraConfigPanel({ cameraId }: { cameraId: string }) {
               {(() => {
                 const info = reloadInfo(pendingImpact)
                 const Icon = info.icon
-                return <><Icon size={13} /> {info.label}</>
+                return <><Icon size={13} /> {t(info.key)}</>
               })()}
             </div>
           )}
@@ -273,7 +282,7 @@ export default function CameraConfigPanel({ cameraId }: { cameraId: string }) {
               disabled={saving}
             >
               {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-              {saving ? 'Применяю...' : `Сохранить (${changedCount})`}
+              {saving ? t('cameraConfig.applying') : t('cameraConfig.save', { count: changedCount })}
             </button>
             <button
               className="btn btn-outline btn-sm"
@@ -281,7 +290,7 @@ export default function CameraConfigPanel({ cameraId }: { cameraId: string }) {
               disabled={saving}
             >
               <RotateCcw size={14} />
-              Отменить
+              {t('cameraConfig.cancel')}
             </button>
           </div>
         </div>
@@ -324,6 +333,8 @@ function FieldRow({ field, value, changed, onChange }: {
   onChange: (v: unknown) => void
 }) {
   const info = reloadInfo(field.reload)
+  const { t } = useTranslation()
+  const infoLabel = t(info.key)
 
   return (
     <div style={{
@@ -340,7 +351,7 @@ function FieldRow({ field, value, changed, onChange }: {
                 незаметно и не стоят внимания оператора. */}
             {field.reload !== 'live' && field.reload !== 'none' && (
               <span
-                title={info.label}
+                title={infoLabel}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 3,
                   fontSize: 10, color: info.color,
@@ -349,7 +360,7 @@ function FieldRow({ field, value, changed, onChange }: {
                 }}
               >
                 <info.icon size={10} />
-                {info.label}
+                {infoLabel}
               </span>
             )}
           </div>
@@ -378,8 +389,11 @@ function FieldRow({ field, value, changed, onChange }: {
 
           {field.minimum !== undefined && field.maximum !== undefined && (
             <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 3 }}>
-              допустимо: {field.minimum} — {field.maximum}
-              {field.fps_max ? `, кадров до ${field.fps_max}` : ''}
+              {field.fps_max
+                ? t('cameraConfig.rangeFps', {
+                    min: field.minimum, max: field.maximum, fps: field.fps_max,
+                  })
+                : t('cameraConfig.range', { min: field.minimum, max: field.maximum })}
             </div>
           )}
         </div>
@@ -399,6 +413,7 @@ function FieldInput({ field, value, onChange }: {
     border: '1px solid var(--border, #30363d)', borderRadius: 5,
     fontSize: 13, color: 'inherit',
   }
+  const { t } = useTranslation()
 
   if (field.type === 'boolean') {
     return (
@@ -408,7 +423,7 @@ function FieldInput({ field, value, onChange }: {
           checked={value === true}
           onChange={e => onChange(e.target.checked)}
         />
-        {value === true ? 'включено' : 'выключено'}
+        {value === true ? t('cameraConfig.on') : t('cameraConfig.off')}
       </label>
     )
   }
