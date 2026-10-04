@@ -1433,4 +1433,53 @@ export default {
       always: 'continuous',
     },
   },
+
+  audioPanel: {
+    title: 'Camera audio',
+    save: 'Save',
+    loading: 'Loading the audio settings…',
+    unavailable: 'The audio settings are unavailable',
+    loadFailed: 'Could not load the audio settings',
+    saved: 'The audio settings were saved',
+    saveFailed: 'Could not save the audio settings',
+
+    rowTrack: 'Audio track in the stream',
+    yes: 'present',
+    no: 'absent',
+    rowCameraCodec: 'Camera codec',
+    rowTranscoding: 'Transcoding',
+    transcodingNow: 'running (G.711 → AAC)',
+    transcodingStopped: 'stopped',
+    transcodingNotNeeded: 'not needed',
+    rowHls: 'Audio in HLS',
+    hlsPlaying: 'playing',
+    hlsUnavailable: 'unavailable',
+
+    micHasSound: 'The microphone picks up sound',
+    micHasSoundHint:
+      'Clear the box if the camera has no microphone — then the sound will not be started',
+    enableSound: 'Enable sound',
+    enableSoundHint: 'Controls publishing the audio track for viewing',
+    transcodeAac: 'Transcode the sound to AAC',
+    transcodeAacHint:
+      'Required for G.711: browsers do not play it in HLS. For Opus/AAC it can be turned off',
+    volume: 'Default volume',
+
+    detectTitle: 'Sound event detection',
+    detectAudio: 'Recognise sound events',
+    detectAudioHint:
+      'Screams, gunshots, breaking glass, dog barking and others — they appear in the events section',
+    threshold: 'Trigger threshold',
+    thresholdHint: 'Lower means quieter, higher means fewer false triggers',
+
+    talkbackTitle: 'Talkback (camera speaker)',
+    speakerEnabled: 'Allow sending sound to the camera',
+    speakerEnabledHint:
+      'Two-way audio: the operator talks into the microphone and the sound goes to the camera speaker',
+    speakerCodec: 'Speaker codec',
+    speakerCodecG711: 'G.711 (compatible with almost every camera)',
+    speakerCodecAac: 'AAC (better quality, not all cameras support it)',
+    backchannelHint:
+      'The backchannel is detected automatically from the camera response to the RTSP request: if the firmware does not accept sound, the talk button will not appear.',
+  },
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { audioAPI, type AudioSettings, type AudioStatus } from '../api/client'
 import { useToast } from '../context/ToastContext'
 import TalkPanel from './TalkPanel'
@@ -17,6 +18,7 @@ interface Props {
  */
 export default function AudioSettingsPanel({ cameraId }: Props) {
   const toast = useToast()
+  const { t } = useTranslation()
   const [settings, setSettings] = useState<AudioSettings | null>(null)
   const [status, setStatus] = useState<AudioStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -35,11 +37,11 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
       setStatus(st ? st.data : null)
       setDirty(false)
     } catch {
-      toast.error('Не удалось загрузить настройки звука')
+      toast.error(t('audioPanel.loadFailed'))
     } finally {
       setLoading(false)
     }
-  }, [cameraId, toast])
+  }, [cameraId, toast, t])
 
   useEffect(() => { load() }, [load])
 
@@ -66,12 +68,12 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
       })
       setSettings(updated.data)
       setDirty(false)
-      toast.success('Настройки звука сохранены')
+      toast.success(t('audioPanel.saved'))
       // Статус мог измениться (запустилось или остановилось перекодирование),
       // поэтому перечитываем его после сохранения.
       audioAPI.status(cameraId).then((r) => setStatus(r.data)).catch(() => {})
     } catch {
-      toast.error('Не удалось сохранить настройки звука')
+      toast.error(t('audioPanel.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -80,13 +82,13 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
   if (loading) {
     return (
       <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-secondary)' }}>
-        <Loader2 size={20} className="spin" /> Загрузка настроек звука...
+        <Loader2 size={20} className="spin" /> {t('audioPanel.loading')}
       </div>
     )
   }
 
   if (!settings) {
-    return <p style={{ color: 'var(--text-secondary)' }}>Настройки звука недоступны</p>
+    return <p style={{ color: 'var(--text-secondary)' }}>{t('audioPanel.unavailable')}</p>
   }
 
   const codecLabel: Record<string, string> = {
@@ -102,11 +104,11 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, margin: 0 }}>
           <Volume2 size={18} style={{ color: 'var(--accent)' }} />
-          Звук с камеры
+          {t('audioPanel.title')}
         </h3>
         <button className="btn btn-primary btn-sm" onClick={save} disabled={!dirty || saving}>
           {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-          Сохранить
+          {t('audioPanel.save')}
         </button>
       </div>
 
@@ -114,54 +116,54 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
           кодек отдаёт камера и работает ли перекодирование в AAC. */}
       <div style={{ marginBottom: 20, padding: 12, background: 'rgba(0,0,0,0.02)', borderRadius: 8 }}>
         <StatusRow
-          label="Дорожка в потоке"
+          label={t('audioPanel.rowTrack')}
           value={status?.available
-            ? <span style={{ color: 'var(--success)' }}>есть</span>
-            : <span style={{ color: 'var(--text-secondary)' }}>нет</span>}
+            ? <span style={{ color: 'var(--success)' }}>{t('audioPanel.yes')}</span>
+            : <span style={{ color: 'var(--text-secondary)' }}>{t('audioPanel.no')}</span>}
         />
         <StatusRow
-          label="Кодек камеры"
+          label={t('audioPanel.rowCameraCodec')}
           value={<span style={{ fontFamily: 'monospace' }}>
             {status?.codec ? (codecLabel[status.codec] || status.codec) : '—'}
           </span>}
         />
         <StatusRow
-          label="Перекодирование"
+          label={t('audioPanel.rowTranscoding')}
           value={status?.transcoding
             ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--success)' }}>
-                <Activity size={14} /> идёт (G.711 → AAC)
+                <Activity size={14} /> {t('audioPanel.transcodingNow')}
               </span>
             : <span style={{ color: 'var(--text-secondary)' }}>
-                {settings.transcode ? 'остановлено' : 'не требуется'}
+                {settings.transcode ? t('audioPanel.transcodingStopped') : t('audioPanel.transcodingNotNeeded')}
               </span>}
         />
         <StatusRow
-          label="Звук в HLS"
+          label={t('audioPanel.rowHls')}
           value={status?.hls_has_audio
-            ? <span style={{ color: 'var(--success)' }}>воспроизводится</span>
-            : <span style={{ color: 'var(--warning)' }}>недоступен</span>}
+            ? <span style={{ color: 'var(--success)' }}>{t('audioPanel.hlsPlaying')}</span>
+            : <span style={{ color: 'var(--warning)' }}>{t('audioPanel.hlsUnavailable')}</span>}
         />
       </div>
 
       {/* Основные переключатели */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
         <Toggle
-          label="У микрофона есть звук"
-          hint="Снимите галочку, если у камеры нет микрофона — тогда звук не будет запускаться"
+          label={t('audioPanel.micHasSound')}
+          hint={t('audioPanel.micHasSoundHint')}
           checked={settings.has_microphone}
           onChange={(v) => patch({ has_microphone: v })}
           icon={settings.has_microphone ? <Mic size={16} /> : <MicOff size={16} />}
         />
         <Toggle
-          label="Включить звук"
-          hint="Управляет публикацией звуковой дорожки для просмотра"
+          label={t('audioPanel.enableSound')}
+          hint={t('audioPanel.enableSoundHint')}
           checked={settings.enabled}
           onChange={(v) => patch({ enabled: v })}
           icon={settings.enabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
         />
         <Toggle
-          label="Перекодировать звук в AAC"
-          hint="Обязательно для G.711: браузеры не воспроизводят его в HLS. Для Opus/AAC можно выключить"
+          label={t('audioPanel.transcodeAac')}
+          hint={t('audioPanel.transcodeAacHint')}
           checked={settings.transcode}
           onChange={(v) => patch({ transcode: v })}
         />
@@ -170,7 +172,7 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
       {/* Громкость */}
       <div style={{ marginBottom: 20 }}>
         <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
-          <span>Громкость по умолчанию</span>
+          <span>{t('audioPanel.volume')}</span>
           <span style={{ color: 'var(--text-secondary)' }}>{Math.round(settings.volume * 100)}%</span>
         </label>
         <input
@@ -183,18 +185,18 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
 
       {/* Детекция звука */}
       <h4 style={{ fontSize: 14, marginBottom: 10, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
-        Детекция звуковых событий
+        {t('audioPanel.detectTitle')}
       </h4>
       <Toggle
-        label="Распознавать звуковые события"
-        hint="Крик, выстрел, разбитое стекло, лай собаки и другие — появятся в разделе событий"
+        label={t('audioPanel.detectAudio')}
+        hint={t('audioPanel.detectAudioHint')}
         checked={settings.detect_audio}
         onChange={(v) => patch({ detect_audio: v })}
       />
 
       <div style={{ marginTop: 12, marginBottom: 16 }}>
         <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
-          <span>Порог срабатывания</span>
+          <span>{t('audioPanel.threshold')}</span>
           <span style={{ color: 'var(--text-secondary)' }}>{Math.round(settings.audio_threshold * 100)}%</span>
         </label>
         <input
@@ -205,31 +207,31 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
           style={{ width: '100%' }}
         />
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-          Ниже порога — тише, выше — меньше ложных срабатываний
+          {t('audioPanel.thresholdHint')}
         </p>
       </div>
 
       {/* Обратная связь (динамик камеры) */}
       <h4 style={{ fontSize: 14, marginBottom: 10, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
-        Обратная связь (динамик камеры)
+        {t('audioPanel.talkbackTitle')}
       </h4>
       <Toggle
-        label="Разрешить передачу звука на камеру"
-        hint="Двусторонняя связь: оператор говорит через микрофон, звук идёт на динамик камеры"
+        label={t('audioPanel.speakerEnabled')}
+        hint={t('audioPanel.speakerEnabledHint')}
         checked={settings.speaker_enabled}
         onChange={(v) => patch({ speaker_enabled: v })}
       />
       {settings.speaker_enabled && (
         <div style={{ marginTop: 12 }}>
-          <label style={{ display: 'block', fontSize: 13, marginBottom: 6 }}>Кодек динамика</label>
+          <label style={{ display: 'block', fontSize: 13, marginBottom: 6 }}>{t('audioPanel.speakerCodec')}</label>
           <select
             className="input"
             value={settings.speaker_codec}
             onChange={(e) => patch({ speaker_codec: e.target.value as AudioSettings['speaker_codec'] })}
             style={{ maxWidth: 240 }}
           >
-            <option value="g711">G.711 (совместим почти со всеми камерами)</option>
-            <option value="aac">AAC (лучше качество, поддерживают не все)</option>
+            <option value="g711">{t('audioPanel.speakerCodecG711')}</option>
+            <option value="aac">{t('audioPanel.speakerCodecAac')}</option>
           </select>
         </div>
       )}
@@ -247,9 +249,7 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
         </div>
       )}
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 10 }}>
-        Возможность обратного канала определяется автоматически по ответу
-        камеры на RTSP-запрос: если прошивка не поддерживает приём звука,
-        кнопка разговора не появится.
+        {t('audioPanel.backchannelHint')}
       </p>
     </div>
   )
