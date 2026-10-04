@@ -1961,4 +1961,49 @@ export default {
     show: '보이기',
     copy: '복사',
   },
+
+  acsCapture: {
+    accessGranted: '출입 허가 — 카드가 맞았습니다',
+    accessDenied: '출입 거부 — 카드가 맞지 않았습니다',
+    doorForced: '문 강제 개방 — 권한 없이 문을 열었습니다',
+    exitButton: '나가는 버튼을 눌렀습니다',
+    doorOpen: '문이 열렸습니다 (센서)',
+    doorClosed: '문이 닫혔습니다 (센서)',
+    authFailed: '컨트롤러 인증 실패',
+  },
+
+  editControllerModal: {
+    title: '컨트롤러 파라미터',
+    vendorLocked: '제조사: <1>{{vendor}}</1> — 변경할 수 없습니다',
+    saved: '저장했습니다',
+    saveFailed: '컨트롤러를 저장할 수 없습니다',
+
+    name: '이름',
+    ip: 'IP 주소',
+    port: '포트',
+
+    credentialsHint: '컨트롤러 계정 정보입니다. 바꾸지 않으려면 비워 두십시오.',
+    login: '로그인',
+    newPassword: '새 비밀번호',
+    unchanged: '변경하지 않음',
+
+    captureHint: '출입구 카메라입니다: 카드 리더기와 문을 향하게 두면 출입 이벤트로 누가 어떻게 지나갔는지 보입니다.',
+    camera: '카메라',
+    cameraUnbound: '연결 안 됨',
+    cameraOffline: '(오프라인)',
+
+    captureMode: '이벤트 시 무엇을 저장할지',
+    captureOff: '촬영하지 않음',
+    captureSnapshot: '스냅숏(한 프레임)',
+    captureClip: '짧은 영상',
+    captureEvents: '촬영할 출입 이벤트',
+    captureEventsHint: '아무것도 고르지 않으면 모든 이벤트를 촬영합니다.',
+    clipSeconds: '영상 길이, 초',
+    clipHint:
+      '동작 자체(통행 과정)가 중요할 때 영상이 필요합니다 — 디스크를 차지합니다. 사진 기록만 필요하면 스냅숏으로 충분합니다.',
+
+    close: '닫기',
+    saving: '저장 중…',
+    save: '저장',
+  },
 }

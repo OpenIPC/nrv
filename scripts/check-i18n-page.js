@@ -57,9 +57,15 @@ const lang = process.argv[3] || 'zh-CN'
   // умолчанию не открыта: иначе проверка молча смотрит не туда и
   // показывает, что всё переведено.
   if (process.env.NVR_TAB) {
-    const tab = page.locator('button', { hasText: process.env.NVR_TAB }).first()
-    if (await tab.count()) {
-      await tab.click()
+    // Ищем по тексту, а если не нашли — по CSS-селектору: часть кнопок
+    // подписана только значком (например редактирование контроллера),
+    // и по тексту их не найти.
+    let target = page.locator('button', { hasText: process.env.NVR_TAB }).first()
+    if ((await target.count()) === 0) {
+      target = page.locator(process.env.NVR_TAB).first()
+    }
+    if (await target.count()) {
+      await target.click()
       await page.waitForTimeout(1500)
     } else {
       console.log(`Кнопка «${process.env.NVR_TAB}» не найдена — проверяю открытую вкладку.`)

@@ -2007,4 +2007,50 @@ export default {
     show: 'Show',
     copy: 'Copy',
   },
+
+  acsCapture: {
+    accessGranted: 'Access granted — the card matched',
+    accessDenied: 'Access denied — the card did not match',
+    doorForced: 'Door forced — the door was opened without access',
+    exitButton: 'The exit button was pressed',
+    doorOpen: 'The door is open (sensor)',
+    doorClosed: 'The door is closed (sensor)',
+    authFailed: 'Authorisation on the controller failed',
+  },
+
+  editControllerModal: {
+    title: 'Controller parameters',
+    vendorLocked: 'Vendor: <1>{{vendor}}</1> — cannot be changed',
+    saved: 'Saved',
+    saveFailed: 'Could not save the controller',
+
+    name: 'Name',
+    ip: 'IP address',
+    port: 'Port',
+
+    credentialsHint: 'The controller credentials. Leave them empty to keep them unchanged.',
+    login: 'Login',
+    newPassword: 'New password',
+    unchanged: 'unchanged',
+
+    captureHint:
+      'The camera at the doorway: point it at the reader and the door so that access events show who passed and how.',
+    camera: 'Camera',
+    cameraUnbound: 'Not bound',
+    cameraOffline: '(offline)',
+
+    captureMode: 'What to record on an event',
+    captureOff: 'Do not record',
+    captureSnapshot: 'Snapshot (frame)',
+    captureClip: 'Short video',
+    captureEvents: 'Access events to record',
+    captureEventsHint: 'Nothing selected — recording happens on every event.',
+    clipSeconds: 'Video length, s',
+    clipHint:
+      'Video is needed when the action itself (the passage) matters — it takes disk space. For photo fixation a snapshot is enough.',
+
+    close: 'Close',
+    saving: 'Saving…',
+    save: 'Save',
+  },
 }

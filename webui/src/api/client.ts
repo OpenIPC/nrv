@@ -543,9 +543,20 @@ export interface ACSController {
 }
 
 // ACSCaptureEvent — событие доступа, доступное для съёмки.
-export interface ACSCaptureEvent {
-  value: string
-  label: string
+//
+// Приходит только кодом: подпись ставит интерфейс, а не сервер — иначе
+// русский текст оказался бы на всех языках сразу.
+export type ACSCaptureEvent = string
+
+/** Подписи к событиям доступа. */
+export const CAPTURE_EVENT_KEYS: Record<string, string> = {
+  access_granted: 'acsCapture.accessGranted',
+  access_denied: 'acsCapture.accessDenied',
+  door_forced: 'acsCapture.doorForced',
+  exit_button: 'acsCapture.exitButton',
+  door_open: 'acsCapture.doorOpen',
+  door_closed: 'acsCapture.doorClosed',
+  auth_failed: 'acsCapture.authFailed',
 }
 
 // AcceptState — состояние режима записи карт на контроллере.
@@ -1849,7 +1860,6 @@ export const acsAPI = {
 
   // Список событий доступа, доступных для съёмки.
   captureEvents: () => api.get<ACSCaptureEvent[]>('/acs/capture-events'),
-
   // --- Режим работы контроллера Z5R ---
 
   // Текущий режим работы. Нужен, чтобы показать оператору, смотрит ли

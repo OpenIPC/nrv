@@ -23,30 +23,29 @@ import (
 // Съёмка всегда асинхронная: клип собирается несколько секунд, и держать
 // на этом обработку события нельзя — журнал СКУД читается циклически.
 
-// captureEvents — события доступа, по которым имеет смысл снимать.
+// captureEventOrder — события доступа, по которым имеет смысл снимать,
+// в порядке важности: отказ в доступе и взлом двери важнее штатного
+// прохода, поэтому их не стоит отключать при настройке.
 //
-// Порядок соответствует важности: отказ в доступе и взлом двери важнее
-// штатного прохода, поэтому их не стоит отключать при настройке.
-var captureEvents = map[string]string{
-	"access_granted": "Доступ разрешён — карта подошла",
-	"access_denied":  "Отказ в доступе — карта не подошла",
-	"door_forced":    "Взлом двери — дверь открыли без доступа",
-	"exit_button":    "Нажата кнопка выхода",
-	"door_open":      "Дверь открыта (датчик)",
-	"door_closed":    "Дверь закрыта (датчик)",
-	"auth_failed":    "Неудачная авторизация на контроллере",
+// Это коды, а не подписи: интерфейс переводится на четыре языка, и
+// русская строка из ответа осталась бы русской для всех. Подпись ставит
+// интерфейс (см. webui/src/components/EditControllerModal.tsx).
+var captureEventOrder = []string{
+	"access_granted",
+	"access_denied",
+	"door_forced",
+	"exit_button",
+	"door_open",
+	"door_closed",
+	"auth_failed",
 }
 
 // CaptureEventsList возвращает список событий, доступных для съёмки.
 // Интерфейс использует его, чтобы не дублировать перечень у себя.
-func CaptureEventsList() []map[string]string {
-	order := []string{
-		"access_granted", "access_denied", "door_forced",
-		"exit_button", "door_open", "door_closed", "auth_failed",
-	}
-	out := make([]map[string]string, 0, len(order))
-	for _, k := range order {
-		out = append(out, map[string]string{"value": k, "label": captureEvents[k]})
+func CaptureEventsList() []string {
+	out := make([]string, 0, len(captureEventOrder))
+	for _, k := range captureEventOrder {
+		out = append(out, k)
 	}
 	return out
 }
@@ -72,13 +71,12 @@ func shouldCapture(mode string, events []string, eventType string) bool {
 
 // triggerDetail описывает причину записи для архива.
 //
-// Оператору важно видеть не техническое имя события, а что произошло и
-// с чьей картой: «Отказ в доступе — карта не подошла (5:1234)».
+// В причине — код события, а не готовая фраза: запись лежит в базе и
+// переживёт смену языка интерфейса, а подпись к коду ставится при показе.
+// Код дополняется картой: «access_denied (5:1234)». Одинаковый вид и у
+// старых записей, и у новых.
 func triggerDetail(ev domain.ACSEvent) string {
-	label := captureEvents[ev.EventType]
-	if label == "" {
-		label = ev.EventType
-	}
+	label := ev.EventType
 	if ev.CardNumber != "" {
 		if ev.CardName != "" {
 			return fmt.Sprintf("%s (%s, %s)", label, ev.CardNumber, ev.CardName)
@@ -253,12 +251,14 @@ func grabFrame(ctx context.Context, rtspURL string, timeout time.Duration) ([]by
 	return stdout.Bytes(), nil
 }
 
-// TriggerLabelForEvent возвращает понятное название причины для интерфейса.
-func TriggerLabelForEvent(eventType string) string {
-	if l, ok := captureEvents[eventType]; ok {
-		return l
+// isCaptureEvent сообщает, известен ли такой тип события для съёмки.
+func isCaptureEvent(eventType string) bool {
+	for _, k := range captureEventOrder {
+		if k == eventType {
+			return true
+		}
 	}
-	return eventType
+	return false
 }
 
 // pendingClip — событие СКУД, ожидающее сохранения своего клипа.

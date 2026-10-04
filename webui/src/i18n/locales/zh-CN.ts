@@ -1935,4 +1935,48 @@ export default {
     show: '显示',
     copy: '复制',
   },
+
+  acsCapture: {
+    accessGranted: '允许通行——卡对上了',
+    accessDenied: '拒绝通行——卡对不上',
+    doorForced: '门被强行打开——没有权限就开了门',
+    exitButton: '按下了出门按钮',
+    doorOpen: '门已打开（传感器）',
+    doorClosed: '门已关闭（传感器）',
+    authFailed: '控制器认证失败',
+  },
+
+  editControllerModal: {
+    title: '控制器参数',
+    vendorLocked: '厂商：<1>{{vendor}}</1> —— 不能修改',
+    saved: '已保存',
+    saveFailed: '无法保存控制器',
+
+    name: '名称',
+    ip: 'IP 地址',
+    port: '端口',
+
+    credentialsHint: '控制器的账号密码。留空表示不修改。',
+    login: '用户名',
+    newPassword: '新密码',
+    unchanged: '不修改',
+
+    captureHint: '门口的摄像机：把它对准读卡器和门，这样从通行事件里就能看出谁是怎么过的。',
+    camera: '摄像机',
+    cameraUnbound: '未绑定',
+    cameraOffline: '（离线）',
+
+    captureMode: '事件时保存什么',
+    captureOff: '不拍摄',
+    captureSnapshot: '抓图（单帧）',
+    captureClip: '短视频',
+    captureEvents: '要拍摄的通行事件',
+    captureEventsHint: '一个都不选——所有事件都拍。',
+    clipSeconds: '视频时长，秒',
+    clipHint: '当重要的是动作本身（通行过程）时才需要视频——它会占磁盘。仅仅留存画面，抓图就够了。',
+
+    close: '关闭',
+    saving: '正在保存…',
+    save: '保存',
+  },
 }

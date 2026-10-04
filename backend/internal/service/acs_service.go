@@ -449,8 +449,7 @@ func (s *ACSService) UpdateController(ctx context.Context, id uuid.UUID, req dom
 		ctrl.CaptureEvents = []string{}
 	}
 	for _, e := range ctrl.CaptureEvents {
-		if _, ok := captureEvents[e]; !ok {
-			return nil, fmt.Errorf("неизвестное событие для съёмки: %s", e)
+			if !isCaptureEvent(e) {
 		}
 	}
 

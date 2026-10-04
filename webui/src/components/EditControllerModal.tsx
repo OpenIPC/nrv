@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { acsAPI, ACSController, ACSCaptureEvent, camerasAPI, Camera } from '../api/client'
+import { Trans, useTranslation } from 'react-i18next'
+import { acsAPI, ACSController, ACSCaptureEvent, CAPTURE_EVENT_KEYS, camerasAPI, Camera } from '../api/client'
 import { Save, X } from 'lucide-react'
 
 // Редактирование параметров контроллера СКУД.
@@ -15,6 +16,7 @@ interface Props {
 }
 
 export function EditControllerModal({ controller, onClose, onSaved }: Props) {
+  const { t } = useTranslation()
   const [form, setForm] = useState({
     name: controller.name,
     ip: controller.ip,
@@ -68,10 +70,10 @@ export function EditControllerModal({ controller, onClose, onSaved }: Props) {
         capture_events: captureEvents,
         clip_seconds: form.clip_seconds,
       })
-      setOk('Сохранено')
+      setOk(t('editControllerModal.saved'))
       onSaved()
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось сохранить контроллер')
+      setError(e?.response?.data?.error || t('editControllerModal.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -88,11 +90,15 @@ export function EditControllerModal({ controller, onClose, onSaved }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ marginBottom: 4 }}>Параметры контроллера</h2>
+          <h2 style={{ marginBottom: 4 }}>{t('editControllerModal.title')}</h2>
           <button className="btn btn-outline btn-sm" onClick={onClose}><X size={16} /></button>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 0 }}>
-          Производитель: <strong>{controller.vendor}</strong> — изменить нельзя
+          <Trans
+            i18nKey="editControllerModal.vendorLocked"
+            values={{ vendor: controller.vendor }}
+            components={{ 1: <strong /> }}
+          />
         </p>
 
         {error && (
@@ -107,10 +113,10 @@ export function EditControllerModal({ controller, onClose, onSaved }: Props) {
         )}
 
         <form onSubmit={handleSubmit}>
-          <label>Название</label>
+          <label>{t('editControllerModal.name')}</label>
           <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
 
-          <label>IP-адрес</label>
+          <label>{t('editControllerModal.ip')}</label>
           <input
             value={form.ip}
             onChange={(e) => setForm({ ...form, ip: e.target.value })}
@@ -118,7 +124,7 @@ export function EditControllerModal({ controller, onClose, onSaved }: Props) {
             required
           />
 
-          <label>Порт</label>
+          <label>{t('editControllerModal.port')}</label>
           <input
             type="number"
             min={1}
@@ -129,83 +135,82 @@ export function EditControllerModal({ controller, onClose, onSaved }: Props) {
 
           <div style={{ borderTop: '1px solid var(--border)', margin: '16px 0 12px', paddingTop: 12 }}>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-              Учётные данные контроллера. Оставьте пустыми, чтобы не менять.
+              {t('editControllerModal.credentialsHint')}
             </div>
           </div>
 
-          <label>Логин</label>
+          <label>{t('editControllerModal.login')}</label>
           <input
             value={form.login}
             onChange={(e) => setForm({ ...form, login: e.target.value })}
-            placeholder="без изменений"
+            placeholder={t('editControllerModal.unchanged')}
           />
 
-          <label>Новый пароль</label>
+          <label>{t('editControllerModal.newPassword')}</label>
           <input
             type="password"
             value={form.password}
             onChange={(e) => setForm({ ...form, password: e.target.value })}
-            placeholder="без изменений"
+            placeholder={t('editControllerModal.unchanged')}
           />
 
           <div style={{ borderTop: '1px solid var(--border)', margin: '16px 0 12px', paddingTop: 12 }}>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-              Камера проёма: направьте её на считыватель и дверь, чтобы по
-              событиям доступа было видно, кто и как прошёл.
+              {t('editControllerModal.captureHint')}
             </div>
           </div>
 
-          <label>Камера</label>
+          <label>{t('editControllerModal.camera')}</label>
           <select
             value={form.camera_id}
             onChange={(e) => setForm({ ...form, camera_id: e.target.value, capture_mode: e.target.value ? form.capture_mode : 'off' })}
           >
-            <option value="">Не привязана</option>
+            <option value="">{t('editControllerModal.cameraUnbound')}</option>
             {cameras.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.name}{c.status === 'offline' ? ' (офлайн)' : ''}
+                {c.name}{c.status === 'offline' ? ` ${t('editControllerModal.cameraOffline')}` : ''}
               </option>
             ))}
           </select>
 
           {hasCamera && (
             <>
-              <label>Что сохранять по событию</label>
+              <label>{t('editControllerModal.captureMode')}</label>
               <select
                 value={form.capture_mode}
                 onChange={(e) => setForm({ ...form, capture_mode: e.target.value as any })}
               >
-                <option value="off">Не снимать</option>
-                <option value="snapshot">Снимок (кадр)</option>
-                <option value="clip">Короткое видео</option>
+                <option value="off">{t('editControllerModal.captureOff')}</option>
+                <option value="snapshot">{t('editControllerModal.captureSnapshot')}</option>
+                <option value="clip">{t('editControllerModal.captureClip')}</option>
               </select>
 
               {form.capture_mode !== 'off' && (
                 <>
-                  <label>События доступа для съёмки</label>
+                  <label>{t('editControllerModal.captureEvents')}</label>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-                    Ничего не отмечено — съёмка на все события.
+                    {t('editControllerModal.captureEventsHint')}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {events.map((ev) => (
                       <label
-                        key={ev.value}
+                        key={ev}
                         style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 0, fontWeight: 400 }}
                       >
                         <input
                           type="checkbox"
-                          checked={captureEvents.includes(ev.value)}
-                          onChange={() => toggleEvent(ev.value)}
+                          checked={captureEvents.includes(ev)}
+                          onChange={() => toggleEvent(ev)}
                           style={{ width: 'auto' }}
                         />
-                        {ev.label}
+                        {CAPTURE_EVENT_KEYS[ev] ? t(CAPTURE_EVENT_KEYS[ev]) : ev}
                       </label>
                     ))}
                   </div>
 
                   {form.capture_mode === 'clip' && (
                     <>
-                      <label>Длительность видео, сек</label>
+                      <label>{t('editControllerModal.clipSeconds')}</label>
                       <input
                         type="number"
                         min={1}
@@ -214,8 +219,7 @@ export function EditControllerModal({ controller, onClose, onSaved }: Props) {
                         onChange={(e) => setForm({ ...form, clip_seconds: +e.target.value })}
                       />
                       <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                        Видео нужно, когда важно само действие (проход), — оно
-                        занимает диск. Для фотофиксации достаточно снимка.
+                        {t('editControllerModal.clipHint')}
                       </div>
                     </>
                   )}
@@ -225,10 +229,10 @@ export function EditControllerModal({ controller, onClose, onSaved }: Props) {
           )}
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
-            <button type="button" className="btn btn-outline" onClick={onClose}>Закрыть</button>
+            <button type="button" className="btn btn-outline" onClick={onClose}>{t('editControllerModal.close')}</button>
             <button type="submit" className="btn btn-primary" disabled={saving}>
               <Save size={16} />
-              {saving ? 'Сохранение...' : 'Сохранить'}
+              {saving ? t('editControllerModal.saving') : t('editControllerModal.save')}
             </button>
           </div>
         </form>
