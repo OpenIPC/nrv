@@ -1424,4 +1424,50 @@ export default {
     backchannelHint:
       '反向通道由摄像机对 RTSP 请求的应答自动判定：如果固件不支持接收声音，对讲按钮就不会出现。',
   },
+
+  firmwareModal: {
+    title: '控制器固件',
+    close: '关闭',
+    refresh: '刷新',
+
+    listFailed: '无法获取固件列表',
+    uploadFailed: '无法上传固件',
+    deleteFailed: '无法删除固件',
+    installFailed: '无法启动更新',
+    confirmDelete: '删除固件 {{name}}？',
+    confirmInstall:
+      '用固件 {{firmware}} 刷写控制器「{{name}}」？\n\n设备会重启，大约一分钟内无法使用。',
+
+    installed: '控制器上已安装',
+    version: '版本 {{version}}',
+    build: '编译号 {{build}}',
+    versionUnknownStrong: '无法确定版本。',
+    versionUnknownText:
+      '无法确定版本。控制器上的固件不报告版本，或者控制器无法访问。这样就无法按版本来验收 OTA 结果——更新后版本必须出现。',
+
+    stateRunning: '正在更新',
+    stateDone: '更新完成',
+    stateFailed: '更新失败',
+    msgUploading: '正在把固件传到控制器',
+    msgRebooting: '控制器正在重启',
+    msgVerifying: '正在核对更新后的版本',
+    msgDone: '更新已完成',
+    msgVersionMismatch:
+      '更新已完成，但控制器报告的版本是 {{version}}，而文件是 {{expected}}',
+    wasVersion: '原来是：{{version}}',
+    becameVersion: '现在是：{{version}}',
+
+    upload: '上传 .bin 镜像',
+    uploading: '正在上传…',
+    thFirmware: '固件',
+    thVersion: '版本',
+    thSize: '大小',
+    deleteHint: '删除镜像',
+    empty: '还没有上传固件。请上传从固件项目构建的 .bin 文件。',
+
+    installing: '正在更新…',
+    install: '刷写控制器',
+    warning:
+      '刷写期间控制器不控制锁：更新会中断它的工作。请在没有人需要通行的时候进行。',
+  },
 }

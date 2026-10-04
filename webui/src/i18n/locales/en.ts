@@ -1482,4 +1482,50 @@ export default {
     backchannelHint:
       'The backchannel is detected automatically from the camera response to the RTSP request: if the firmware does not accept sound, the talk button will not appear.',
   },
+
+  firmwareModal: {
+    title: 'Controller firmware',
+    close: 'Close',
+    refresh: 'Refresh',
+
+    listFailed: 'Could not fetch the firmware list',
+    uploadFailed: 'Could not upload the firmware',
+    deleteFailed: 'Could not delete the firmware',
+    installFailed: 'Could not start the update',
+    confirmDelete: 'Delete the firmware {{name}}?',
+    confirmInstall:
+      'Flash the controller «{{name}}» with the firmware {{firmware}}?\n\nThe device will reboot and be unavailable for about a minute.',
+
+    installed: 'Installed on the controller',
+    version: 'Version {{version}}',
+    build: 'build {{build}}',
+    versionUnknownStrong: 'The version cannot be determined.',
+    versionUnknownText:
+      'The version cannot be determined. The controller runs firmware that does not report a version, or it is unreachable. The OTA result cannot be checked by version — after the update the version has to appear.',
+
+    stateRunning: 'The update is running',
+    stateDone: 'The update finished',
+    stateFailed: 'The update failed',
+    msgUploading: 'uploading the firmware to the controller',
+    msgRebooting: 'the controller is rebooting',
+    msgVerifying: 'checking the version after the update',
+    msgDone: 'the update finished',
+    msgVersionMismatch:
+      'the update finished, but the controller reports version {{version}} while the file is {{expected}}',
+    wasVersion: 'was: {{version}}',
+    becameVersion: 'became: {{version}}',
+
+    upload: 'Upload a .bin image',
+    uploading: 'Uploading…',
+    thFirmware: 'Firmware',
+    thVersion: 'Version',
+    thSize: 'Size',
+    deleteHint: 'Delete the image',
+    empty: 'No firmware uploaded. Upload a .bin file built from the firmware project.',
+
+    installing: 'The update is running…',
+    install: 'Flash the controller',
+    warning:
+      'While flashing, the controller does not control the lock: the update interrupts its work. Do it when no one needs to pass.',
+  },
 }

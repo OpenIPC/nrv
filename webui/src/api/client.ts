@@ -706,9 +706,14 @@ export interface OTAUpdate {
   state: 'running' | 'done' | 'failed' | 'idle'
   // step: upload, reboot, verify, done.
   step: string
+  // message — код хода обновления (ota.uploading и т. п.) либо готовый
+  // текст ошибки от устройства. Подпись к коду ставит интерфейс.
   message: string
   from_version?: string
   to_version?: string
+  // expected_version — версия из имени файла. Может не совпасть
+  // с to_version: тогда оператору нужно видеть обе.
+  expected_version?: string
   started_at?: string
   finished_at?: string
 }

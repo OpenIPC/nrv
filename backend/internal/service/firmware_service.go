@@ -54,13 +54,23 @@ type OTAUpdate struct {
 	// State: running — идёт, done — успешно, failed — ошибка.
 	State string `json:"state"`
 	// Step — текущий шаг: upload, reboot, verify.
-	Step    string `json:"step"`
+	Step string `json:"step"`
+	// Message — код хода обновления (ota.uploading и т. п.) либо готовый
+	// текст ошибки от устройства.
+	//
+	// Код, а не готовая фраза: интерфейс показывается на четырёх языках, и
+	// русский текст, записанный здесь, показался бы одинаковым всем.
+	// Подпись к коду ставит интерфейс (см. webui/src/components/FirmwareModal.tsx).
 	Message string `json:"message"`
 	// FromVersion и ToVersion — версии до и после обновления.
-	FromVersion string    `json:"from_version,omitempty"`
-	ToVersion   string    `json:"to_version,omitempty"`
-	StartedAt   time.Time `json:"started_at"`
-	FinishedAt  time.Time `json:"finished_at,omitempty"`
+	FromVersion string `json:"from_version,omitempty"`
+	ToVersion   string `json:"to_version,omitempty"`
+	// ExpectedVersion — версия из имени файла. Отдаётся отдельно, потому
+	// что она может не совпасть с ToVersion: тогда оператору нужно видеть
+	// обе, а не одну.
+	ExpectedVersion string    `json:"expected_version,omitempty"`
+	StartedAt       time.Time `json:"started_at"`
+	FinishedAt      time.Time `json:"finished_at,omitempty"`
 }
 
 // FirmwareService хранит образы прошивок и запускает обновления.
@@ -298,7 +308,7 @@ func (s *FirmwareService) StartUpdate(ctx context.Context, controllerID uuid.UUI
 		ControllerID: controllerID,
 		State:        "running",
 		Step:         "upload",
-		Message:      "загрузка прошивки на контроллер",
+		Message:      "ota.uploading",
 		StartedAt:    time.Now(),
 	}
 	s.setUpdate(update)
@@ -338,12 +348,12 @@ func (s *FirmwareService) runUpdate(adapter acs.FirmwareManager, ctrl *domain.AC
 
 	// После успешной записи контроллер перезагружается сам.
 	update.Step = "reboot"
-	update.Message = "контроллер перезагружается"
+	update.Message = "ota.rebooting"
 	s.setUpdate(update)
 	log.Info().Str("контроллер", ctrl.Name).Msg("OTA: образ отправлен, ждём перезагрузки")
 
 	update.Step = "verify"
-	update.Message = "проверка версии после обновления"
+	update.Message = "ota.verifying"
 	s.setUpdate(update)
 
 	version, err := adapter.VerifyFirmwareVersion(ctx, 3*time.Minute)
@@ -378,15 +388,18 @@ func (s *FirmwareService) runUpdate(adapter acs.FirmwareManager, ctrl *domain.AC
 	case expected != "" && expected != version:
 		update.State = "done"
 		update.Step = "done"
-		update.Message = fmt.Sprintf(
-			"обновление завершено, но контроллер сообщает версию %s, а файл — %s", version, expected)
+		// Версии расходятся — это отдельный случай: обновление прошло,
+		// но применилось не то, что оператор выбрал. Обе версии отдаём
+		// в поля, чтобы интерфейс показал их на своём языке.
+		update.Message = "ota.version_mismatch"
+		update.ExpectedVersion = expected
 		log.Warn().Str("контроллер", ctrl.Name).
 			Str("ожидалась", expected).Str("получена", version).
 			Msg("OTA: версия после обновления не совпала с именем файла")
 	default:
 		update.State = "done"
 		update.Step = "done"
-		update.Message = "обновление завершено"
+		update.Message = "ota.done"
 	}
 	s.setUpdate(update)
 

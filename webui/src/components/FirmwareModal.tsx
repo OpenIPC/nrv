@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   acsAPI,
   ACSController,
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export function FirmwareModal({ controller, onClose }: Props) {
+  const { t } = useTranslation()
   const [images, setImages] = useState<FirmwareImage[]>([])
   const [current, setCurrent] = useState<FirmwareInfo | null>(null)
   const [update, setUpdate] = useState<OTAUpdate | null>(null)
@@ -35,7 +37,7 @@ export function FirmwareModal({ controller, onClose }: Props) {
       const list = await acsAPI.listFirmwares()
       setImages(list.data || [])
     } catch {
-      setError('Не удалось получить список прошивок')
+      setError(t('firmwareModal.listFailed'))
     }
 
     try {
@@ -108,21 +110,21 @@ export function FirmwareModal({ controller, onClose }: Props) {
       if (fileRef.current) fileRef.current.value = ''
       await load()
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось загрузить прошивку')
+      setError(e?.response?.data?.error || t('firmwareModal.uploadFailed'))
     } finally {
       setBusy('')
     }
   }
 
   const handleDelete = async (name: string) => {
-    if (!window.confirm(`Удалить прошивку ${name}?`)) return
+    if (!window.confirm(t('firmwareModal.confirmDelete', { name }))) return
     setBusy('del-' + name)
     setError('')
     try {
       await acsAPI.deleteFirmware(name)
       await load()
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось удалить прошивку')
+      setError(e?.response?.data?.error || t('firmwareModal.deleteFailed'))
     } finally {
       setBusy('')
     }
@@ -131,8 +133,7 @@ export function FirmwareModal({ controller, onClose }: Props) {
   const handleInstall = async () => {
     if (!selected) return
     if (!window.confirm(
-      `Прошить контроллер «${controller.name}» прошивкой ${selected}?\n\n` +
-      'Устройство перезагрузится и будет недоступно около минуты.'
+      t('firmwareModal.confirmInstall', { name: controller.name, firmware: selected })
     )) return
 
     setBusy('install')
@@ -141,7 +142,7 @@ export function FirmwareModal({ controller, onClose }: Props) {
       const r = await acsAPI.startFirmwareUpdate(controller.id, selected)
       setUpdate(r.data)
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось запустить обновление')
+      setError(e?.response?.data?.error || t('firmwareModal.installFailed'))
     } finally {
       setBusy('')
     }
@@ -151,11 +152,33 @@ export function FirmwareModal({ controller, onClose }: Props) {
 
   const stepLabel = (step?: string) => {
     switch (step) {
-      case 'upload': return 'Передача образа на контроллер'
-      case 'reboot': return 'Контроллер перезагружается'
-      case 'verify': return 'Проверка версии после обновления'
-      case 'done': return 'Обновление завершено'
+      case 'upload': return t('firmwareModal.msgUploading')
+      case 'reboot': return t('firmwareModal.msgRebooting')
+      case 'verify': return t('firmwareModal.msgVerifying')
+      case 'done': return t('firmwareModal.msgDone')
       default: return step || ''
+    }
+  }
+
+  /**
+   * Текст о ходе обновления.
+   *
+   * Сервер присылает код для известных состояний и готовый текст ошибки —
+   * для сбоя. Коды переводим, а текст ошибки показываем как есть: он
+   * пришёл от устройства, и переписать его на стороне интерфейса нечем.
+   */
+  const updateMessage = (u: OTAUpdate): string => {
+    switch (u.message) {
+      case 'ota.uploading': return stepLabel('upload')
+      case 'ota.rebooting': return stepLabel('reboot')
+      case 'ota.verifying': return stepLabel('verify')
+      case 'ota.done': return t('firmwareModal.msgDone')
+      case 'ota.version_mismatch':
+        return t('firmwareModal.msgVersionMismatch', {
+          version: u.to_version,
+          expected: u.expected_version,
+        })
+      default: return u.message
     }
   }
 
@@ -167,7 +190,7 @@ export function FirmwareModal({ controller, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ marginBottom: 4 }}>Прошивка контроллера</h2>
+          <h2 style={{ marginBottom: 4 }}>{t('firmwareModal.title')}</h2>
           <button className="btn btn-outline btn-sm" onClick={onClose}><X size={16} /></button>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 0 }}>
@@ -182,24 +205,22 @@ export function FirmwareModal({ controller, onClose }: Props) {
 
         {/* Установленная версия */}
         <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Установлено на контроллере</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('firmwareModal.installed')}</div>
           {loading ? (
             <div className="spinner" />
           ) : current?.version ? (
             <div style={{ fontSize: 15 }}>
-              <strong>Версия {current.version}</strong>
+              <strong>{t('firmwareModal.version', { version: current.version })}</strong>
               {current.build && (
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 8 }}>
-                  сборка {current.build}
+                  {t('firmwareModal.build', { build: current.build })}
                 </span>
               )}
             </div>
           ) : (
             <div style={{ fontSize: 13 }}>
-              <span style={{ color: 'var(--warning)' }}>Версия не определяется.</span>{' '}
-              На контроллере прошивка, не сообщающая версию, либо он недоступен.
-              Проверить результат OTA по версии не получится — после обновления
-              версия должна появиться.
+              <span style={{ color: 'var(--warning)' }}>{t('firmwareModal.versionUnknownStrong')}</span>{' '}
+              {t('firmwareModal.versionUnknownText')}
             </div>
           )}
         </div>
@@ -223,9 +244,9 @@ export function FirmwareModal({ controller, onClose }: Props) {
               {update.state === 'done' && <CheckCircle size={16} style={{ color: 'var(--success)' }} />}
               {update.state === 'failed' && <AlertTriangle size={16} style={{ color: 'var(--danger)' }} />}
               <strong>
-                {update.state === 'running' ? 'Обновление выполняется'
-                  : update.state === 'done' ? 'Обновление завершено'
-                  : 'Обновление не удалось'}
+                {update.state === 'running' ? t('firmwareModal.stateRunning')
+                  : update.state === 'done' ? t('firmwareModal.stateDone')
+                  : t('firmwareModal.stateFailed')}
               </strong>
             </div>
             {running && (
@@ -233,11 +254,11 @@ export function FirmwareModal({ controller, onClose }: Props) {
                 {stepLabel(update.step)}
               </div>
             )}
-            <div style={{ fontSize: 13, marginTop: 6 }}>{update.message}</div>
+            <div style={{ fontSize: 13, marginTop: 6 }}>{updateMessage(update)}</div>
             {(update.from_version || update.to_version) && (
               <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
-                {update.from_version && <>было: {update.from_version || '—'} </>}
-                {update.to_version && <>→ стало: {update.to_version}</>}
+                {update.from_version && <>{t('firmwareModal.wasVersion', { version: update.from_version || '—' })} </>}
+                {update.to_version && <>→ {t('firmwareModal.becameVersion', { version: update.to_version })}</>}
               </div>
             )}
           </div>
@@ -258,10 +279,10 @@ export function FirmwareModal({ controller, onClose }: Props) {
             disabled={busy === 'upload'}
           >
             <Upload size={14} />
-            {busy === 'upload' ? 'Загрузка...' : 'Загрузить образ .bin'}
+            {busy === 'upload' ? t('firmwareModal.uploading') : t('firmwareModal.upload')}
           </button>
           <button className="btn btn-outline btn-sm" onClick={load} disabled={loading}>
-            <RefreshCw size={14} /> Обновить
+            <RefreshCw size={14} /> {t('firmwareModal.refresh')}
           </button>
         </div>
 
@@ -271,9 +292,9 @@ export function FirmwareModal({ controller, onClose }: Props) {
             <thead>
               <tr>
                 <th style={{ width: 40 }} />
-                <th>Прошивка</th>
-                <th>Версия</th>
-                <th>Размер</th>
+                <th>{t('firmwareModal.thFirmware')}</th>
+                <th>{t('firmwareModal.thVersion')}</th>
+                <th>{t('firmwareModal.thSize')}</th>
                 <th style={{ width: 50 }} />
               </tr>
             </thead>
@@ -281,7 +302,7 @@ export function FirmwareModal({ controller, onClose }: Props) {
               {images.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: 24 }}>
-                    Нет загруженных прошивок. Загрузите файл .bin, собранный из проекта прошивки.
+                    {t('firmwareModal.empty')}
                   </td>
                 </tr>
               ) : (
@@ -303,7 +324,7 @@ export function FirmwareModal({ controller, onClose }: Props) {
                     <td>
                       <button
                         className="btn btn-outline btn-sm"
-                        title="Удалить образ"
+                        title={t('firmwareModal.deleteHint')}
                         disabled={busy === 'del-' + img.name || running}
                         onClick={() => handleDelete(img.name)}
                       >
@@ -318,20 +339,19 @@ export function FirmwareModal({ controller, onClose }: Props) {
         </div>
 
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
-          <button type="button" className="btn btn-outline" onClick={onClose}>Закрыть</button>
+          <button type="button" className="btn btn-outline" onClick={onClose}>{t('firmwareModal.close')}</button>
           <button
             className="btn btn-primary"
             onClick={handleInstall}
             disabled={!selected || running || busy === 'install'}
           >
             <Download size={16} />
-            {running ? 'Обновление идёт...' : 'Прошить контроллер'}
+            {running ? t('firmwareModal.installing') : t('firmwareModal.install')}
           </button>
         </div>
 
         <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 12 }}>
-          Во время прошивки контроллер не управляет замком: обновление
-          прерывает его работу. Выполняйте его, когда проход не нужен.
+          {t('firmwareModal.warning')}
         </div>
       </div>
     </div>

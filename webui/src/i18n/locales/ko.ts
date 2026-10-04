@@ -1448,4 +1448,50 @@ export default {
     backchannelHint:
       '역방향 채널은 카메라의 RTSP 응답으로 자동 판단합니다: 펌웨어가 소리 수신을 지원하지 않으면 대화 버튼이 나타나지 않습니다.',
   },
+
+  firmwareModal: {
+    title: '컨트롤러 펌웨어',
+    close: '닫기',
+    refresh: '새로 고침',
+
+    listFailed: '펌웨어 목록을 가져올 수 없습니다',
+    uploadFailed: '펌웨어를 올릴 수 없습니다',
+    deleteFailed: '펌웨어를 삭제할 수 없습니다',
+    installFailed: '업데이트를 시작할 수 없습니다',
+    confirmDelete: '펌웨어 {{name}}을(를) 삭제하시겠습니까?',
+    confirmInstall:
+      '컨트롤러 «{{name}}»에 펌웨어 {{firmware}}을(를) 기록하시겠습니까?\n\n장치가 재부팅되고 약 1분 동안 사용할 수 없습니다.',
+
+    installed: '컨트롤러에 설치됨',
+    version: '버전 {{version}}',
+    build: '빌드 {{build}}',
+    versionUnknownStrong: '버전을 확인할 수 없습니다.',
+    versionUnknownText:
+      '버전을 확인할 수 없습니다. 컨트롤러의 펌웨어가 버전을 알려주지 않거나 컨트롤러에 접속할 수 없습니다. 이 상태로는 OTA 결과를 버전으로 확인할 수 없습니다 — 업데이트 후에는 버전이 나타나야 합니다.',
+
+    stateRunning: '업데이트 진행 중',
+    stateDone: '업데이트 완료',
+    stateFailed: '업데이트 실패',
+    msgUploading: '컨트롤러로 펌웨어를 보내는 중',
+    msgRebooting: '컨트롤러가 재부팅 중',
+    msgVerifying: '업데이트 후 버전 확인 중',
+    msgDone: '업데이트가 끝났습니다',
+    msgVersionMismatch:
+      '업데이트는 끝났지만 컨트롤러가 알려준 버전은 {{version}}이고 파일은 {{expected}}입니다',
+    wasVersion: '이전: {{version}}',
+    becameVersion: '이후: {{version}}',
+
+    upload: '.bin 이미지 올리기',
+    uploading: '올리는 중…',
+    thFirmware: '펌웨어',
+    thVersion: '버전',
+    thSize: '크기',
+    deleteHint: '이미지 삭제',
+    empty: '올린 펌웨어가 없습니다. 펌웨어 프로젝트에서 빌드한 .bin 파일을 올리십시오.',
+
+    installing: '업데이트 진행 중…',
+    install: '컨트롤러 기록',
+    warning:
+      '기록하는 동안 컨트롤러는 잠금장치를 제어하지 않습니다: 업데이트가 동작을 끊습니다. 통행이 필요 없는 때에 하십시오.',
+  },
 }
