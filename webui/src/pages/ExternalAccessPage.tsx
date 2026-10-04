@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Trans, useTranslation } from 'react-i18next'
 import { useAsync } from '../hooks/useApi'
 import { rtspAPI, ExternalRTSPSettings, ExternalChannel } from '../api/client'
 import { useToast } from '../context/ToastContext'
@@ -12,6 +13,7 @@ import { Copy, Check, Radio, Signal, SignalHigh, RefreshCw, Info, AlertTriangle,
 // Поэтому страница показывает готовые ссылки, которые можно скопировать.
 export default function ExternalAccessPage() {
   const toast = useToast()
+  const { t } = useTranslation()
   const { data, loading, error, refetch } = useAsync<ExternalRTSPSettings>(
     () => rtspAPI.settings(),
   )
@@ -24,12 +26,12 @@ export default function ExternalAccessPage() {
       <div>
         <div className="page-header">
           <div>
-            <h1>Внешний доступ</h1>
-            <p>RTSP-потоки для сторонних систем</p>
+            <h1>{t('externalAccessPage.title')}</h1>
+            <p>{t('externalAccessPage.subtitle')}</p>
           </div>
         </div>
         <div className="card" style={{ color: 'var(--warning, #f59e0b)' }}>
-          <p>{error || 'Не удалось получить настройки внешнего доступа'}</p>
+          <p>{error || t('externalAccessPage.loadFailed')}</p>
         </div>
       </div>
     )
@@ -43,10 +45,10 @@ export default function ExternalAccessPage() {
     setAssigning(cameraId)
     try {
       await rtspAPI.assignChannel(cameraId, channel)
-      toast.success(`Канал ${channel} назначен камере «${name}»`)
+      toast.success(t('externalAccessPage.channelAssigned', { channel, name }))
       refetch()
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось назначить номер')
+      toast.error(e?.response?.data?.error || t('externalAccessPage.assignFailed'))
     } finally {
       setAssigning(null)
     }
@@ -56,15 +58,18 @@ export default function ExternalAccessPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>Внешний доступ</h1>
+          <h1>{t('externalAccessPage.title')}</h1>
           <p>
-            Потоки для сторонних систем: <strong>{online.length}</strong> из{' '}
-            {data.channels.length} каналов онлайн
+            <Trans
+              i18nKey="externalAccessPage.channelsOnline"
+              values={{ online: online.length, total: data.channels.length }}
+              components={{ 1: <strong /> }}
+            />
           </p>
         </div>
         <button className="btn btn-outline btn-sm" onClick={refetch}>
           <RefreshCw size={16} />
-          Обновить
+          {t('externalAccessPage.refresh')}
         </button>
       </div>
 
@@ -72,27 +77,27 @@ export default function ExternalAccessPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <h3 style={{ fontSize: 15, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
           <Info size={16} style={{ color: 'var(--accent)' }} />
-          Параметры подключения
+          {t('externalAccessPage.connection')}
         </h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-          <CopyRow label="Адрес сервера" value={data.server_ip} />
-          <CopyRow label="Порт" value={String(data.port)} />
-          <CopyRow label="Логин" value={data.username} />
-          <CopyRow label="Пароль" value={data.password} masked />
+          <CopyRow label={t('externalAccessPage.serverAddress')} value={data.server_ip} />
+          <CopyRow label={t('externalAccessPage.port')} value={String(data.port)} />
+          <CopyRow label={t('externalAccessPage.login')} value={data.username} />
+          <CopyRow label={t('externalAccessPage.password')} value={data.password} masked />
         </div>
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 12, lineHeight: 1.6 }}>
-          Потоки отдаются без перекодирования — камеры работают в обычном режиме,
-          а сторонние системы получают копию уже принятого потока. Нагрузка
-          на камеры не растёт: подключение к каждой из них остаётся одно.
+          {t('externalAccessPage.noTranscoding')}
         </p>
       </div>
 
       {/* Параметр, в котором чаще всего ошибаются — выносим отдельно */}
       <div className="card" style={{ marginBottom: 16, padding: 12, background: 'var(--bg-secondary)' }}>
         <p style={{ fontSize: 12, margin: 0, lineHeight: 1.6 }}>
-          <strong>Номер канала в адресе идёт со смещением на минус один.</strong>{' '}
-          Первый канал — это <code>cameras/0</code>, пятый — <code>cameras/4</code>.
-          В таблице ниже указаны оба значения, а в ссылках уже подставлен нужный индекс.
+          <strong>{t('externalAccessPage.offsetStrong')}</strong>{' '}
+          <Trans
+            i18nKey="externalAccessPage.offsetText"
+            components={{ 1: <code />, 2: <code /> }}
+          />
         </p>
       </div>
 
@@ -105,11 +110,10 @@ export default function ExternalAccessPage() {
         <div className="card" style={{ marginBottom: 16, borderColor: 'var(--warning, #f59e0b)' }}>
           <h3 style={{ fontSize: 15, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
             <AlertTriangle size={16} style={{ color: 'var(--warning, #f59e0b)' }} />
-            Без номера канала — наружу не отдаются
+            {t('externalAccessPage.unassignedTitle')}
           </h3>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
-            Камерам ниже не назначен номер, поэтому они не публикуются для внешних
-            систем. Номер можно задать здесь — он также изменится в карточке камеры.
+            {t('externalAccessPage.unassignedText')}
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {data.unassigned.map((cam, i) => (
@@ -131,7 +135,7 @@ export default function ExternalAccessPage() {
       <div className="card">
         <h3 style={{ fontSize: 15, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
           <Radio size={16} style={{ color: 'var(--accent)' }} />
-          Каналы
+          {t('externalAccessPage.channels')}
         </h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {data.channels.map((ch) => (
@@ -142,12 +146,12 @@ export default function ExternalAccessPage() {
               port={data.port}
               username={data.username}
               password={data.password}
-              onCopied={(what) => toast.success(`Скопировано: ${what}`)}
+              onCopied={(what) => toast.success(t('externalAccessPage.copied', { what }))}
             />
           ))}
           {data.channels.length === 0 && (
             <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: 24 }}>
-              Нет каналов с назначенным номером. Задайте номер в блоке выше.
+              {t('externalAccessPage.noChannels')}
             </p>
           )}
         </div>
@@ -165,6 +169,7 @@ function AssignRow({
   busy: boolean
   onAssign: (channel: number) => void
 }) {
+  const { t } = useTranslation()
   const [value, setValue] = useState(String(suggested))
 
   const submit = () => {
@@ -193,11 +198,11 @@ function AssignRow({
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
         inputMode="numeric"
-        aria-label="Номер канала"
+        aria-label={t('externalAccessPage.channelNumberAria')}
       />
       <button className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
         <Plus size={14} />
-        {busy ? 'Назначаю…' : 'Назначить'}
+        {busy ? t('externalAccessPage.assigning') : t('externalAccessPage.assign')}
       </button>
     </div>
   )
@@ -214,6 +219,7 @@ function ChannelRow({
   password: string
   onCopied: (what: string) => void
 }) {
+  const { t } = useTranslation()
   const isOnline = channel.status === 'online' || channel.status === 'recording'
 
   const buildURL = (path: string) =>
@@ -234,7 +240,7 @@ function ChannelRow({
         {isOnline
           ? <SignalHigh size={14} style={{ color: 'var(--success, #22c55e)' }} />
           : <Signal size={14} style={{ color: 'var(--text-secondary)' }} />}
-        <strong style={{ fontSize: 14 }}>Канал {channel.number}</strong>
+        <strong style={{ fontSize: 14 }}>{t('externalAccessPage.channel', { number: channel.number })}</strong>
         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
           cameras/{channel.index}
         </span>
@@ -248,22 +254,22 @@ function ChannelRow({
         )}
         {!isOnline && (
           <span style={{ fontSize: 11, color: 'var(--warning, #f59e0b)' }}>
-            камера не в сети — поток недоступен
+            {t('externalAccessPage.cameraOffline')}
           </span>
         )}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <CopyRow
-          label="Основной"
+          label={t('externalAccessPage.mainStream')}
           value={buildURL(channel.main_path || '')}
-          onCopied={() => onCopied(`основной поток канала ${channel.number}`)}
+          onCopied={() => onCopied(t('externalAccessPage.mainStreamCopied', { number: channel.number }))}
           compact
         />
         <CopyRow
-          label="Дополнительный"
+          label={t('externalAccessPage.subStream')}
           value={buildURL(channel.sub_path || '')}
-          onCopied={() => onCopied(`доп. поток канала ${channel.number}`)}
+          onCopied={() => onCopied(t('externalAccessPage.subStreamCopied', { number: channel.number }))}
           compact
         />
       </div>
@@ -281,6 +287,7 @@ function CopyRow({
   compact?: boolean
   masked?: boolean
 }) {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [shown, setShown] = useState(!masked)
 
@@ -327,16 +334,16 @@ function CopyRow({
           className="btn btn-outline btn-sm"
           onClick={() => setShown((v) => !v)}
           style={{ flexShrink: 0 }}
-          title={shown ? 'Скрыть' : 'Показать'}
+          title={shown ? t('externalAccessPage.hide') : t('externalAccessPage.show')}
         >
-          {shown ? 'Скрыть' : 'Показать'}
+          {shown ? t('externalAccessPage.hide') : t('externalAccessPage.show')}
         </button>
       )}
       <button
         className="btn btn-outline btn-sm"
         onClick={copy}
         style={{ flexShrink: 0 }}
-        title="Скопировать"
+        title={t('externalAccessPage.copy')}
       >
         {copied ? <Check size={13} style={{ color: 'var(--success, #22c55e)' }} /> : <Copy size={13} />}
       </button>

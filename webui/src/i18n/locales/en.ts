@@ -1964,4 +1964,47 @@ export default {
     triggerPlate: 'Vehicle plate',
     triggerAcs: 'Access control',
   },
+
+  externalAccessPage: {
+    title: 'External access',
+    subtitle: 'RTSP streams for third-party systems',
+    loadFailed: 'Could not fetch the external access settings',
+    channelsOnline: 'Streams for third-party systems: <1>{{online}}</1> of {{total}} channels online',
+    refresh: 'Refresh',
+    channelAssigned: 'Channel {{channel}} assigned to the camera «{{name}}»',
+    assignFailed: 'Could not assign the number',
+
+    connection: 'Connection details',
+    serverAddress: 'Server address',
+    port: 'Port',
+    login: 'Login',
+    password: 'Password',
+    noTranscoding:
+      'The streams are given out without transcoding — the cameras run as usual, and third-party systems get a copy of the already received stream. The load on the cameras does not grow: the connection to each of them stays single.',
+
+    offsetStrong: 'The channel number in the address is offset by minus one.',
+    offsetText:
+      'The first channel is <1>cameras/0</1>, the fifth is <2>cameras/4</2>. The table below shows both values, and the links already contain the right index.',
+
+    unassignedTitle: 'Without a channel number — not published',
+    unassignedText:
+      'The cameras below have no number assigned, so they are not published for external systems. The number can be set here — it will also change in the camera card.',
+    channelNumberAria: 'Channel number',
+    assigning: 'Assigning…',
+    assign: 'Assign',
+
+    channels: 'Channels',
+    copied: 'Copied: {{what}}',
+    noChannels: 'No channels with an assigned number. Set a number in the block above.',
+    channel: 'Channel {{number}}',
+    cameraOffline: 'the camera is offline — the stream is unavailable',
+    mainStream: 'Main',
+    subStream: 'Sub',
+    mainStreamCopied: 'the main stream of channel {{number}}',
+    subStreamCopied: 'the sub stream of channel {{number}}',
+
+    hide: 'Hide',
+    show: 'Show',
+    copy: 'Copy',
+  },
 }

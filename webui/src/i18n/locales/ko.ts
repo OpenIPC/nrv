@@ -1918,4 +1918,47 @@ export default {
     triggerPlate: '차량 번호판',
     triggerAcs: '출입 통제',
   },
+
+  externalAccessPage: {
+    title: '외부 접속',
+    subtitle: '제3자 시스템용 RTSP 스트림',
+    loadFailed: '외부 접속 설정을 가져올 수 없습니다',
+    channelsOnline: '제3자 시스템용 스트림: 채널 {{total}}개 중 <1>{{online}}</1>개 온라인',
+    refresh: '새로 고침',
+    channelAssigned: '채널 {{channel}}을(를) 카메라 «{{name}}»에 배정했습니다',
+    assignFailed: '번호를 배정할 수 없습니다',
+
+    connection: '접속 정보',
+    serverAddress: '서버 주소',
+    port: '포트',
+    login: '로그인',
+    password: '비밀번호',
+    noTranscoding:
+      '스트림은 트랜스코딩 없이 나갑니다 — 카메라는 평소대로 동작하고, 제3자 시스템은 이미 받은 스트림의 사본을 받습니다. 카메라 부하는 늘지 않습니다: 각 카메라에 대한 연결은 하나뿐입니다.',
+
+    offsetStrong: '주소의 채널 번호는 1이 줄어든 값입니다.',
+    offsetText:
+      '첫 채널은 <1>cameras/0</1>, 다섯 번째는 <2>cameras/4</2>입니다. 아래 표에는 두 값이 모두 있고, 링크에는 알맞은 값이 이미 들어가 있습니다.',
+
+    unassignedTitle: '채널 번호가 없으면 — 외부로 나가지 않음',
+    unassignedText:
+      '아래 카메라들은 번호가 배정되지 않아 외부 시스템에 공개되지 않습니다. 번호는 여기서 지정할 수 있습니다 — 카메라 카드에도 함께 반영됩니다.',
+    channelNumberAria: '채널 번호',
+    assigning: '배정 중…',
+    assign: '배정',
+
+    channels: '채널',
+    copied: '복사했습니다: {{what}}',
+    noChannels: '번호가 배정된 채널이 없습니다. 위 항목에서 번호를 지정하십시오.',
+    channel: '채널 {{number}}',
+    cameraOffline: '카메라가 오프라인입니다 — 스트림을 사용할 수 없습니다',
+    mainStream: '메인',
+    subStream: '서브',
+    mainStreamCopied: '채널 {{number}}의 메인 스트림',
+    subStreamCopied: '채널 {{number}}의 서브 스트림',
+
+    hide: '가리기',
+    show: '보이기',
+    copy: '복사',
+  },
 }

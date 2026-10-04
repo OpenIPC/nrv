@@ -1892,4 +1892,47 @@ export default {
     triggerPlate: '车牌',
     triggerAcs: '门禁',
   },
+
+  externalAccessPage: {
+    title: '外部访问',
+    subtitle: '给第三方系统用的 RTSP 码流',
+    loadFailed: '无法获取外部访问设置',
+    channelsOnline: '给第三方系统用的码流：{{total}} 个频道中 <1>{{online}}</1> 个在线',
+    refresh: '刷新',
+    channelAssigned: '频道 {{channel}} 已分配给摄像机「{{name}}」',
+    assignFailed: '无法分配编号',
+
+    connection: '连接参数',
+    serverAddress: '服务器地址',
+    port: '端口',
+    login: '用户名',
+    password: '密码',
+    noTranscoding:
+      '码流不做转码直接发出——摄像机照常工作，第三方系统拿到的是已接收码流的副本。摄像机负担不会增加：每台仍然只有一个连接。',
+
+    offsetStrong: '地址里的频道编号偏移了负一。',
+    offsetText:
+      '第一个频道是 <1>cameras/0</1>，第五个是 <2>cameras/4</2>。下面的表里两个值都给出了，链接里已经填好了正确的下标。',
+
+    unassignedTitle: '没有频道编号——不会对外发布',
+    unassignedText:
+      '下面这些摄像机还没有分配编号，因此不会对外部系统发布。编号可以在这里设置——摄像机卡片里也会同步变化。',
+    channelNumberAria: '频道编号',
+    assigning: '正在分配…',
+    assign: '分配',
+
+    channels: '频道',
+    copied: '已复制：{{what}}',
+    noChannels: '没有已分配编号的频道。请在上面的区域设置编号。',
+    channel: '频道 {{number}}',
+    cameraOffline: '摄像机不在线——码流不可用',
+    mainStream: '主码流',
+    subStream: '子码流',
+    mainStreamCopied: '频道 {{number}} 的主码流',
+    subStreamCopied: '频道 {{number}} 的子码流',
+
+    hide: '隐藏',
+    show: '显示',
+    copy: '复制',
+  },
 }
