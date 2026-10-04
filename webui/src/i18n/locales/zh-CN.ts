@@ -1594,4 +1594,22 @@ export default {
       '这台摄像机是 {{vendor}}。它用自带的 API 配置，OpenIPC 相关分区不适用于它：那些键在它上面根本不存在。',
     footnote: '厂商在扫描时自动判定。如果摄像机已刷成 OpenIPC，可以在「设置」里手动指定。',
   },
+
+  loginPage: {
+    login: '用户名',
+    password: '密码',
+    submit: '登录',
+    submitting: '正在登录…',
+    failed: '登录失败',
+  },
+
+  livePlayer: {
+    transportWebrtc: 'WebRTC —— 延迟不到一秒',
+    transportHls: 'HLS —— WebRTC 失败，延迟更大',
+    soundOn: '关闭声音',
+    soundOff: '打开声音',
+    connecting: '正在连接码流…',
+    failed: '无法连接到摄像机',
+    retry: '重试',
+  },
 }

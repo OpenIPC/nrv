@@ -1655,4 +1655,22 @@ export default {
     footnote:
       'The vendor is detected automatically during scanning. If the camera has been reflashed to OpenIPC, it can be set by hand in «Settings».',
   },
+
+  loginPage: {
+    login: 'Login',
+    password: 'Password',
+    submit: 'Sign in',
+    submitting: 'Signing in…',
+    failed: 'Sign-in failed',
+  },
+
+  livePlayer: {
+    transportWebrtc: 'WebRTC — delay under a second',
+    transportHls: 'HLS — WebRTC failed, higher delay',
+    soundOn: 'Turn the sound off',
+    soundOff: 'Turn the sound on',
+    connecting: 'Connecting to the stream…',
+    failed: 'Could not connect to the camera',
+    retry: 'Retry',
+  },
 }

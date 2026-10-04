@@ -1618,4 +1618,22 @@ export default {
       '이 카메라는 {{vendor}}입니다. 자체 API로 설정하며 OpenIPC 관련 항목은 해당되지 않습니다: 필요한 키가 그 카메라에는 없습니다.',
     footnote: '제조사는 검색할 때 자동으로 판별됩니다. 카메라를 OpenIPC로 다시 올렸다면 「설정」에서 직접 지정할 수 있습니다.',
   },
+
+  loginPage: {
+    login: '로그인',
+    password: '비밀번호',
+    submit: '로그인',
+    submitting: '로그인 중…',
+    failed: '로그인 실패',
+  },
+
+  livePlayer: {
+    transportWebrtc: 'WebRTC — 지연 1초 미만',
+    transportHls: 'HLS — WebRTC 실패, 지연이 더 큽니다',
+    soundOn: '소리 끄기',
+    soundOff: '소리 켜기',
+    connecting: '스트림에 연결 중…',
+    failed: '카메라에 연결할 수 없습니다',
+    retry: '다시 시도',
+  },
 }

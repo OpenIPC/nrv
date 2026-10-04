@@ -1,10 +1,12 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useApi'
 import { authAPI } from '../api/client'
 import { Camera } from 'lucide-react'
 
 export default function LoginPage() {
+  const { t } = useTranslation()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -21,7 +23,7 @@ export default function LoginPage() {
       login(res.data.token)
       navigate('/')
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Ошибка входа')
+      setError(err.response?.data?.error || t('loginPage.failed'))
     } finally {
       setLoading(false)
     }
@@ -35,7 +37,7 @@ export default function LoginPage() {
           NVR Control
         </h1>
         <form onSubmit={handleSubmit}>
-          <label>Логин</label>
+          <label>{t('loginPage.login')}</label>
           <input
             type="text"
             value={username}
@@ -43,7 +45,7 @@ export default function LoginPage() {
             placeholder="admin"
             required
           />
-          <label>Пароль</label>
+          <label>{t('loginPage.password')}</label>
           <input
             type="password"
             value={password}
@@ -53,7 +55,7 @@ export default function LoginPage() {
           />
           {error && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
           <button type="submit" className="btn btn-primary" disabled={loading}>
-            {loading ? 'Вход...' : 'Войти'}
+            {loading ? t('loginPage.submitting') : t('loginPage.submit')}
           </button>
         </form>
       </div>

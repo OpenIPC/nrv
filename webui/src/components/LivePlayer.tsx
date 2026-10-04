@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import Hls from 'hls.js'
 
 interface LivePlayerProps {
@@ -107,6 +108,7 @@ export default function LivePlayer({
   showControls = true,
   preferHls = false,
 }: LivePlayerProps) {
+  const { t } = useTranslation()
   const videoRef = useRef<HTMLVideoElement>(null)
   // Элемент для звука: отдельный <video>, скрытый визуально (см. JSX).
   const audioElRef = useRef<HTMLVideoElement>(null)
@@ -586,8 +588,8 @@ export default function LivePlayer({
         <span
           title={
             transport === 'webrtc'
-              ? 'WebRTC — задержка меньше секунды'
-              : 'HLS — WebRTC не удалось, задержка больше'
+              ? t('livePlayer.transportWebrtc')
+              : t('livePlayer.transportHls')
           }
           style={{
             position: 'absolute', top: 8, right: 8, zIndex: 5,
@@ -635,7 +637,7 @@ export default function LivePlayer({
       {audioAvailable && (
         <button
           onClick={() => setSoundOn((v) => !v)}
-          title={soundOn ? 'Выключить звук' : 'Включить звук'}
+          title={soundOn ? t('livePlayer.soundOn') : t('livePlayer.soundOff')}
           style={{
             position: 'absolute', top: 10, right: 10, zIndex: 5,
             background: soundOn ? 'var(--accent)' : 'rgba(0,0,0,0.6)',
@@ -653,14 +655,14 @@ export default function LivePlayer({
       {status === 'connecting' && (
         <div className="video-status-overlay">
           <div className="spinner" style={{ margin: 0, width: 28, height: 28, borderWidth: 2 }} />
-          <span>Подключение к потоку...</span>
+          <span>{t('livePlayer.connecting')}</span>
         </div>
       )}
       {status === 'error' && retryCount >= 5 && (
         <div className="video-status-overlay">
-          <span style={{ color: 'var(--danger)' }}>Не удалось подключиться к камере</span>
+          <span style={{ color: 'var(--danger)' }}>{t('livePlayer.failed')}</span>
           <button className="btn btn-outline btn-sm" onClick={initHls} style={{ marginTop: 8 }}>
-            Повторить
+            {t('livePlayer.retry')}
           </button>
         </div>
       )}
