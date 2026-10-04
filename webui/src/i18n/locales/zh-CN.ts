@@ -1534,4 +1534,64 @@ export default {
     adding: '正在添加…',
     add: '添加',
   },
+
+  deviceCard: {
+    title: '设备',
+    sourceHint: '与摄像机通信的方式',
+    sourceIsapi: '摄像机通过 Hikvision 专有协议（ISAPI）应答',
+    sourceOnvif: '设备通过通用 ONVIF 协议应答',
+    sourceCgi: '设备通过自有的 HTTP API（Beward）应答',
+
+    loadFailed: '摄像机没有应答',
+    rebootSent: '重启命令已发出。摄像机将在 1–2 分钟内恢复。',
+    rebootFailed: '无法重启摄像机',
+
+    polling: '正在查询…',
+    retry: '重试',
+    poll: '查询',
+
+    passport: '设备信息',
+    rowModel: '型号',
+    rowManufacturer: '厂商',
+    rowFirmware: '固件',
+    rowSerial: '序列号',
+
+    status: '状态',
+    rowUptime: '运行时长',
+    rowDeviceTime: '摄像机时间',
+    rowDrift: '时间偏差',
+    rowCPU: 'CPU 负载',
+    rowMemory: '内存',
+    memoryFree: '可用 {{value}} MB',
+
+    streams: '码流',
+    fps: '{{value}} 帧/秒',
+    kbps: '{{value}} kbps',
+    noStreams: '摄像机没有报告码流参数。',
+
+    confirmReboot: '重启摄像机？录像会中断 1–2 分钟。',
+    reboot: '重启',
+    sending: '正在发送…',
+    rebootDevice: '重启设备',
+
+    uptimeDay: '{{days}} 天 {{hours}} 小时',
+    uptimeHour: '{{hours}} 小时 {{minutes}} 分',
+    uptimeMin: '{{count}} 分钟',
+    secShort: '{{count}} 秒',
+    minShort: '{{count}} 分',
+    hourShort: '{{value}} 小时',
+    dayShort: '{{value}} 天',
+    driftExact: '准确',
+    driftBehind: '慢了 {{value}}',
+    driftAhead: '快了 {{value}}',
+  },
+
+  openipcOnly: {
+    sectionTitle: '{{title}} —— 仅限 OpenIPC',
+    vendorUnknown:
+      '未能识别这台摄像机的厂商，而 SSH 访问和 Majestic API 只有 OpenIPC 才有。在识别出来之前，该分区保持隐藏：显示摄像机上并不存在的设置，比不显示更糟。',
+    vendorOther:
+      '这台摄像机是 {{vendor}}。它用自带的 API 配置，OpenIPC 相关分区不适用于它：那些键在它上面根本不存在。',
+    footnote: '厂商在扫描时自动判定。如果摄像机已刷成 OpenIPC，可以在「设置」里手动指定。',
+  },
 }

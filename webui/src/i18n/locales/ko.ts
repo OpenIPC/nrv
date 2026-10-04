@@ -1558,4 +1558,64 @@ export default {
     adding: '추가 중…',
     add: '추가',
   },
+
+  deviceCard: {
+    title: '장치',
+    sourceHint: '카메라에 접근한 방식',
+    sourceIsapi: '카메라가 Hikvision 전용 프로토콜(ISAPI)로 응답했습니다',
+    sourceOnvif: '장치가 공통 ONVIF 프로토콜로 응답했습니다',
+    sourceCgi: '장치가 자체 HTTP API(Beward)로 응답했습니다',
+
+    loadFailed: '카메라가 응답하지 않았습니다',
+    rebootSent: '재시작 명령을 보냈습니다. 카메라는 1–2분 뒤에 돌아옵니다.',
+    rebootFailed: '카메라를 재시작할 수 없습니다',
+
+    polling: '조회 중…',
+    retry: '다시 시도',
+    poll: '조회',
+
+    passport: '장치 정보',
+    rowModel: '모델',
+    rowManufacturer: '제조사',
+    rowFirmware: '펌웨어',
+    rowSerial: '일련번호',
+
+    status: '상태',
+    rowUptime: '가동 시간',
+    rowDeviceTime: '카메라 시간',
+    rowDrift: '시간 차이',
+    rowCPU: 'CPU 부하',
+    rowMemory: '메모리',
+    memoryFree: '{{value}} MB 여유',
+
+    streams: '스트림',
+    fps: '{{value}} fps',
+    kbps: '{{value}} kbps',
+    noStreams: '카메라가 스트림 파라미터를 알려주지 않았습니다.',
+
+    confirmReboot: '카메라를 재시작하시겠습니까? 녹화가 1–2분 동안 끊깁니다.',
+    reboot: '재시작',
+    sending: '보내는 중…',
+    rebootDevice: '장치 재시작',
+
+    uptimeDay: '{{days}}일 {{hours}}시간',
+    uptimeHour: '{{hours}}시간 {{minutes}}분',
+    uptimeMin: '{{count}}분',
+    secShort: '{{count}}초',
+    minShort: '{{count}}분',
+    hourShort: '{{value}}시간',
+    dayShort: '{{value}}일',
+    driftExact: '정확',
+    driftBehind: '{{value}} 느림',
+    driftAhead: '{{value}} 빠름',
+  },
+
+  openipcOnly: {
+    sectionTitle: '{{title}} — OpenIPC 전용',
+    vendorUnknown:
+      '이 카메라의 제조사를 확인할 수 없습니다. SSH 접속과 Majestic API는 OpenIPC에만 있습니다. 확인될 때까지 이 항목은 숨겨집니다: 카메라에 없는 설정을 보여 주는 것이 안 보여 주는 것보다 나쁩니다.',
+    vendorOther:
+      '이 카메라는 {{vendor}}입니다. 자체 API로 설정하며 OpenIPC 관련 항목은 해당되지 않습니다: 필요한 키가 그 카메라에는 없습니다.',
+    footnote: '제조사는 검색할 때 자동으로 판별됩니다. 카메라를 OpenIPC로 다시 올렸다면 「설정」에서 직접 지정할 수 있습니다.',
+  },
 }

@@ -1611,4 +1611,65 @@ export default {
     adding: 'Добавление…',
     add: 'Добавить',
   },
+
+  deviceCard: {
+    title: 'Устройство',
+    sourceHint: 'Способ обращения к камере',
+    sourceIsapi: 'Камера ответила по фирменному протоколу Hikvision (ISAPI)',
+    sourceOnvif: 'Устройство ответило по общему протоколу ONVIF',
+    sourceCgi: 'Устройство ответило по фирменному HTTP API (Beward)',
+
+    loadFailed: 'Камера не ответила',
+    rebootSent: 'Команда перезагрузки отправлена. Камера вернётся через 1–2 минуты.',
+    rebootFailed: 'Не удалось перезагрузить камеру',
+
+    polling: 'Опрашивается…',
+    retry: 'Повторить',
+    poll: 'Опросить',
+
+    passport: 'Паспорт',
+    rowModel: 'Модель',
+    rowManufacturer: 'Производитель',
+    rowFirmware: 'Прошивка',
+    rowSerial: 'Серийный',
+
+    status: 'Состояние',
+    rowUptime: 'В работе',
+    rowDeviceTime: 'Время камеры',
+    rowDrift: 'Расхождение',
+    rowCPU: 'Загрузка CPU',
+    rowMemory: 'Память',
+    memoryFree: 'свободно {{value}} МБ',
+
+    streams: 'Потоки',
+    fps: '{{value}} к/с',
+    kbps: '{{value}} кбит/с',
+    noStreams: 'Параметры потоков камера не сообщила.',
+
+    confirmReboot: 'Перезагрузить камеру? Запись прервётся на 1–2 минуты.',
+    reboot: 'Перезагрузить',
+    sending: 'Отправка…',
+    rebootDevice: 'Перезагрузить устройство',
+
+    uptimeDay: '{{days}} сут {{hours}} ч',
+    uptimeHour: '{{hours}} ч {{minutes}} мин',
+    uptimeMin: '{{count}} мин',
+    secShort: '{{count}} с',
+    minShort: '{{count}} мин',
+    hourShort: '{{value}} ч',
+    dayShort: '{{value}} сут',
+    driftExact: 'точно',
+    driftBehind: 'отстают на {{value}}',
+    driftAhead: 'спешат на {{value}}',
+  },
+
+  openipcOnly: {
+    sectionTitle: '{{title}} — только для OpenIPC',
+    vendorUnknown:
+      'Производитель этой камеры не определён, а доступ по SSH и API Majestic есть только у OpenIPC. Пока камера не опознана, раздел скрыт: показывать настройки, которых на камере нет, было бы хуже, чем их не показывать.',
+    vendorOther:
+      'Эта камера — {{vendor}}. Она настраивается своим API, и разделы OpenIPC к ней не относятся: нужных ключей на ней просто нет.',
+    footnote:
+      'Производитель определяется автоматически при сканировании. Если камера перешита на OpenIPC, его можно задать вручную в разделе «Настройки».',
+  },
 }

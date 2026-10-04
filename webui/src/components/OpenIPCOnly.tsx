@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Info } from 'lucide-react'
 import type { CameraVendor } from '../api/client'
 
@@ -36,6 +37,7 @@ export default function OpenIPCOnly({
   title: string
   children: ReactNode
 }) {
+  const { t } = useTranslation()
   if (supportsOpenIPC(vendor)) {
     return <>{children}</>
   }
@@ -54,15 +56,15 @@ export default function OpenIPCOnly({
       <Info size={15} style={{ flexShrink: 0, marginTop: 2 }} />
       <div>
         <div style={{ color: 'var(--text-primary)', marginBottom: 4 }}>
-          {title} — только для OpenIPC
+          {t('openipcOnly.sectionTitle', { title })}
         </div>
         <div>
           {vendor === 'unknown'
-            ? 'Производитель этой камеры не определён, а доступ по SSH и API Majestic есть только у OpenIPC. Пока камера не опознана, раздел скрыт: показывать настройки, которых на камере нет, было бы хуже, чем их не показывать.'
-            : `Эта камера — ${vendorTitle(vendor)}. Она настраивается своим API, и разделы OpenIPC к ней не относятся: нужных ключей на ней просто нет.`}
+            ? t('openipcOnly.vendorUnknown')
+            : t('openipcOnly.vendorOther', { vendor: vendorTitle(vendor) })}
         </div>
         <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
-          Производитель определяется автоматически при сканировании. Если камера перешита на OpenIPC, его можно задать вручную в разделе «Настройки».
+          {t('openipcOnly.footnote')}
         </div>
       </div>
     </div>

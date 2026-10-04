@@ -1594,4 +1594,65 @@ export default {
     adding: 'Adding…',
     add: 'Add',
   },
+
+  deviceCard: {
+    title: 'Device',
+    sourceHint: 'How the camera was reached',
+    sourceIsapi: 'The camera answered over the proprietary Hikvision protocol (ISAPI)',
+    sourceOnvif: 'The device answered over the common ONVIF protocol',
+    sourceCgi: 'The device answered over its proprietary HTTP API (Beward)',
+
+    loadFailed: 'The camera did not answer',
+    rebootSent: 'The reboot command was sent. The camera will be back in 1–2 minutes.',
+    rebootFailed: 'Could not reboot the camera',
+
+    polling: 'Polling…',
+    retry: 'Retry',
+    poll: 'Poll',
+
+    passport: 'Identity',
+    rowModel: 'Model',
+    rowManufacturer: 'Manufacturer',
+    rowFirmware: 'Firmware',
+    rowSerial: 'Serial',
+
+    status: 'Status',
+    rowUptime: 'Uptime',
+    rowDeviceTime: 'Camera time',
+    rowDrift: 'Clock drift',
+    rowCPU: 'CPU load',
+    rowMemory: 'Memory',
+    memoryFree: '{{value}} MB free',
+
+    streams: 'Streams',
+    fps: '{{value}} fps',
+    kbps: '{{value}} kbps',
+    noStreams: 'The camera did not report the stream parameters.',
+
+    confirmReboot: 'Reboot the camera? The recording will be interrupted for 1–2 minutes.',
+    reboot: 'Reboot',
+    sending: 'Sending…',
+    rebootDevice: 'Reboot the device',
+
+    uptimeDay: '{{days}} d {{hours}} h',
+    uptimeHour: '{{hours}} h {{minutes}} min',
+    uptimeMin: '{{count}} min',
+    secShort: '{{count}} s',
+    minShort: '{{count}} min',
+    hourShort: '{{value}} h',
+    dayShort: '{{value}} d',
+    driftExact: 'exact',
+    driftBehind: 'behind by {{value}}',
+    driftAhead: 'ahead by {{value}}',
+  },
+
+  openipcOnly: {
+    sectionTitle: '{{title}} — OpenIPC only',
+    vendorUnknown:
+      'The vendor of this camera is not identified, and SSH access and the Majestic API exist only on OpenIPC. Until the camera is identified the section stays hidden: showing settings the camera does not have would be worse than not showing them.',
+    vendorOther:
+      'This camera is {{vendor}}. It is configured through its own API, and the OpenIPC sections do not apply to it: the keys they need simply do not exist there.',
+    footnote:
+      'The vendor is detected automatically during scanning. If the camera has been reflashed to OpenIPC, it can be set by hand in «Settings».',
+  },
 }
