@@ -1,6 +1,8 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { X, Save, Loader2, PlugZap, CheckCircle2, XCircle } from 'lucide-react'
 import { camerasAPI, type Camera, type StreamProbeResult } from '../api/client'
+import { streamProbeText } from '../utils/streamProbe'
 
 interface Props {
   camera: Camera
@@ -14,6 +16,7 @@ interface Props {
  * поэтому их можно отредактировать, не вводя заново.
  */
 export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
+  const { t } = useTranslation()
   const [form, setForm] = useState({
     name: camera.name || '',
     ip: camera.ip || '',
@@ -48,7 +51,9 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
   const runProbe = async (kind: 'main' | 'sub') => {
     const url = kind === 'main' ? form.main_stream : form.sub_stream
     if (!url.trim()) {
-      setProbe(prev => ({ ...prev, [kind]: { ok: false, message: 'адрес не заполнен', has_audio: false } }))
+      // Код тот же, что вернул бы сервер: подпись собирается общим разбором,
+      // поэтому здесь нет отдельной строки перевода.
+      setProbe(prev => ({ ...prev, [kind]: { ok: false, code: 'url_empty', has_audio: false } }))
       return
     }
     setProbing(kind)
@@ -60,7 +65,7 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
       })
       setProbe(prev => ({ ...prev, [kind]: res.data }))
     } catch {
-      setProbe(prev => ({ ...prev, [kind]: { ok: false, message: 'не удалось выполнить проверку', has_audio: false } }))
+      setProbe(prev => ({ ...prev, [kind]: { ok: false, code: 'request_failed', has_audio: false } }))
     } finally {
       setProbing(null)
     }
@@ -115,7 +120,7 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
     if (channelChanged) {
       if (newChannel !== 0 && (!Number.isInteger(newChannel) || newChannel < 1)) {
         setSaving(false)
-        setError('Номер канала — целое число от 1 и выше')
+        setError(t('editCameraModal.channelNumberInvalid'))
         return
       }
       payload.channel_number = newChannel
@@ -136,7 +141,7 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
       onSaved()
       onClose()
     } catch (e: any) {
-      setError(e?.response?.data?.error || 'Не удалось сохранить изменения')
+      setError(e?.response?.data?.error || t('editCameraModal.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -146,29 +151,29 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 640 }}>
         <div className="modal-header">
-          <h2 style={{ fontSize: 18 }}>Редактирование камеры</h2>
-          <button className="btn btn-outline btn-sm" onClick={onClose} aria-label="Закрыть">
+          <h2 style={{ fontSize: 18 }}>{t('editCameraModal.title')}</h2>
+          <button className="btn btn-outline btn-sm" onClick={onClose} aria-label={t('editCameraModal.close')}>
             <X size={16} />
           </button>
         </div>
 
         <div className="modal-body" style={{ maxHeight: '65vh', overflowY: 'auto' }}>
-          <Field label="Название">
+          <Field label={t('editCameraModal.name')}>
             <input className="input" value={form.name} onChange={set('name')} />
           </Field>
 
           <div className="grid grid-2" style={{ gap: 12 }}>
-            <Field label="IP-адрес">
+            <Field label={t('editCameraModal.ip')}>
               <input className="input" value={form.ip} onChange={set('ip')} placeholder="192.168.1.10" />
             </Field>
-            <Field label="WireGuard IP">
+            <Field label={t('editCameraModal.wireguardIp')}>
               <input className="input" value={form.wg_ip} onChange={set('wg_ip')} placeholder="10.99.0.2" />
             </Field>
           </div>
 
           {/* Номер канала задаёт адрес потока для внешних систем.
               Смещение на минус один: канал 1 → cameras/0. */}
-          <Field label="Номер канала (для внешнего RTSP)">
+          <Field label={t('editCameraModal.channelNumber')}>
             <input
               className="input"
               value={channel}
@@ -178,33 +183,33 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
             />
             {channel.trim() !== '' && Number(channel) >= 1 && (
               <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
-                Адреса потоков:
+                {t('editCameraModal.streamUrls')}
                 <div style={{ fontFamily: 'monospace', marginTop: 4, wordBreak: 'break-all' }}>
-                  rtsp://логин:пароль@сервер:9784/cameras/{Number(channel) - 1}/streaming/main
+                  {t('editCameraModal.streamUrlMain', { n: Number(channel) - 1 })}
                 </div>
                 <div style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                  rtsp://логин:пароль@сервер:9784/cameras/{Number(channel) - 1}/streaming/sub
+                  {t('editCameraModal.streamUrlSub', { n: Number(channel) - 1 })}
                 </div>
               </div>
             )}
             {channel.trim() === '' && (
               <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
-                Без номера камера не публикуется для внешних систем.
+                {t('editCameraModal.noChannelHint')}
               </div>
             )}
           </Field>
 
           <div className="grid grid-2" style={{ gap: 12 }}>
-            <Field label="MAC-адрес">
+            <Field label={t('editCameraModal.mac')}>
               <input className="input" value={form.mac} onChange={set('mac')} placeholder="aa:bb:cc:dd:ee:ff" />
             </Field>
-            <Field label="Прошивка">
+            <Field label={t('editCameraModal.firmware')}>
               <input className="input" value={form.firmware} onChange={set('firmware')} />
             </Field>
           </div>
 
-          <h3 style={{ fontSize: 14, margin: '16px 0 8px' }}>Потоки</h3>
-          <Field label="Основной поток (main)">
+          <h3 style={{ fontSize: 14, margin: '16px 0 8px' }}>{t('editCameraModal.streams')}</h3>
+          <Field label={t('editCameraModal.mainStream')}>
             <input className="input" value={form.main_stream} onChange={setStream('main_stream')}
               placeholder="rtsp://192.168.1.10/stream=0" />
           </Field>
@@ -213,7 +218,7 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
             busy={probing === 'main'}
             onProbe={() => runProbe('main')}
           />
-          <Field label="Дополнительный поток (sub)">
+          <Field label={t('editCameraModal.subStream')}>
             <input className="input" value={form.sub_stream} onChange={setStream('sub_stream')}
               placeholder="rtsp://192.168.1.10/stream=1" />
           </Field>
@@ -226,15 +231,15 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
             <input className="input" value={form.rtsp_url} onChange={set('rtsp_url')} />
           </Field>
 
-          <h3 style={{ fontSize: 14, margin: '16px 0 8px' }}>Учётные данные камеры</h3>
+          <h3 style={{ fontSize: 14, margin: '16px 0 8px' }}>{t('editCameraModal.credentials')}</h3>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-            Используются для RTSP и SSH-команд (перезапуск стримера, ребут).
+            {t('editCameraModal.credentialsHint')}
           </p>
           <div className="grid grid-2" style={{ gap: 12 }}>
-            <Field label="Логин">
+            <Field label={t('editCameraModal.username')}>
               <input className="input" value={form.username} onChange={set('username')} autoComplete="off" />
             </Field>
-            <Field label="Пароль">
+            <Field label={t('editCameraModal.password')}>
               <input className="input" type="password" value={form.password} onChange={set('password')} autoComplete="new-password" />
             </Field>
           </div>
@@ -247,7 +252,7 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
               style={{ width: 'auto', marginBottom: 0 }}
             />
             <span style={{ fontSize: 13 }}>
-              Поворотная камера (PTZ) — показывать пульт управления
+              {t('editCameraModal.ptz')}
             </span>
           </label>
 
@@ -263,11 +268,11 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
 
         <div className="modal-footer">
           <button className="btn btn-outline btn-sm" onClick={onClose} disabled={saving}>
-            Отмена
+            {t('editCameraModal.cancel')}
           </button>
           <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving}>
             {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-            {saving ? 'Сохранение...' : 'Сохранить'}
+            {saving ? t('editCameraModal.saving') : t('editCameraModal.save')}
           </button>
         </div>
       </div>
@@ -312,6 +317,11 @@ function ProbeRow({
   busy: boolean
   onProbe: () => void
 }) {
+  const { t } = useTranslation()
+  // Разбор кода общий со сканером сети: одна и та же проверка должна
+  // называться одинаково в обоих окнах.
+  const text = result ? streamProbeText(result) : null
+
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10, marginTop: -4 }}>
       <button
@@ -322,17 +332,17 @@ function ProbeRow({
         type="button"
       >
         {busy ? <Loader2 size={13} className="spin" /> : <PlugZap size={13} />}
-        {busy ? 'Проверка...' : 'Проверить'}
+        {busy ? t('editCameraModal.checking') : t('editCameraModal.check')}
       </button>
 
-      {result && (
+      {result && text && (
         <span style={{
           display: 'flex', alignItems: 'center', gap: 5, fontSize: 12,
           color: result.ok ? 'var(--success)' : 'var(--danger)',
           lineHeight: 1.4, paddingTop: 3,
         }}>
           {result.ok ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
-          {result.message}
+          {t(text.key, text.params)}
         </span>
       )}
     </div>

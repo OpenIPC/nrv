@@ -1061,9 +1061,29 @@ func (s *CameraService) Delete(ctx context.Context, id uuid.UUID) error {
 //
 // Нужен в интерфейсе при добавлении и редактировании камеры: оператор сразу
 // видит, верны ли адрес и пароль, а не ждёт, пока камера покажет «офлайн».
+// Коды результата проверки. Интерфейс переводит их сам, поэтому сервер
+// отдаёт код и технические поля, а не готовую фразу: одна и та же проверка
+// показывается и при редактировании камеры, и в сканере сети, а язык
+// интерфейса у них один и тот же пользователь может менять.
+const (
+	ProbeCodeURLEmpty     = "url_empty"     // адрес потока не заполнен
+	ProbeCodeTimeout      = "timeout"       // камера не ответила за 15 с
+	ProbeCodeAuthFailed   = "auth_failed"   // логин или пароль не подошли
+	ProbeCodePathNotFound = "path_not_found" // путь потока отсутствует
+	ProbeCodeUnreachable  = "unreachable"   // порт закрыт
+	ProbeCodeBadResponse  = "bad_response"  // ответ камеры не разобран
+	ProbeCodeNoVideo      = "no_video"      // видео по адресу нет
+	ProbeCodeFailed       = "failed"        // прочая ошибка, текст в Detail
+	ProbeCodeOK           = "ok"
+)
+
 type StreamProbeResult struct {
-	OK         bool   `json:"ok"`
-	Message    string `json:"message"`
+	OK   bool   `json:"ok"`
+	Code string `json:"code"`
+	// Detail — сырой текст ffprobe. Оставляем его как есть: разбирать
+	// сообщения конкретной сборки ffprobe в интерфейсе нельзя, они меняются
+	// от версии к версии, а оператору всё равно нужен исходный текст.
+	Detail     string `json:"detail,omitempty"`
 	Codec      string `json:"codec,omitempty"`
 	Width      int    `json:"width,omitempty"`
 	Height     int    `json:"height,omitempty"`
@@ -1081,7 +1101,7 @@ type StreamProbeResult struct {
 // камеру с неверным sub-потоком и получить «только видео» без звука.
 func (s *CameraService) ProbeStream(rtspURL string) StreamProbeResult {
 	if strings.TrimSpace(rtspURL) == "" {
-		return StreamProbeResult{Message: "адрес потока не указан"}
+		return StreamProbeResult{Code: ProbeCodeURLEmpty}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1104,15 +1124,15 @@ func (s *CameraService) ProbeStream(rtspURL string) StreamProbeResult {
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if ctx.Err() == context.DeadlineExceeded {
-			return StreamProbeResult{Message: "камера не отвечает (таймаут 15 с)"}
+			return StreamProbeResult{Code: ProbeCodeTimeout}
 		}
 		switch {
 		case strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized"):
-			return StreamProbeResult{Message: "неверный логин или пароль (401)"}
+			return StreamProbeResult{Code: ProbeCodeAuthFailed}
 		case strings.Contains(msg, "404") || strings.Contains(msg, "Not Found"):
-			return StreamProbeResult{Message: "путь потока не найден на камере"}
+			return StreamProbeResult{Code: ProbeCodePathNotFound}
 		case strings.Contains(msg, "Connection refused"):
-			return StreamProbeResult{Message: "камера недоступна (порт закрыт)"}
+			return StreamProbeResult{Code: ProbeCodeUnreachable}
 		}
 		if msg == "" {
 			msg = err.Error()
@@ -1121,7 +1141,7 @@ func (s *CameraService) ProbeStream(rtspURL string) StreamProbeResult {
 		if len(msg) > 200 {
 			msg = msg[:200] + "..."
 		}
-		return StreamProbeResult{Message: msg}
+		return StreamProbeResult{Code: ProbeCodeFailed, Detail: msg}
 	}
 
 	var parsed struct {
@@ -1134,7 +1154,7 @@ func (s *CameraService) ProbeStream(rtspURL string) StreamProbeResult {
 		} `json:"streams"`
 	}
 	if err := json.Unmarshal(out, &parsed); err != nil {
-		return StreamProbeResult{Message: "не удалось разобрать ответ камеры"}
+		return StreamProbeResult{Code: ProbeCodeBadResponse}
 	}
 
 	res := StreamProbeResult{}
@@ -1156,15 +1176,16 @@ func (s *CameraService) ProbeStream(rtspURL string) StreamProbeResult {
 	}
 
 	if res.Codec == "" {
-		return StreamProbeResult{Message: "камера не отдаёт видео по этому адресу"}
+		return StreamProbeResult{Code: ProbeCodeNoVideo}
 	}
 
+	// Названия кодеков и разрешение интерфейс подставляет сам — здесь они
+	// технические данные, а не часть фразы.
 	res.OK = true
-	res.Message = fmt.Sprintf("поток доступен: %s %dx%d", strings.ToUpper(res.Codec), res.Width, res.Height)
-	if res.HasAudio {
-		res.Message += ", звук: " + strings.ToUpper(res.AudioCodec)
-	} else {
-		res.Message += ", без звука"
+	res.Code = ProbeCodeOK
+	res.Codec = strings.ToUpper(res.Codec)
+	if res.AudioCodec != "" {
+		res.AudioCodec = strings.ToUpper(res.AudioCodec)
 	}
 	return res
 }

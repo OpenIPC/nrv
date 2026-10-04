@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { scannerAPI, camerasAPI, type DiscoveredCamera, type ScanResult, type StreamProbeResult } from '../api/client'
 import { useToast } from '../context/ToastContext'
+import { streamProbeText } from '../utils/streamProbe'
 import { Search, Wifi, Plus, Check, Loader2, Camera, PlugZap, Volume2, VolumeX, XCircle } from 'lucide-react'
 
 export default function ScannerPage() {
@@ -94,7 +95,9 @@ export default function ScannerPage() {
     } catch {
       setProbes((prev) => ({
         ...prev,
-        [cam.ip]: { ok: false, message: t('scannerPage.probeFailed'), has_audio: false },
+        // Код тот же, что у сервера при сбое проверки: подпись соберём
+        // общим разбором, а не отдельной строкой.
+        [cam.ip]: { ok: false, code: 'request_failed', has_audio: false },
       }))
     } finally {
       setProbing((s) => {
@@ -330,9 +333,9 @@ export default function ScannerPage() {
                           </span>
                         ) : (
                           <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--danger)' }}
-                            title={probe.message}>
+                            title={probeLabel(t, probe)}>
                             <XCircle size={13} />
-                            {probe.message}
+                            {probeLabel(t, probe)}
                           </span>
                         )}
                       </td>
@@ -439,6 +442,17 @@ const NOTE_KEYS: Record<string, string> = {
 function howFoundText(t: (key: string) => string, code: string): string {
   const key = HOW_FOUND_KEYS[code]
   return key ? t(key) : code
+}
+
+/**
+ * Подпись к результату проверки потока.
+ *
+ * Разбор кодов общий с окном редактирования камеры — одна и та же
+ * проверка не должна называться по-разному в двух местах.
+ */
+function probeLabel(t: (key: string, params?: Record<string, string>) => string, p: StreamProbeResult): string {
+  const { key, params } = streamProbeText(p)
+  return t(key, params)
 }
 
 /**

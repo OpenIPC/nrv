@@ -1128,7 +1128,12 @@ export interface StreamInfo {
 
 export interface StreamProbeResult {
   ok: boolean
-  message: string
+  // Код результата. Сервер отдаёт код, а не фразу: одинаковый результат
+  // показывается и в сканере сети, и при редактировании камеры.
+  code: string
+  // Сырой текст ffprobe для кода 'failed'. Показываем как есть — это
+  // техническая подробность конкретной сборки ffprobe.
+  detail?: string
   codec?: string
   width?: number
   height?: number

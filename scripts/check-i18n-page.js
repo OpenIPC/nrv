@@ -56,19 +56,32 @@ const lang = process.argv[3] || 'zh-CN'
   // Нужен для экранов, где часть подписей лежит на вкладке, которая по
   // умолчанию не открыта: иначе проверка молча смотрит не туда и
   // показывает, что всё переведено.
+  //
+  // Несколько кнопок разделяются вертикальной чертой и нажимаются по
+  // порядку: часть подписей появляется только после двух действий —
+  // например, чтобы увидеть результат проверки потока в окне камеры,
+  // надо сначала открыть окно, а потом нажать «Проверить».
   if (process.env.NVR_TAB) {
-    // Ищем по тексту, а если не нашли — по CSS-селектору: часть кнопок
-    // подписана только значком (например редактирование контроллера),
-    // и по тексту их не найти.
-    let target = page.locator('button', { hasText: process.env.NVR_TAB }).first()
-    if ((await target.count()) === 0) {
-      target = page.locator(process.env.NVR_TAB).first()
-    }
-    if (await target.count()) {
-      await target.click()
-      await page.waitForTimeout(1500)
-    } else {
-      console.log(`Кнопка «${process.env.NVR_TAB}» не найдена — проверяю открытую вкладку.`)
+    for (const step of process.env.NVR_TAB.split('|')) {
+      const needle = step.trim()
+      // Если открыто модальное окно, кнопку ищем в нём: под тем же
+      // названием на странице может быть своя кнопка, а модальное окно
+      // перехватывает нажатия, и клик по «фоновой» кнопке зависает.
+      const modal = page.locator('.modal-overlay').first()
+      const scope = (await modal.count()) ? modal : page
+      // Ищем по тексту, а если не нашли — по CSS-селектору: часть кнопок
+      // подписана только значком (например редактирование контроллера),
+      // и по тексту их не найти.
+      let target = scope.locator('button', { hasText: needle }).first()
+      if ((await target.count()) === 0) {
+        target = scope.locator(needle).first()
+      }
+      if (await target.count()) {
+        await target.click()
+        await page.waitForTimeout(1500)
+      } else {
+        console.log(`Кнопка «${needle}» не найдена — проверяю открытую вкладку.`)
+      }
     }
   }
 
