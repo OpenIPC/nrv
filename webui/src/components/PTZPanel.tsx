@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ptzAPI, type PTZPreset } from '../api/client'
 import { useToast } from '../context/ToastContext'
 import {
@@ -19,6 +20,7 @@ interface Props {
  */
 export default function PTZPanel({ cameraId }: Props) {
   const toast = useToast()
+  const { t } = useTranslation()
   const [busy, setBusy] = useState<string | null>(null)
   const [presets, setPresets] = useState<PTZPreset[]>([])
   const [loadingPresets, setLoadingPresets] = useState(false)
@@ -47,7 +49,7 @@ export default function PTZPanel({ cameraId }: Props) {
     try {
       await ptzAPI.move(cameraId, pan, tilt, zoom, stepMs)
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Команда PTZ не выполнена')
+      toast.error(e?.response?.data?.error || t('ptzPanel.moveFailed'))
     } finally {
       // Небольшая задержка, чтобы кнопка не «мигала» при быстрых кликах.
       setTimeout(() => setBusy(null), 150)
@@ -69,9 +71,9 @@ export default function PTZPanel({ cameraId }: Props) {
     setBusy('preset-' + token)
     try {
       await ptzAPI.gotoPreset(cameraId, token)
-      toast.success(`Переход к позиции «${name || token}»`)
+      toast.success(t('ptzPanel.presetMoved', { name: name || token }))
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось перейти к позиции')
+      toast.error(e?.response?.data?.error || t('ptzPanel.presetFailed'))
     } finally {
       setBusy(null)
     }
@@ -87,10 +89,10 @@ export default function PTZPanel({ cameraId }: Props) {
     <div className="card" style={{ marginTop: 16 }}>
       <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, fontSize: 15 }}>
         <Camera size={18} style={{ color: 'var(--accent)' }} />
-        PTZ управление
+        {t('ptzPanel.title')}
       </h3>
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-        Поворот камеры по ONVIF
+        {t('ptzPanel.subtitle')}
       </p>
 
       {/* Крестовина направлений */}
@@ -108,7 +110,7 @@ export default function PTZPanel({ cameraId }: Props) {
           style={padBtn}
           onClick={() => move('up', 0, 0.4)}
           disabled={busy !== null}
-          title="Вверх"
+          title={t('ptzPanel.up')}
         >
           {busy === 'up' ? <Loader2 size={16} className="spin" /> : <ChevronUp size={18} />}
         </button>
@@ -119,7 +121,7 @@ export default function PTZPanel({ cameraId }: Props) {
           style={padBtn}
           onClick={() => move('left', -0.4, 0)}
           disabled={busy !== null}
-          title="Влево"
+          title={t('ptzPanel.left')}
         >
           {busy === 'left' ? <Loader2 size={16} className="spin" /> : <ChevronLeft size={18} />}
         </button>
@@ -128,7 +130,7 @@ export default function PTZPanel({ cameraId }: Props) {
           style={padBtn}
           onClick={stop}
           disabled={busy !== null}
-          title="Стоп"
+          title={t('ptzPanel.stop')}
         >
           {busy === 'stop' ? <Loader2 size={16} className="spin" /> : <Circle size={14} />}
         </button>
@@ -137,7 +139,7 @@ export default function PTZPanel({ cameraId }: Props) {
           style={padBtn}
           onClick={() => move('right', 0.4, 0)}
           disabled={busy !== null}
-          title="Вправо"
+          title={t('ptzPanel.right')}
         >
           {busy === 'right' ? <Loader2 size={16} className="spin" /> : <ChevronRight size={18} />}
         </button>
@@ -148,7 +150,7 @@ export default function PTZPanel({ cameraId }: Props) {
           style={padBtn}
           onClick={() => move('down', 0, -0.4)}
           disabled={busy !== null}
-          title="Вниз"
+          title={t('ptzPanel.down')}
         >
           {busy === 'down' ? <Loader2 size={16} className="spin" /> : <ChevronDown size={18} />}
         </button>
@@ -164,7 +166,7 @@ export default function PTZPanel({ cameraId }: Props) {
           disabled={busy !== null}
         >
           {busy === 'zoom-in' ? <Loader2 size={14} className="spin" /> : <ZoomIn size={14} />}
-          Приблизить
+          {t('ptzPanel.zoomIn')}
         </button>
         <button
           className="btn btn-outline btn-sm"
@@ -173,14 +175,14 @@ export default function PTZPanel({ cameraId }: Props) {
           disabled={busy !== null}
         >
           {busy === 'zoom-out' ? <Loader2 size={14} className="spin" /> : <ZoomOut size={14} />}
-          Отдалить
+          {t('ptzPanel.zoomOut')}
         </button>
       </div>
 
       {/* Длительность шага */}
       <div style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
-          <span>Длительность шага</span>
+          <span>{t('ptzPanel.stepMs')}</span>
           <span>{stepMs} мс</span>
         </div>
         <input
@@ -197,19 +199,19 @@ export default function PTZPanel({ cameraId }: Props) {
       {/* Пресеты */}
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Позиции</span>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('ptzPanel.presets')}</span>
           <button
             className="btn btn-outline btn-sm"
             style={{ padding: '2px 8px', fontSize: 11 }}
             onClick={loadPresets}
             disabled={loadingPresets}
           >
-            {loadingPresets ? <Loader2 size={12} className="spin" /> : 'Обновить'}
+            {loadingPresets ? <Loader2 size={12} className="spin" /> : t('ptzPanel.refresh')}
           </button>
         </div>
         {presets.length === 0 ? (
           <p style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-            Пресеты не найдены или не поддерживаются камерой.
+            {t('ptzPanel.noPresets')}
           </p>
         ) : (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>

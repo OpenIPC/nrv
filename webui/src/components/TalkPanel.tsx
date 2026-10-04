@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { audioAPI } from '../api/client'
 import { useToast } from '../context/ToastContext'
 import { Mic, MicOff, Loader2, Info } from 'lucide-react'
@@ -21,6 +22,7 @@ interface Props {
  */
 export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Props) {
   const toast = useToast()
+  const { t } = useTranslation()
   const [talking, setTalking] = useState(false)
   const [starting, setStarting] = useState(false)
   const [level, setLevel] = useState(0)
@@ -78,7 +80,7 @@ export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Pro
 
   const start = async () => {
     if (!backchannel) {
-      toast.error('Камера не поддерживает приём звука')
+      toast.error(t('talkPanel.noBackchannel'))
       return
     }
     setStarting(true)
@@ -148,12 +150,12 @@ export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Pro
 
       nodeRef.current = processor
       setTalking(true)
-      toast.success('Разговор начат')
+      toast.success(t('talkPanel.started'))
     } catch (e: any) {
       cleanup()
       void audioAPI.stopTalk(cameraId).catch(() => {})
       const msg = e?.response?.data?.error
-        || (e?.name === 'NotAllowedError' ? 'Нет доступа к микрофону' : 'Не удалось начать разговор')
+        || (e?.name === 'NotAllowedError' ? t('talkPanel.micDenied') : t('talkPanel.startFailed'))
       toast.error(msg)
     } finally {
       setStarting(false)
@@ -168,7 +170,7 @@ export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Pro
       // Остановка не критична: сессия завершится по таймауту на сервере.
     }
     setTalking(false)
-    toast.success('Разговор завершён')
+    toast.success(t('talkPanel.finished'))
   }
 
   // Камера не умеет принимать звук — показываем пояснение вместо кнопки,
@@ -182,9 +184,7 @@ export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Pro
       }}>
         <Info size={16} style={{ flexShrink: 0, marginTop: 2 }} />
         <span>
-          Камера не поддерживает приём звука — динамика нет либо прошивка
-          не открывает обратный аудиоканал. Звук с камеры слушать можно,
-          говорить через неё нельзя.
+          {t('talkPanel.noBackchannelHint')}
         </span>
       </div>
     )
@@ -199,8 +199,7 @@ export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Pro
       }}>
         <Info size={16} style={{ flexShrink: 0, marginTop: 2 }} />
         <span>
-          Передача звука на камеру выключена. Включите переключатель
-          «Разрешить передачу звука на камеру» выше и сохраните настройки.
+          {t('talkPanel.disabledHint')}
         </span>
       </div>
     )
@@ -222,7 +221,7 @@ export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Pro
           ) : (
             <Mic size={14} />
           )}
-          {starting ? 'Подключение...' : talking ? 'Завершить разговор' : 'Начать разговор'}
+          {starting ? t('talkPanel.connecting') : talking ? t('talkPanel.stop') : t('talkPanel.start')}
         </button>
 
         {/* Индикатор уровня: видно, что микрофон действительно передаёт звук. */}
@@ -243,7 +242,7 @@ export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Pro
 
       {talking && (
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-          Говорите — звук передаётся на динамик камеры. Отправлено порций: {sentRef.current}
+          {t('talkPanel.talking', { count: sentRef.current })}
         </p>
       )}
     </div>

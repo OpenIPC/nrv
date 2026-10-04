@@ -1,8 +1,10 @@
+import { useTranslation } from 'react-i18next'
 import { statsAPI, Stats } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { Video, AlertTriangle, HardDrive, Shield, Wifi, WifiOff } from 'lucide-react'
 
 export default function DashboardPage() {
+  const { t } = useTranslation()
   const { data: stats, loading } = useAsync<Stats>(() => statsAPI.get())
 
   if (loading) return <div className="spinner" />
@@ -10,14 +12,24 @@ export default function DashboardPage() {
   const s = stats!
 
   const cards = [
-    { label: 'Всего камер', value: s.total_cameras, icon: Video, sub: `${s.online_cameras} онлайн` },
-    { label: 'Событий за 24ч', value: s.total_events_24h, icon: AlertTriangle },
-    { label: 'Контроллеры СКУД', value: s.acs_total, icon: Shield, sub: `${s.acs_online} онлайн` },
     {
-      label: 'Занято на диске',
+      label: t('dashboardPage.totalCameras'),
+      value: s.total_cameras,
+      icon: Video,
+      sub: t('dashboardPage.onlineCount', { count: s.online_cameras }),
+    },
+    { label: t('dashboardPage.events24h'), value: s.total_events_24h, icon: AlertTriangle },
+    {
+      label: t('dashboardPage.acsControllers'),
+      value: s.acs_total,
+      icon: Shield,
+      sub: t('dashboardPage.onlineCount', { count: s.acs_online }),
+    },
+    {
+      label: t('dashboardPage.diskUsed'),
       value: `${s.disk_used_gb.toFixed(1)} GB`,
       icon: HardDrive,
-      sub: `из ${s.disk_total_gb.toFixed(0)} GB`,
+      sub: `${t('dashboardPage.ofTotal', { total: s.disk_total_gb.toFixed(0) })} GB`,
     },
   ]
 
@@ -25,8 +37,8 @@ export default function DashboardPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>Дашборд</h1>
-          <p>Обзор системы видеонаблюдения</p>
+          <h1>{t('dashboardPage.title')}</h1>
+          <p>{t('dashboardPage.subtitle')}</p>
         </div>
       </div>
 
@@ -45,26 +57,26 @@ export default function DashboardPage() {
 
       {/* Быстрые действия */}
       <div style={{ marginTop: 32 }}>
-        <h2 style={{ marginBottom: 16, fontSize: 18 }}>Состояние системы</h2>
+        <h2 style={{ marginBottom: 16, fontSize: 18 }}>{t('dashboardPage.systemState')}</h2>
         <div className="grid grid-2">
           <div className="card">
             <h3 style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
               <Wifi size={18} style={{ color: s.online_cameras > 0 ? 'var(--success)' : 'var(--danger)' }} />
-              Камеры
+              {t('dashboardPage.cameras')}
             </h3>
             <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
-              {s.online_cameras} из {s.total_cameras} онлайн
-              {s.total_cameras === 0 && ' — камеры не добавлены'}
+              {t('dashboardPage.camerasOnline', { online: s.online_cameras, total: s.total_cameras })}
+              {s.total_cameras === 0 && t('dashboardPage.noCameras')}
             </div>
           </div>
           <div className="card">
             <h3 style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
               <Shield size={18} style={{ color: s.acs_online > 0 ? 'var(--success)' : 'var(--danger)' }} />
-              СКУД
+              {t('dashboardPage.acs')}
             </h3>
             <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
-              {s.acs_online} из {s.acs_total} контроллеров онлайн
-              {s.acs_total === 0 && ' — нет добавленных контроллеров'}
+              {t('dashboardPage.acsOnline', { online: s.acs_online, total: s.acs_total })}
+              {s.acs_total === 0 && t('dashboardPage.noControllers')}
             </div>
           </div>
         </div>
