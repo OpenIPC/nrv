@@ -118,8 +118,12 @@ func (a *BewardAdapter) ListDoors(ctx context.Context) ([]Door, error) {
 	}
 
 	return []Door{{
-		ID:     bewardRelayDoorID,
-		Name:   "Дверь (реле домофона)",
+		ID: bewardRelayDoorID,
+		// Имя пустое намеренно: устройство своего названия двери не знает —
+		// на объекте это одно реле, и подпись к нему ставит интерфейс.
+		// Раньше здесь стояла готовая русская строка, и на китайском она
+		// оставалась русской.
+		Name:   "",
 		Status: doorStatusText(status),
 	}}, nil
 }

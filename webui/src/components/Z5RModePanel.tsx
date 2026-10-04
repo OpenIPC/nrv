@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Trans, useTranslation } from 'react-i18next'
 import { acsAPI, Z5RWorkmode } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { AlertTriangle, Cloud, CloudOff, RefreshCw, Server } from 'lucide-react'
@@ -17,6 +18,7 @@ import { AlertTriangle, Cloud, CloudOff, RefreshCw, Server } from 'lucide-react'
  * контроллер на наш сервер — это главный вопрос, на который она отвечает.
  */
 export default function Z5RModePanel({ controllerID }: { controllerID: string }) {
+  const { t } = useTranslation()
   const { data, loading, error, refetch } = useAsync<Z5RWorkmode>(
     () => acsAPI.workmode(controllerID),
   )
@@ -34,7 +36,7 @@ export default function Z5RModePanel({ controllerID }: { controllerID: string })
       setNotice(success)
       refetch()
     } catch (e: any) {
-      setActionError(e?.response?.data?.error || 'Не удалось выполнить действие')
+      setActionError(e?.response?.data?.error || t('z5rPanel.actionFailed'))
     } finally {
       setBusy('')
     }
@@ -50,11 +52,11 @@ export default function Z5RModePanel({ controllerID }: { controllerID: string })
     return (
       <div className="card" style={{ padding: 12, borderLeft: '3px solid var(--danger)' }}>
         <div style={{ fontSize: 13, color: 'var(--danger)' }}>
-          Не удалось прочитать режим работы контроллера
+          {t('z5rPanel.loadFailed')}
         </div>
         <button className="btn btn-outline btn-sm" onClick={refetch} style={{ marginTop: 8 }}>
           <RefreshCw size={14} />
-          Повторить
+          {t('z5rPanel.retry')}
         </button>
       </div>
     )
@@ -72,7 +74,7 @@ export default function Z5RModePanel({ controllerID }: { controllerID: string })
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         {ok ? <Server size={16} /> : <AlertTriangle size={16} color="var(--warning)" />}
-        <strong style={{ fontSize: 14 }}>Режим работы</strong>
+        <strong style={{ fontSize: 14 }}>{t('z5rPanel.title')}</strong>
       </div>
 
       {/*
@@ -81,19 +83,19 @@ export default function Z5RModePanel({ controllerID }: { controllerID: string })
       */}
       {ok ? (
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
-          Контроллер работает в режиме <strong>{data.mode_name}</strong> и обращается
-          к нашему серверу: <code>{data.server_url}</code>. События поступают в журнал.
+          <Trans
+            i18nKey="z5rPanel.okText"
+            values={{ mode: data.mode_name, url: data.server_url }}
+            components={{ 1: <strong />, 2: <code /> }}
+          />
         </div>
       ) : (
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
-          Контроллер работает в режиме <strong>{data.mode_name}</strong>
-          {data.server_url && (
-            <> и обращается по адресу <code>{data.server_url}</code></>
-          )}
-          .{' '}
-          <strong>События к нам не поступают.</strong> Если это облако производителя —
-          журнал проходов уходит третьей стороне. Переведите контроллер в режим
-          WEBJSON, чтобы он работал с нашим сервером.
+          <Trans
+            i18nKey={data.server_url ? 'z5rPanel.badTextWithUrl' : 'z5rPanel.badTextNoUrl'}
+            values={{ mode: data.mode_name, url: data.server_url }}
+            components={{ 1: <strong />, 2: <code />, 3: <strong /> }}
+          />
         </div>
       )}
 
@@ -103,10 +105,10 @@ export default function Z5RModePanel({ controllerID }: { controllerID: string })
             className="btn btn-primary btn-sm"
             disabled={busy !== ''}
             onClick={() => run('server', () => acsAPI.enableServerMode(controllerID),
-              'Режим сохранён. Перезапустите контроллер, чтобы он вступил в силу.')}
+              t('z5rPanel.savedMode'))}
           >
             <Server size={14} />
-            {busy === 'server' ? 'Сохраняю…' : 'Перевести на наш сервер'}
+            {busy === 'server' ? t('z5rPanel.saving') : t('z5rPanel.toServer')}
           </button>
         )}
 
@@ -119,23 +121,23 @@ export default function Z5RModePanel({ controllerID }: { controllerID: string })
         <button
           className="btn btn-outline btn-sm"
           disabled={busy !== ''}
-          title="Очистить адрес и пароль облака производителя"
+          title={t('z5rPanel.unlinkHint')}
           onClick={() => run('unlink', () => acsAPI.unlinkCloud(controllerID),
-            'Настройки облака очищены. Перезапустите контроллер.')}
+            t('z5rPanel.unlinked'))}
         >
           <CloudOff size={14} />
-          {busy === 'unlink' ? 'Очищаю…' : 'Отвязать от облака'}
+          {busy === 'unlink' ? t('z5rPanel.unlinking') : t('z5rPanel.unlink')}
         </button>
 
         <button
           className="btn btn-outline btn-sm"
           disabled={busy !== ''}
-          title="Перезапуск нужен после смены режима и занимает около минуты"
+          title={t('z5rPanel.restartHint')}
           onClick={() => run('restart', () => acsAPI.restartController(controllerID),
-            'Команда перезапуска отправлена. Контроллер поднимется примерно через минуту.')}
+            t('z5rPanel.restarted'))}
         >
           <RefreshCw size={14} />
-          {busy === 'restart' ? 'Перезапускаю…' : 'Перезапустить'}
+          {busy === 'restart' ? t('z5rPanel.restarting') : t('z5rPanel.restart')}
         </button>
       </div>
 

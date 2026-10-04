@@ -72,9 +72,10 @@ func (a *HikvisionAdapter) ListDoors(ctx context.Context) ([]Door, error) {
 	body, _ := io.ReadAll(resp.Body)
 	_ = body // В реальной имплементации — парсинг XML
 
-	// Заглушка
+	// Заглушка. Имя двери не задаём: устройство его не сообщает, а готовая
+	// строка здесь означала бы ещё один русский текст, который не переводится.
 	return []Door{
-		{ID: "door_1", Name: "Вход главный", Status: "locked"},
+		{ID: "door_1", Name: "", Status: "locked"},
 	}, nil
 }
 

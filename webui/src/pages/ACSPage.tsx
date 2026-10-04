@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { acsAPI, ACSController, ACSEvent } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { Plus, Shield, DoorOpen, Unlock, RefreshCw, Pencil, CreditCard, Trash2, Video, Cpu } from 'lucide-react'
@@ -14,13 +15,13 @@ import Z5RModePanel from '../components/Z5RModePanel'
  * человеческое название: «z5r» ему ничего не говорит, а «Z5R WEB BT» он
  * увидит на корпусе устройства.
  */
-function vendorLabel(vendor: string): string {
+function vendorLabel(vendor: string, t: (key: string) => string): string {
   const titles: Record<string, string> = {
     skud: 'SKUD (ESP32-P4)',
     z5r: 'Z5R WEB BT (IronLogic)',
     // Домофон в роли контроллера доступа: у него реле замка, и он же
     // дублирует открытие на вход «кнопка выхода» контроллера Z5R.
-    beward: 'Beward (домофон)',
+    beward: t('acsPage.vendorBeward'),
     hikvision: 'Hikvision',
     dahua: 'Dahua',
     promwad: 'Promwad',
@@ -29,6 +30,7 @@ function vendorLabel(vendor: string): string {
 }
 
 export default function ACSPage() {
+  const { t } = useTranslation()
   const [tab, setTab] = useState<'controllers' | 'events'>('controllers')
 
   const {
@@ -99,7 +101,7 @@ export default function ACSPage() {
       setForm({ name: '', vendor: 'skud', ip: '', port: 80, login: '', password: '' })
       refetchCtrl()
     } catch (e: any) {
-      setActionError(e?.response?.data?.error || 'Не удалось добавить контроллер')
+      setActionError(e?.response?.data?.error || t('acsPage.addFailed'))
     } finally {
       setSaving(false)
     }
@@ -111,13 +113,13 @@ export default function ACSPage() {
       // Двери ещё не прочитаны — отправлять нечего. Молчание здесь хуже
       // понятного сообщения: оператор нажал бы кнопку и не понял, почему
       // ничего не произошло.
-      setActionError('Список дверей контроллера ещё не получен')
+      setActionError(t('acsPage.doorsNotLoaded'))
       return
     }
     try {
       await acsAPI.openDoor(ctrlID, doorID)
     } catch (e: any) {
-      setActionError(e?.response?.data?.error || 'Не удалось открыть дверь')
+      setActionError(e?.response?.data?.error || t('acsPage.openFailed'))
     }
   }
 
@@ -132,7 +134,10 @@ export default function ACSPage() {
   const doorLabel = (ev: ACSEvent): string => {
     const ctrl = controllers?.find((c) => c.id === ev.controller_id)
     const door = doors[ev.controller_id]?.find((d) => d.id === ev.door_id)
-    const doorName = door?.name || ev.door_id
+    // Дверь может быть в списке, но без имени: устройство его не сообщает.
+    // Тогда ставим подпись из переводов. Если же двери в списке нет совсем,
+    // показываем идентификатор — иначе событие осталось бы без подписи.
+    const doorName = door ? (door.name || t('acsPage.doorUnnamed')) : ev.door_id
     if (!ctrl) return doorName
     // У контроллеров Z5R дверь называется так же, как сам контроллер (имя
     // задаёт оператор при заведении). Повторять его дважды незачем —
@@ -141,20 +146,20 @@ export default function ACSPage() {
   }
 
   const handleDeleteController = async (ctrl: ACSController) => {
-    if (!window.confirm(`Удалить контроллер «${ctrl.name}»? Его карты также будут удалены.`)) return
+    if (!window.confirm(t('acsPage.confirmDelete', { name: ctrl.name }))) return
     setActionError('')
     try {
       await acsAPI.deleteController(ctrl.id)
       refetchCtrl()
     } catch (e: any) {
-      setActionError(e?.response?.data?.error || 'Не удалось удалить контроллер')
+      setActionError(e?.response?.data?.error || t('acsPage.deleteFailed'))
     }
   }
 
   const eventLabels: Record<string, string> = {
-    access_granted: 'Доступ разрешён',
-    access_denied: 'Доступ запрещён',
-    door_forced: 'Взлом двери',
+    access_granted: t('acsPage.eventAccessGranted'),
+    access_denied: t('acsPage.eventAccessDenied'),
+    door_forced: t('acsPage.eventDoorForced'),
   }
 
   const eventColors: Record<string, string> = {
@@ -167,12 +172,12 @@ export default function ACSPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>СКУД</h1>
-          <p>Управление контроллерами доступа</p>
+          <h1>{t('acsPage.title')}</h1>
+          <p>{t('acsPage.subtitle')}</p>
         </div>
         <button className="btn btn-primary" onClick={() => setShowModal(true)}>
           <Plus size={18} />
-          Добавить контроллер
+          {t('acsPage.addController')}
         </button>
       </div>
 
@@ -182,13 +187,13 @@ export default function ACSPage() {
           className={`btn ${tab === 'controllers' ? 'btn-primary' : 'btn-outline'} btn-sm`}
           onClick={() => setTab('controllers')}
         >
-          Контроллеры
+          {t('acsPage.tabControllers')}
         </button>
         <button
           className={`btn ${tab === 'events' ? 'btn-primary' : 'btn-outline'} btn-sm`}
           onClick={() => setTab('events')}
         >
-          События
+          {t('acsPage.tabEvents')}
         </button>
       </div>
 
@@ -202,7 +207,7 @@ export default function ACSPage() {
           {ctrlLoading ? <div className="spinner" /> : !controllers || controllers.length === 0 ? (
             <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
               <Shield size={48} style={{ marginBottom: 16, opacity: 0.3 }} />
-              <p>Нет добавленных контроллеров СКУД</p>
+              <p>{t('acsPage.emptyControllers')}</p>
             </div>
           ) : (
             <div className="grid grid-2">
@@ -216,9 +221,9 @@ export default function ACSPage() {
                     </span>
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-                    <div>Производитель: <strong>{vendorLabel(ctrl.vendor)}</strong></div>
+                    <div>{t('acsPage.vendor')}: <strong>{vendorLabel(ctrl.vendor, t)}</strong></div>
                     <div>IP: {ctrl.ip}:{ctrl.port}</div>
-                    <div>Добавлен: {new Date(ctrl.created_at).toLocaleDateString('ru')}</div>
+                    <div>{t('acsPage.addedAt', { date: new Date(ctrl.created_at).toLocaleDateString() })}</div>
                   </div>
 
                   {/*
@@ -240,39 +245,39 @@ export default function ACSPage() {
                       disabled={!doors[ctrl.id]?.length}
                       title={
                         doors[ctrl.id]?.[0]
-                          ? `Дверь: ${doors[ctrl.id][0].name}`
-                          : 'Список дверей контроллера ещё не получен'
+                          ? t('acsPage.doorHint', { name: doors[ctrl.id][0].name || t('acsPage.doorUnnamed') })
+                          : t('acsPage.doorsNotLoaded')
                       }
                     >
                       <Unlock size={14} />
-                      Открыть дверь
+                      {t('acsPage.openDoor')}
                     </button>
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => setCardsFor(ctrl)}
                     >
                       <CreditCard size={14} />
-                      Карты
+                      {t('acsPage.cards')}
                     </button>
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => setFirmwareFor(ctrl)}
-                      title="Обновление прошивки"
+                      title={t('acsPage.firmwareHint')}
                     >
                       <Cpu size={14} />
-                      Прошивка
+                      {t('acsPage.firmware')}
                     </button>
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => setEditFor(ctrl)}
                     >
                       <Pencil size={14} />
-                      Изменить
+                      {t('acsPage.edit')}
                     </button>
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => handleDeleteController(ctrl)}
-                      title="Удалить контроллер"
+                      title={t('acsPage.deleteHint')}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -289,7 +294,7 @@ export default function ACSPage() {
           {eventsLoading ? <div className="spinner" /> : acsEvents.length === 0 ? (
             <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
               <DoorOpen size={48} style={{ marginBottom: 16, opacity: 0.3 }} />
-              <p>Нет событий СКУД</p>
+              <p>{t('acsPage.emptyEvents')}</p>
             </div>
           ) : (
             <div className="card" style={{ padding: 0 }}>
@@ -297,18 +302,18 @@ export default function ACSPage() {
                 <table>
                   <thead>
                     <tr>
-                      <th>Время</th>
-                      <th>Событие</th>
-                      <th>Дверь</th>
-                      <th>Карта</th>
-                      <th>Запись</th>
+                      <th>{t('acsPage.thTime')}</th>
+                      <th>{t('acsPage.thEvent')}</th>
+                      <th>{t('acsPage.thDoor')}</th>
+                      <th>{t('acsPage.thCard')}</th>
+                      <th>{t('acsPage.thRecording')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {acsEvents.map((ev) => (
                       <tr key={ev.id}>
                         <td style={{ whiteSpace: 'nowrap', fontSize: 13 }}>
-                          {new Date(ev.timestamp).toLocaleString('ru')}
+                          {new Date(ev.timestamp).toLocaleString()}
                         </td>
                         <td>
                           <span style={{ color: eventColors[ev.event_type] || 'var(--text-primary)' }}>
@@ -317,9 +322,9 @@ export default function ACSPage() {
                           {/* Метка причины: видно, что запись создана по
                               событию СКУД и что именно сработало. */}
                           {ev.media_type && (
-                            <span className="badge badge-online" style={{ marginLeft: 6 }} title="Съёмка по этому событию">
+                            <span className="badge badge-online" style={{ marginLeft: 6 }} title={t('acsPage.mediaHint')}>
                               <Video size={12} />
-                              {ev.media_type === 'clip' ? 'видео' : 'снимок'}
+                              {ev.media_type === 'clip' ? t('acsPage.mediaClip') : t('acsPage.mediaSnapshot')}
                             </span>
                           )}
                         </td>
@@ -345,7 +350,7 @@ export default function ACSPage() {
                             >
                               <img
                                 src={`/api/v1/acs/events/${ev.id}/snapshot?jwt=${localStorage.getItem('token') || ''}`}
-                                alt="Снимок события"
+                                alt={t('acsPage.snapshotAlt')}
                                 style={{ width: 56, height: 42, objectFit: 'cover', borderRadius: 4 }}
                               />
                             </a>
@@ -354,7 +359,7 @@ export default function ACSPage() {
                             <a
                               className="btn btn-outline btn-sm"
                               href={`/recordings?trigger=acs`}
-                              title="Запись создана по событию доступа"
+                              title={t('acsPage.clipHint')}
                             >
                               <Video size={14} />
                             </a>
@@ -374,37 +379,37 @@ export default function ACSPage() {
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>Добавить контроллер СКУД</h2>
+            <h2>{t('acsPage.addTitle')}</h2>
             <form onSubmit={handleAdd}>
-              <label>Название</label>
+              <label>{t('acsPage.fieldName')}</label>
               <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
 
-              <label>Производитель</label>
+              <label>{t('acsPage.fieldVendor')}</label>
               <select value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })}>
                 <option value="skud">SKUD (ESP32-P4)</option>
                 <option value="z5r">Z5R WEB BT (IronLogic)</option>
-                <option value="beward">Beward (домофон)</option>
+                <option value="beward">{t('acsPage.vendorBeward')}</option>
                 <option value="hikvision">Hikvision</option>
                 <option value="dahua">Dahua</option>
                 <option value="promwad">Promwad</option>
               </select>
 
-              <label>IP-адрес</label>
+              <label>{t('acsPage.fieldIP')}</label>
               <input value={form.ip} onChange={(e) => setForm({ ...form, ip: e.target.value })} placeholder="192.168.1.100" required />
 
-              <label>Порт</label>
+              <label>{t('acsPage.fieldPort')}</label>
               <input type="number" value={form.port} onChange={(e) => setForm({ ...form, port: +e.target.value })} />
 
-              <label>Логин</label>
+              <label>{t('acsPage.fieldLogin')}</label>
               <input value={form.login} onChange={(e) => setForm({ ...form, login: e.target.value })} required />
 
-              <label>Пароль</label>
+              <label>{t('acsPage.fieldPassword')}</label>
               <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required />
 
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
-                <button type="button" className="btn btn-outline" onClick={() => setShowModal(false)}>Отмена</button>
+                <button type="button" className="btn btn-outline" onClick={() => setShowModal(false)}>{t('common.cancel')}</button>
                 <button type="submit" className="btn btn-primary" disabled={saving}>
-                  {saving ? 'Добавление...' : 'Добавить'}
+                  {saving ? t('acsPage.adding') : t('acsPage.add')}
                 </button>
               </div>
             </form>
