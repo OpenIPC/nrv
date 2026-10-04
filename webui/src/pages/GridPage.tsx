@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { camerasAPI, type Camera, type StreamInfo } from '../api/client'
 import LivePlayer from '../components/LivePlayer'
 import { useToast } from '../context/ToastContext'
@@ -77,6 +78,7 @@ interface GridCell {
 
 export default function GridPage() {
   const toast = useToast()
+  const { t } = useTranslation()
 
   const [cameras, setCameras] = useState<Camera[]>([])
   const [loading, setLoading] = useState(true)
@@ -130,7 +132,7 @@ export default function GridPage() {
           return filtered.length === prev.length ? prev : filtered
         })
       } catch {
-        if (!cancelled) toast.error('Не удалось получить список камер')
+        if (!cancelled) toast.error(t('gridPage.loadFailed'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -207,11 +209,14 @@ export default function GridPage() {
     if (readyCount >= PLAYER_CONCURRENCY && readyCount > 0) {
       // После первых порций даём больше времени: основные потоки уже
       // идут, и добавлять нагрузку резко не стоит.
-      const t = setTimeout(() => setReadyCount((c) => c + 1), 1200)
-      return () => clearTimeout(t)
+      //
+      // Имя таймера не t: так называется функция перевода, и внутри
+      // этого блока она стала бы недоступна.
+      const timer = setTimeout(() => setReadyCount((c) => c + 1), 1200)
+      return () => clearTimeout(timer)
     }
-    const t = setTimeout(() => setReadyCount((c) => c + 1), 400)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => setReadyCount((c) => c + 1), 400)
+    return () => clearTimeout(timer)
   }, [readyCount, selectedCameras.length])
 
   /** Отмечает или снимает камеру для показа в сетке. */
@@ -221,12 +226,12 @@ export default function GridPage() {
         return prev.filter((x) => x !== id)
       }
       if (prev.length >= MAX_TILES) {
-        toast.info(`В сетку помещается не больше ${MAX_TILES} камер`)
+        toast.info(t('gridPage.limitInfo', { max: MAX_TILES }))
         return prev
       }
       return [...prev, id]
     })
-  }, [toast])
+  }, [toast, t])
 
   /** Строит раскладку: выбранные камеры по порядку, остальные пустые. */
   const cells = useMemo<GridCell[]>(() => {
@@ -252,7 +257,7 @@ export default function GridPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <LayoutGrid size={17} style={{ color: 'var(--accent)' }} />
-            <span style={{ fontWeight: 600 }}>Сетка</span>
+            <span style={{ fontWeight: 600 }}>{t('gridPage.title')}</span>
           </div>
 
           {/* Размер сетки */}
@@ -265,7 +270,7 @@ export default function GridPage() {
                   setGridIndex(i)
                   setExpandedId(null)
                 }}
-                title={`Показать ${g.cols * g.rows} камер`}
+                title={t('gridPage.sizeHint', { count: g.cols * g.rows })}
               >
                 {g.label}
               </button>
@@ -274,14 +279,14 @@ export default function GridPage() {
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-              Выбрано: <strong style={{ color: 'var(--text-primary)' }}>{selected.length}</strong> из {totalCells}
+              {t('gridPage.selectedLabel')} <strong style={{ color: 'var(--text-primary)' }}>{selected.length}</strong> {t('gridPage.ofTotal', { total: totalCells })}
             </span>
             {selected.length > 0 && (
               <button
                 className="btn btn-outline btn-sm"
                 onClick={() => { setSelected([]); setExpandedId(null) }}
               >
-                <X size={13} /> Очистить
+                <X size={13} /> {t('gridPage.clear')}
               </button>
             )}
           </div>
@@ -332,9 +337,9 @@ export default function GridPage() {
                   position: 'absolute', top: 8, right: 8, zIndex: 10,
                   background: 'rgba(0,0,0,0.65)', border: 'none', color: '#fff',
                 }}
-                title="Вернуться к сетке"
+                title={t('gridPage.backToGrid')}
               >
-                <Minimize2 size={14} /> Свернуть
+                <Minimize2 size={14} /> {t('gridPage.collapse')}
               </button>
             </div>
           ) : (
@@ -382,7 +387,7 @@ export default function GridPage() {
                   <div
                     key={camera.id}
                     onDoubleClick={() => setExpandedId(camera.id)}
-                    title="Двойной щелчок разворачивает камеру"
+                    title={t('gridPage.expandHint')}
                     style={{
                       position: 'relative', background: '#000',
                       borderRadius: 'var(--radius)', overflow: 'hidden', minHeight: 0,
@@ -413,9 +418,9 @@ export default function GridPage() {
                         color: 'var(--text-secondary)', fontSize: 12, gap: 6,
                       }}>
                         {isOnline(camera) ? (
-                          <><Loader2 size={14} className="spin" /> Запуск...</>
+                          <><Loader2 size={14} className="spin" /> {t('gridPage.starting')}</>
                         ) : (
-                          'камера не в сети'
+                          t('gridPage.offline')
                         )}
                       </div>
                     )}
@@ -447,7 +452,7 @@ export default function GridPage() {
                     {/* Кнопка разворота */}
                     <button
                       onClick={() => setExpandedId(camera.id)}
-                      title="Развернуть на весь экран (основной поток)"
+                      title={t('gridPage.expandFullHint')}
                       style={{
                         position: 'absolute', top: 6, right: 6,
                         // Выше видео и его наложений: иначе кнопка
@@ -477,17 +482,17 @@ export default function GridPage() {
             padding: '10px 12px', borderBottom: '1px solid var(--border)',
             fontWeight: 600, fontSize: 13,
           }}>
-            Камеры
+            {t('gridPage.camerasTitle')}
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
             {loading ? (
               <div style={{ padding: 12, color: 'var(--text-secondary)', fontSize: 13 }}>
-                Загрузка...
+                {t('gridPage.loading')}
               </div>
             ) : cameras.length === 0 ? (
               <div style={{ padding: 12, color: 'var(--text-secondary)', fontSize: 13 }}>
-                Камеры не найдены
+                {t('gridPage.noCameras')}
               </div>
             ) : (
               cameras.map((camera) => {
@@ -505,7 +510,7 @@ export default function GridPage() {
                       border: 'none', borderRadius: 4, cursor: 'pointer',
                       textAlign: 'left', color: 'inherit',
                     }}
-                    title={online ? 'Добавить в сетку' : 'Камера не в сети'}
+                    title={online ? t('gridPage.addToGrid') : t('gridPage.cameraOffline')}
                   >
                     {/* Галочка выбора */}
                     <span style={{
@@ -553,7 +558,7 @@ export default function GridPage() {
               padding: '8px 12px', borderTop: '1px solid var(--border)',
               fontSize: 11, color: 'var(--warning)',
             }}>
-              Достигнут предел: {MAX_TILES} камер
+              {t('gridPage.limitReached', { max: MAX_TILES })}
             </div>
           )}
         </div>
