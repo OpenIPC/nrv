@@ -12,8 +12,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -231,7 +233,14 @@ func (s *CameraScanner) Scan(ctx context.Context, req domain.ScanRequest) (*doma
 	//
 	// Бюджет делает оценку сверху честной: даже если часть камер
 	// «подвиснет», общее время остаётся предсказуемым.
-	const perCameraBudget = 25 * time.Second
+	//
+	// Значение поднято с 25 до 35 секунд после того, как к опросу
+	// добавился подбор пути потока: камера 192.168.1.44 отдаёт SDP
+	// основного потока за 11 секунд, и при прежнем бюджете проверка не
+	// успевала дойти до верного пути, заканчивая шаблонным — то есть
+	// заведомо неверным. Платят за это только незнакомые камеры: для
+	// OpenIPC, Hikvision и Dahua путь задан шаблоном и не проверяется.
+	const perCameraBudget = 35 * time.Second
 
 	for _, ip := range alive {
 		wg.Add(1)
@@ -578,6 +587,227 @@ func genericCamera(ip, vendor string) *domain.DiscoveredCamera {
 	return cam
 }
 
+// streamProbeTimeout — сколько ждём ответа ffprobe при подборе пути.
+//
+// Обязан быть больше, чем тайм-аут сокета внутри ffprobe (`-timeout` в
+// probeRTSP задаёт 8 секунд): иначе контекст прерывает проверку раньше,
+// чем ffprobe успевает ответить сам, и живой поток выглядит неответившим.
+// На это уже наступили: с пятью секундами камера 192.168.1.44 отдавала
+// 1080p за 11 секунд, проверка обрывалась, и перебор заканчивался
+// шаблонным путём — то есть заведомо неверным.
+//
+// Меньше, чем в ручной проверке (там 15 с): подбор идёт внутри общего
+// сканирования подсети, и одна медленная камера не должна задерживать
+// остальные. Общий бюджет на камеру всё равно ограничен.
+const streamProbeTimeout = 12 * time.Second
+
+// mainStreamMinWidth — с какого разрешения поток считается основным.
+//
+// 1280 — нижняя граница основного потока у всех виденных камер: младший
+// поток не превышает 704x576, потому что таково ограничение второй
+// дорожки у большинства SoC. Значение ниже границы означает, что нам
+// отдали младший поток, даже если адрес назывался основным.
+const mainStreamMinWidth = 1280
+
+// rtspPathCandidates — пути потоков, встречающиеся у разных производителей.
+//
+// Перебирать приходится потому, что ошибка в пути не видна по коду ответа.
+// Проверено на 192.168.1.254 (SoC ssc378de, оригинальная прошивка): камера
+// отвечает на ЛЮБОЙ путь, отдавая при этом один и тот же младший поток
+// 640x480. Шаблонный `/stream=0` «работал», камера считалась исправной, а
+// основной поток 3840x2160 лежал на `/stream1` — без знака равенства.
+// Отличить подмену можно только по разрешению.
+//
+// Порядок: сначала типовые основные, затем остальные. Часть из них
+// повторяет вендорные шаблоны — это не дублирование: здесь они служат
+// второй попыткой для камеры, назвавшейся чужим именем.
+var rtspPathCandidates = []string{
+	"/stream=0",
+	"/stream1",
+	"/stream0",
+	// Vivotek: `/stream=0` у неё нет вовсе (404), а потоки лежат на
+	// liveN.sdp — проверено на 192.168.1.8: 1080p, 720p, 360p, 1080p.
+	"/live.sdp",
+	// Beward: `/stream=0` тоже нет, потоки лежат на av0_N — проверено
+	// на 192.168.1.11: 1080p и 704x576.
+	"/av0_0",
+	"/live/ch0",
+	"/onvif1",
+	"/Streaming/Channels/101",
+	"/cam/realmonitor?channel=1&subtype=0",
+	"/11",
+}
+
+// vendorFirstPaths — с каких путей начинать перебор для известной марки.
+//
+// Это не готовый ответ, а только порядок: путь всё равно проверяется
+// разрешением. Готовый ответ по марке ставить нельзя — он обошёл бы
+// проверку, а именно проверка и ловит подменённый поток. Для Vivotek это
+// видно прямо на камерах парка: у одной поток лежит на `/live.sdp`, у
+// другой на `/live1s1.sdp`, у третьей адрес задан профилем ONVIF. Общим
+// для всех трёх оказался /live.sdp, но это измерение, а не свойство
+// марки: на другой прошивке его может не быть.
+var vendorFirstPaths = map[string][]string{
+	"vivotek":  {"/live.sdp", "/live1s1.sdp"},
+	"beward":   {"/av0_0"},
+	"xiongmai": {"/stream1", "/stream0"},
+	"onvif":    {"/stream=0", "/stream1"},
+}
+
+// resolveStreamPaths подбирает адреса потоков, проверяя их разрешение.
+//
+// Для марок с единообразным и документированным путём (OpenIPC,
+// Hikvision, Dahua) адрес задан шаблоном и не проверяется: там он совпадает
+// на всех виденных моделях, а лишний запрос к камере стоит времени.
+//
+// Для остальных адрес проверяется разрешением. Как только попался поток
+// шириной не меньше 1280, перебор прекращается — это и есть основной, а
+// не младший. Камера, отдавшая основной поток по первому же пути,
+// обойдётся одним запросом, как и раньше.
+func (s *CameraScanner) resolveStreamPaths(ctx context.Context, ip, username, password, vendor string) (string, string) {
+	switch vendor {
+	case "hikvision":
+		return fmt.Sprintf("rtsp://%s:554/Streaming/Channels/101", ip),
+			fmt.Sprintf("rtsp://%s:554/Streaming/Channels/102", ip)
+	case "dahua":
+		return fmt.Sprintf("rtsp://%s:554/cam/realmonitor?channel=1&subtype=0", ip),
+			fmt.Sprintf("rtsp://%s:554/cam/realmonitor?channel=1&subtype=1", ip)
+	case "openipc":
+		return fmt.Sprintf("rtsp://%s:554/stream=0", ip),
+			fmt.Sprintf("rtsp://%s:554/stream=1", ip)
+	}
+
+	// Сначала пути, типовые для этой марки, потом общий список.
+	paths := make([]string, 0, len(rtspPathCandidates)+2)
+	paths = append(paths, vendorFirstPaths[vendor]...)
+	for _, p := range rtspPathCandidates {
+		if !slices.Contains(paths, p) {
+			paths = append(paths, p)
+		}
+	}
+
+	bestPath := ""
+	bestWidth := -1
+
+	for _, path := range paths {
+		if ctx.Err() != nil {
+			break
+		}
+		url := fmt.Sprintf("rtsp://%s:554%s", ip, path)
+		if username != "" {
+			url = withRTSPCredentials(url, username, password)
+		}
+
+		probeCtx, cancel := context.WithTimeout(ctx, streamProbeTimeout)
+		p, code, _ := probeRTSP(probeCtx, url)
+		cancel()
+
+		// Неудача по одному пути ничего не значит: у камеры может быть
+		// занято соединение или путь проверяется дольше обычного.
+		// Переходим к следующему.
+		if code != "" {
+			continue
+		}
+
+		if p.Width > bestWidth {
+			bestWidth = p.Width
+			bestPath = path
+		}
+
+		// Нашли поток основного размера — дальше искать нечего.
+		if p.Width >= mainStreamMinWidth {
+			break
+		}
+	}
+
+	if bestPath == "" {
+		log.Debug().Str("ip", ip).
+			Msg("ни один из известных путей потока не ответил — оставляю шаблонный")
+		return fmt.Sprintf("rtsp://%s:554/stream=0", ip),
+			fmt.Sprintf("rtsp://%s:554/stream=1", ip)
+	}
+
+	if bestPath != "/stream=0" {
+		log.Info().Str("ip", ip).Str("path", bestPath).Int("width", bestWidth).
+			Msg("путь основного потока подобран проверкой разрешения")
+	}
+	// Младший поток отдельно не проверяем: он нужен только для плитки в
+	// списке камер, и лишний запрос к камере ради него не стоит времени.
+	// Брать при этом шаблонный `/stream=1` нельзя: у камеры, отдавшей
+	// основной поток по `/stream1`, младший лежит по `/stream0`, и
+	// шаблон вернул бы тот же основной поток вместо младшего — то есть
+	// плитка тянула бы 4K.
+	subPath := subPathFromMain(bestPath)
+	return fmt.Sprintf("rtsp://%s:554%s", ip, bestPath),
+		fmt.Sprintf("rtsp://%s:554%s", ip, subPath)
+}
+
+// subPathFromMain выводит адрес младшего потока из найденного основного.
+//
+// Меняем номер потока на соседний, сохраняя форму адреса: `/stream1` даёт
+// `/stream0`, `/stream=1` — `/stream=0`, а `...&subtype=0` у Dahua —
+// `...&subtype=1`. Форму угадывать нельзя: у одного производителя
+// разделитель — знак равенства, у другого его нет, и подстановка чужого
+// разделителя даёт адрес, который камера молча заменит своим младшим
+// потоком.
+//
+// Номера у производителей считаются по-разному, и одним правилом это не
+// покрыть: у Vivotek нумерация начинается с единицы и номер стоит перед
+// расширением. Поэтому такие случаи перечислены явно, и только они.
+//
+// Если номер потока в адресе не последний или он больше единицы, форма
+// незнакома — возвращаем типовой путь: оператор поправит его в карточке,
+// а плитка покажет хотя бы что-то.
+func subPathFromMain(mainPath string) string {
+	// Vivotek: `live1s1.sdp` — 1080p, `live1s2.sdp` — 640x360 (проверено
+	// на 192.168.1.44). Номер начинается с единицы, поэтому смена 0↔1
+	// здесь дала бы несуществующий `live1s0.sdp`.
+	if strings.HasSuffix(mainPath, "s1.sdp") {
+		return strings.TrimSuffix(mainPath, "s1.sdp") + "s2.sdp"
+	}
+
+	tail := mainPath
+	// Отделяем необязательный хвост запроса: у Dahua номер стоит в
+	// последнем параметре.
+	if i := strings.LastIndexAny(mainPath, "&?"); i >= 0 {
+		tail = mainPath[i+1:]
+	}
+	eq := strings.Index(tail, "=")
+	prefix, value := tail, tail
+	if eq >= 0 {
+		prefix, value = tail[:eq+1], tail[eq+1:]
+	} else {
+		// Без знака равенства номер приклеен к имени: `/stream1`.
+		i := len(value)
+		for i > 0 && value[i-1] >= '0' && value[i-1] <= '9' {
+			i--
+		}
+		prefix, value = value[:i], value[i:]
+	}
+
+	switch value {
+	case "0":
+		return strings.Replace(mainPath, prefix+value, prefix+"1", 1)
+	case "1":
+		return strings.Replace(mainPath, prefix+value, prefix+"0", 1)
+	}
+	return "/stream=1"
+}
+
+// withRTSPCredentials подставляет логин и пароль в RTSP-адрес.
+//
+// Креды уходят в проверяемый адрес в открытом виде: ffprobe не умеет
+// брать их иначе. Это тот же адрес, что попадёт в MediaMTX, поэтому
+// проверка отражает реальную работу камеры.
+func withRTSPCredentials(rawURL, username, password string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	u.User = url.UserPassword(username, password)
+	return u.String()
+}
+
 // probeCamera пробует все доступные протоколы с перебором учётных данных.
 func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint string) *domain.DiscoveredCamera {
 	// --- Быстрая проверка: открыт ли RTSP-порт 554 ---
@@ -703,6 +933,11 @@ func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint 
 			cam := genericCamera(ip, vendor)
 			cam.VendorName = VendorName(vendor)
 			cam.HowFound = "mac"
+			// Креды здесь ещё не проверены, но если подсказка от оператора
+			// верна — подбор путей сразу даст настоящий основной поток.
+			// На неверных кредах все попытки вернут 401, и останутся
+			// шаблонные пути — тот же результат, что и раньше.
+			cam.MainStream, cam.SubStream = s.resolveStreamPaths(ctx, ip, userHint, passHint, vendor)
 			return cam
 		}
 
@@ -714,6 +949,7 @@ func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint 
 		if vendor != "generic" {
 			cam.HowFound = "http_headers"
 		}
+		cam.MainStream, cam.SubStream = s.resolveStreamPaths(ctx, ip, userHint, passHint, vendor)
 		return cam
 	}
 
@@ -860,20 +1096,15 @@ func (s *CameraScanner) probeONVIF(ctx context.Context, ip, username, password s
 				Password:   password,
 			}
 
-			// RTSP-адреса строим по вендору: ONVIF-запрос за медиапрофилями
-			// требует отдельного вызова GetProfiles, а типовые шаблоны
-			// работают надёжнее и не зависят от заполнения профилей.
-			switch vendor {
-			case "dahua":
-				cam.MainStream = fmt.Sprintf("rtsp://%s:554/cam/realmonitor?channel=1&subtype=0", ip)
-				cam.SubStream = fmt.Sprintf("rtsp://%s:554/cam/realmonitor?channel=1&subtype=1", ip)
-			case "hikvision":
-				cam.MainStream = fmt.Sprintf("rtsp://%s:554/Streaming/Channels/101", ip)
-				cam.SubStream = fmt.Sprintf("rtsp://%s:554/Streaming/Channels/102", ip)
-			default:
-				cam.MainStream = fmt.Sprintf("rtsp://%s:554/stream=0", ip)
-				cam.SubStream = fmt.Sprintf("rtsp://%s:554/stream=1", ip)
-			}
+			// Пути потоков подбираем с проверкой разрешения.
+			//
+			// Раньше здесь стояли типовые шаблоны по вендору, и для
+			// незнакомой камеры это давало `/stream=0`. Оказалось, что
+			// часть прошивок отвечает на любой путь, отдавая младший
+			// поток: адрес «работает», а камера показывает 640x480
+			// вместо 4K. Проверка разрешения отличает настоящий
+			// основной поток от подменённого (192.168.1.254).
+			cam.MainStream, cam.SubStream = s.resolveStreamPaths(ctx, ip, username, password, vendor)
 
 			return cam
 		}

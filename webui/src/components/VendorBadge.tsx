@@ -61,6 +61,11 @@ function vendorInfo(vendor: CameraVendor | undefined, t: (key: string, opts?: an
     uniview: 'Uniview',
     reolink: 'Reolink',
     xiongmai: 'Xiongmai',
+    // «ONVIF» — не название марки, а честный ответ: камера отвечает по
+    // общему протоколу, но имени производителя не назвала. Показывать
+    // здесь «вендор?» нельзя: это скрывает от оператора то, что он
+    // знает, — что камера как минимум ONVIF-совместимая.
+    onvif: 'ONVIF',
   }
 
   if (vendor === 'openipc') {

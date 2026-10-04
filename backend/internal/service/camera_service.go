@@ -1066,14 +1066,14 @@ func (s *CameraService) Delete(ctx context.Context, id uuid.UUID) error {
 // показывается и при редактировании камеры, и в сканере сети, а язык
 // интерфейса у них один и тот же пользователь может менять.
 const (
-	ProbeCodeURLEmpty     = "url_empty"     // адрес потока не заполнен
-	ProbeCodeTimeout      = "timeout"       // камера не ответила за 15 с
-	ProbeCodeAuthFailed   = "auth_failed"   // логин или пароль не подошли
+	ProbeCodeURLEmpty     = "url_empty"      // адрес потока не заполнен
+	ProbeCodeTimeout      = "timeout"        // камера не ответила за 15 с
+	ProbeCodeAuthFailed   = "auth_failed"    // логин или пароль не подошли
 	ProbeCodePathNotFound = "path_not_found" // путь потока отсутствует
-	ProbeCodeUnreachable  = "unreachable"   // порт закрыт
-	ProbeCodeBadResponse  = "bad_response"  // ответ камеры не разобран
-	ProbeCodeNoVideo      = "no_video"      // видео по адресу нет
-	ProbeCodeFailed       = "failed"        // прочая ошибка, текст в Detail
+	ProbeCodeUnreachable  = "unreachable"    // порт закрыт
+	ProbeCodeBadResponse  = "bad_response"   // ответ камеры не разобран
+	ProbeCodeNoVideo      = "no_video"       // видео по адресу нет
+	ProbeCodeFailed       = "failed"         // прочая ошибка, текст в Detail
 	ProbeCodeOK           = "ok"
 )
 
@@ -1107,6 +1107,44 @@ func (s *CameraService) ProbeStream(rtspURL string) StreamProbeResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	p, code, detail := probeRTSP(ctx, rtspURL)
+	if code != "" {
+		return StreamProbeResult{Code: code, Detail: detail}
+	}
+
+	// Названия кодеков и разрешение интерфейс подставляет сам — здесь они
+	// технические данные, а не часть фразы.
+	return StreamProbeResult{
+		OK:         true,
+		Code:       ProbeCodeOK,
+		Codec:      strings.ToUpper(p.VideoCodec),
+		Width:      p.Width,
+		Height:     p.Height,
+		FPS:        p.FPS,
+		HasAudio:   p.AudioCodec != "",
+		AudioCodec: strings.ToUpper(p.AudioCodec),
+	}
+}
+
+// rtspProbe — то, что удалось узнать о потоке одним запросом ffprobe.
+type rtspProbe struct {
+	VideoCodec string
+	Width      int
+	Height     int
+	FPS        string
+	AudioCodec string
+}
+
+// probeRTSP запускает ffprobe и разбирает ответ.
+//
+// Отдельная функция, потому что проверка потока нужна в двух местах:
+// оператор проверяет введённый адрес вручную, а сканер подбирает путь
+// потока на незнакомой камере. Оба обязаны видеть одно и то же — иначе
+// сканер счёл бы рабочим то, на что кнопка «Проверить» показала бы ошибку.
+//
+// При неудаче возвращает код причины и подробность — те же, что уходят в
+// интерфейс. Пустой код означает успех.
+func probeRTSP(ctx context.Context, rtspURL string) (rtspProbe, string, string) {
 	// -show_entries с обоими типами дорожек: за один запрос получаем и факт
 	// наличия видео, и параметры звука — не открывая соединение дважды.
 	cmd := exec.CommandContext(ctx, "ffprobe",
@@ -1124,15 +1162,15 @@ func (s *CameraService) ProbeStream(rtspURL string) StreamProbeResult {
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if ctx.Err() == context.DeadlineExceeded {
-			return StreamProbeResult{Code: ProbeCodeTimeout}
+			return rtspProbe{}, ProbeCodeTimeout, ""
 		}
 		switch {
 		case strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized"):
-			return StreamProbeResult{Code: ProbeCodeAuthFailed}
+			return rtspProbe{}, ProbeCodeAuthFailed, ""
 		case strings.Contains(msg, "404") || strings.Contains(msg, "Not Found"):
-			return StreamProbeResult{Code: ProbeCodePathNotFound}
+			return rtspProbe{}, ProbeCodePathNotFound, ""
 		case strings.Contains(msg, "Connection refused"):
-			return StreamProbeResult{Code: ProbeCodeUnreachable}
+			return rtspProbe{}, ProbeCodeUnreachable, ""
 		}
 		if msg == "" {
 			msg = err.Error()
@@ -1141,7 +1179,7 @@ func (s *CameraService) ProbeStream(rtspURL string) StreamProbeResult {
 		if len(msg) > 200 {
 			msg = msg[:200] + "..."
 		}
-		return StreamProbeResult{Code: ProbeCodeFailed, Detail: msg}
+		return rtspProbe{}, ProbeCodeFailed, msg
 	}
 
 	var parsed struct {
@@ -1154,38 +1192,28 @@ func (s *CameraService) ProbeStream(rtspURL string) StreamProbeResult {
 		} `json:"streams"`
 	}
 	if err := json.Unmarshal(out, &parsed); err != nil {
-		return StreamProbeResult{Code: ProbeCodeBadResponse}
+		return rtspProbe{}, ProbeCodeBadResponse, ""
 	}
 
-	res := StreamProbeResult{}
+	p := rtspProbe{}
 	for _, st := range parsed.Streams {
 		switch st.CodecType {
 		case "video":
-			if res.Codec == "" { // берём первую видеодорожку
-				res.Codec = st.CodecName
-				res.Width = st.Width
-				res.Height = st.Height
-				res.FPS = st.AvgFrameRate
+			if p.VideoCodec == "" { // берём первую видеодорожку
+				p.VideoCodec = st.CodecName
+				p.Width = st.Width
+				p.Height = st.Height
+				p.FPS = st.AvgFrameRate
 			}
 		case "audio":
-			res.HasAudio = true
-			if res.AudioCodec == "" {
-				res.AudioCodec = st.CodecName
+			if p.AudioCodec == "" {
+				p.AudioCodec = st.CodecName
 			}
 		}
 	}
 
-	if res.Codec == "" {
-		return StreamProbeResult{Code: ProbeCodeNoVideo}
+	if p.VideoCodec == "" {
+		return rtspProbe{}, ProbeCodeNoVideo, ""
 	}
-
-	// Названия кодеков и разрешение интерфейс подставляет сам — здесь они
-	// технические данные, а не часть фразы.
-	res.OK = true
-	res.Code = ProbeCodeOK
-	res.Codec = strings.ToUpper(res.Codec)
-	if res.AudioCodec != "" {
-		res.AudioCodec = strings.ToUpper(res.AudioCodec)
-	}
-	return res
+	return p, "", ""
 }
