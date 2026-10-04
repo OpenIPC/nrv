@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { HardDrive, Save, Loader2, Camera as CameraIcon, Server, AlertCircle } from 'lucide-react'
 import { settingsAPI, type ServerSettings, type StorageConfig } from '../api/client'
 import { useToast } from '../context/ToastContext'
@@ -17,6 +18,7 @@ function StorageSection({
   value: StorageConfig
   onChange: (v: StorageConfig) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div className="card" style={{ marginBottom: 16 }}>
       <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, fontSize: 15 }}>
@@ -26,21 +28,21 @@ function StorageSection({
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 14px' }}>{hint}</p>
 
       <label style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-        Хранилище
+        {t('settingsPage.storage')}
         <select
           className="input"
           value={value.backend}
           onChange={(e) => onChange({ ...value, backend: e.target.value as 'minio' | 'local' })}
           style={{ width: '100%', marginTop: 4 }}
         >
-          <option value="minio">MinIO / S3 (объектное хранилище)</option>
-          <option value="local">Локальный диск сервера</option>
+          <option value="minio">{t('settingsPage.backendMinio')}</option>
+          <option value="local">{t('settingsPage.backendLocal')}</option>
         </select>
       </label>
 
       {value.backend === 'local' ? (
         <label style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-          Каталог на диске
+          {t('settingsPage.localPath')}
           <input
             className="input"
             value={value.local_path}
@@ -49,21 +51,22 @@ function StorageSection({
             style={{ width: '100%', marginTop: 4 }}
           />
           <span style={{ display: 'block', color: 'var(--text-secondary)', marginTop: 4 }}>
-            Путь внутри контейнера бэкенда. Убедитесь, что каталог смонтирован как volume.
+            {t('settingsPage.localPathHint')}
           </span>
         </label>
       ) : (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: 10, borderRadius: 6, background: 'rgba(120,140,255,0.06)', fontSize: 12, marginBottom: 12 }}>
           <Server size={14} style={{ marginTop: 2, flexShrink: 0 }} />
+          {/* Имя бакета — часть окружения бэкенда, а не подпись, поэтому
+              вынесено из фразы: в переводе оно должно остаться латиницей. */}
           <span>
-            Файлы сохраняются в бакет MinIO из настроек окружения бэкенда
-            (<code>MINIO_BUCKET</code>). Ссылки выдаются временными (presigned).
+            {t('settingsPage.minioHintPre')}<code>MINIO_BUCKET</code>{t('settingsPage.minioHintPost')}
           </span>
         </div>
       )}
 
       <label style={{ fontSize: 12, display: 'block' }}>
-        Глубина хранения, дней
+        {t('settingsPage.retentionDays')}
         <input
           type="number"
           min={0}
@@ -74,7 +77,7 @@ function StorageSection({
           style={{ width: 120, marginTop: 4 }}
         />
         <span style={{ display: 'block', color: 'var(--text-secondary)', marginTop: 4 }}>
-          Файлы старше указанного срока удаляются автоматически. 0 — хранить бессрочно.
+          {t('settingsPage.retentionHint')}
         </span>
       </label>
     </div>
@@ -83,6 +86,7 @@ function StorageSection({
 
 export default function SettingsPage() {
   const { success, error } = useToast()
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [settings, setSettings] = useState<ServerSettings | null>(null)
@@ -97,7 +101,7 @@ export default function SettingsPage() {
         setDirty(false)
       })
       .catch((e) => {
-        if (!cancelled) error(e.response?.data?.error || 'Не удалось загрузить настройки сервера')
+        if (!cancelled) error(e.response?.data?.error || t('settingsPage.loadFailed'))
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -115,9 +119,9 @@ export default function SettingsPage() {
       const res = await settingsAPI.update(settings)
       setSettings(res.data)
       setDirty(false)
-      success('Настройки сервера сохранены')
+      success(t('settingsPage.savedToast'))
     } catch (e: any) {
-      error(e.response?.data?.error || 'Не удалось сохранить настройки')
+      error(e.response?.data?.error || t('settingsPage.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -127,7 +131,7 @@ export default function SettingsPage() {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
         <Loader2 size={16} className="spin" />
-        Загрузка настроек...
+        {t('settingsPage.loading')}
       </div>
     )
   }
@@ -136,29 +140,29 @@ export default function SettingsPage() {
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 8 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 24 }}>Настройки сервера</h1>
+          <h1 style={{ margin: 0, fontSize: 24 }}>{t('settingsPage.title')}</h1>
           <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)', fontSize: 13 }}>
-            Где хранить записи и снимки, сколько их держать
+            {t('settingsPage.subtitle')}
           </p>
         </div>
         <button className="btn btn-primary" onClick={save} disabled={saving || !dirty}>
           {saving ? <Loader2 size={16} className="spin" /> : <Save size={16} />}
-          {dirty ? 'Сохранить' : 'Сохранено'}
+          {dirty ? t('settingsPage.save') : t('settingsPage.saved')}
         </button>
       </div>
 
       <StorageSection
-        title="Записи видео"
+        title={t('settingsPage.recordingsTitle')}
         icon={<HardDrive size={18} style={{ color: 'var(--accent)' }} />}
-        hint="Куда складывать видеоархив, записанный по детекции или постоянно"
+        hint={t('settingsPage.recordingsHint')}
         value={settings.storage}
         onChange={(v) => patch('storage', v)}
       />
 
       <StorageSection
-        title="Снимки событий"
+        title={t('settingsPage.snapshotsTitle')}
         icon={<CameraIcon size={18} style={{ color: 'var(--accent)' }} />}
-        hint="Кадры, сохраняемые в момент срабатывания детекции"
+        hint={t('settingsPage.snapshotsHint')}
         value={settings.snapshots}
         onChange={(v) => patch('snapshots', v)}
       />
@@ -166,8 +170,7 @@ export default function SettingsPage() {
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 6, background: 'rgba(255,180,80,0.08)', fontSize: 12 }}>
         <AlertCircle size={14} style={{ marginTop: 2, flexShrink: 0, color: 'var(--warning)' }} />
         <span>
-          Выбор хранилища влияет на то, куда будут писаться файлы. Автоматическая
-          очистка по глубине хранения подключается вместе с воркером записи.
+          {t('settingsPage.note')}
         </span>
       </div>
     </div>
