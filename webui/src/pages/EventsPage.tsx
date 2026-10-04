@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { eventsAPI, DetectionEvent, TRIGGER_LABELS, TriggerType } from '../api/client'
+import { useTranslation } from 'react-i18next'
+import { eventsAPI, DetectionEvent, TriggerType } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { AlertTriangle, Car, User, Dog, Package, Eye, X, Download } from 'lucide-react'
 
@@ -19,6 +20,38 @@ const classColors: Record<string, string> = {
   package: '#af52de',
 }
 
+/// Классы объектов в фильтре: код и ключ перевода.
+///
+/// Подписи лежат в переводах, а не рядом с кодом: класс — часть протокола
+/// распознавания, а текст должен быть на языке оператора.
+const OBJECT_OPTIONS: { value: string; key: string }[] = [
+  { value: 'person', key: 'eventsPage.objPerson' },
+  { value: 'car', key: 'eventsPage.objCar' },
+  { value: 'plate', key: 'eventsPage.objPlate' },
+  { value: 'face', key: 'eventsPage.objFace' },
+  { value: 'truck', key: 'eventsPage.objTruck' },
+  { value: 'bus', key: 'eventsPage.objBus' },
+  { value: 'motorcycle', key: 'eventsPage.objMotorcycle' },
+  { value: 'dog', key: 'eventsPage.objDog' },
+  { value: 'cat', key: 'eventsPage.objCat' },
+]
+
+/** Подписи к причинам записи (триггерам). Код приходит с сервера. */
+const TRIGGER_KEYS: Record<string, string> = {
+  manual: 'eventsPage.triggerManual',
+  always: 'eventsPage.triggerAlways',
+  object: 'eventsPage.triggerObject',
+  line: 'eventsPage.triggerLine',
+  face: 'eventsPage.triggerFace',
+  plate: 'eventsPage.triggerPlate',
+  acs: 'eventsPage.triggerAcs',
+}
+
+function triggerText(t: (key: string) => string, code: string): string {
+  const key = TRIGGER_KEYS[code]
+  return key ? t(key) : code
+}
+
 /** Есть ли у события сохранённый снимок. */
 function hasSnapshot(ev: DetectionEvent): boolean {
   return Boolean(ev.snapshot_path)
@@ -31,6 +64,7 @@ function snapshotSrc(eventId: string): string {
 }
 
 export default function EventsPage() {
+  const { t } = useTranslation()
   const [page, setPage] = useState(1)
   // Фильтр «только со снимками»: основная задача — просмотр кадров детекции,
   // события без картинки в этом режиме только мешают.
@@ -58,11 +92,11 @@ export default function EventsPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>События детекции</h1>
-          <p>{total} событий • AI-распознавание объектов</p>
+          <h1>{t('eventsPage.title')}</h1>
+          <p>{t('eventsPage.subtitle', { count: total })}</p>
         </div>
         <button className="btn btn-outline btn-sm" onClick={refetch}>
-          Обновить
+          {t('eventsPage.refresh')}
         </button>
       </div>
 
@@ -75,31 +109,25 @@ export default function EventsPage() {
             checked={onlySnapshots}
             onChange={(e) => setOnlySnapshots(e.target.checked)}
           />
-          Только со снимками
+          {t('eventsPage.onlySnapshots')}
         </label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Объект:</label>
+          <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('eventsPage.objectLabel')}</label>
           <select
             className="input"
             style={{ width: 160 }}
             value={objectClass}
             onChange={(e) => { setObjectClass(e.target.value); setPage(1) }}
           >
-            <option value="">Все</option>
-            <option value="person">Люди</option>
-            <option value="car">Автомобили</option>
-            <option value="plate">Номера</option>
-            <option value="face">Лица</option>
-            <option value="truck">Грузовики</option>
-            <option value="bus">Автобусы</option>
-            <option value="motorcycle">Мотоциклы</option>
-            <option value="dog">Собаки</option>
-            <option value="cat">Кошки</option>
+            <option value="">{t('eventsPage.all')}</option>
+            {OBJECT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{t(o.key)}</option>
+            ))}
           </select>
         </div>
         {onlySnapshots && (
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            найдено {events.length} из {allEvents.length} на странице
+            {t('eventsPage.foundOf', { found: events.length, total: allEvents.length })}
           </span>
         )}
       </div>
@@ -107,7 +135,7 @@ export default function EventsPage() {
       {events.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
           <AlertTriangle size={48} style={{ marginBottom: 16, opacity: 0.3 }} />
-          <p>Пока нет событий детекции</p>
+          <p>{t('eventsPage.empty')}</p>
         </div>
       ) : (
         <div className="card" style={{ padding: 0 }}>
@@ -115,11 +143,11 @@ export default function EventsPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Время</th>
-                  <th>Объект</th>
-                  <th>Точность</th>
-                  <th>Камера</th>
-                  <th>Снимок</th>
+                  <th>{t('eventsPage.thTime')}</th>
+                  <th>{t('eventsPage.thObject')}</th>
+                  <th>{t('eventsPage.thConfidence')}</th>
+                  <th>{t('eventsPage.thCamera')}</th>
+                  <th>{t('eventsPage.thSnapshot')}</th>
                 </tr>
               </thead>              <tbody>
                 {events.map((ev) => {
@@ -159,7 +187,7 @@ export default function EventsPage() {
                         {hasSnapshot(ev) ? (
                           <img
                             src={snapshotSrc(ev.id)}
-                            alt="снимок события"
+                            alt={t('eventsPage.snapshotAlt')}
                             loading="lazy"
                             onClick={() => setPreview(ev)}
                             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
@@ -192,13 +220,13 @@ export default function EventsPage() {
       {totalPages > 1 && (
         <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 20 }}>
           <button className="btn btn-outline btn-sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-            ← Назад
+            {t('eventsPage.back')}
           </button>
           <span style={{ padding: '6px 12px', fontSize: 14, color: 'var(--text-secondary)' }}>
             {page} / {totalPages}
           </span>
           <button className="btn btn-outline btn-sm" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
-            Вперёд →
+            {t('eventsPage.forward')}
           </button>
         </div>
       )}
@@ -211,6 +239,7 @@ export default function EventsPage() {
 // Рядом выводим, что именно распознано: для номеров — текст, для лиц —
 // имя из справочника. Это и есть польза снимка — понять, что попало в кадр.
 function SnapshotModal({ event, onClose }: { event: DetectionEvent; onClose: () => void }) {
+  const { t } = useTranslation()
   const src = snapshotSrc(event.id)
   // Текст номера детектор кладёт в метаданные события
   const plateText = (event.metadata as any)?.plate_text as string | undefined
@@ -235,7 +264,7 @@ function SnapshotModal({ event, onClose }: { event: DetectionEvent; onClose: () 
               {event.camera_name || event.camera_id.slice(0, 8)}
             </h3>
             <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--text-secondary)' }}>
-              {new Date(event.timestamp).toLocaleString('ru')}
+              {new Date(event.timestamp).toLocaleString()}
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -246,7 +275,7 @@ function SnapshotModal({ event, onClose }: { event: DetectionEvent; onClose: () 
               className="btn btn-outline btn-sm"
               style={{ textDecoration: 'none' }}
             >
-              <Download size={14} /> Скачать
+              <Download size={14} /> {t('eventsPage.download')}
             </a>
             <button className="btn btn-outline btn-sm" onClick={onClose}>
               <X size={14} />
@@ -256,35 +285,35 @@ function SnapshotModal({ event, onClose }: { event: DetectionEvent; onClose: () 
 
         <img
           src={src}
-          alt="снимок события"
+          alt={t('eventsPage.snapshotAlt')}
           style={{ width: '100%', borderRadius: 6, background: '#000', maxHeight: '70vh', objectFit: 'contain' }}
         />
 
         {/* Расшифровка результата — что именно обнаружено на кадре */}
         <div style={{ display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap', fontSize: 13 }}>
           <span>
-            <span style={{ color: 'var(--text-secondary)' }}>Объект: </span>
+            <span style={{ color: 'var(--text-secondary)' }}>{t('eventsPage.inPreview')}</span>
             {event.object_class}
           </span>
           <span>
-            <span style={{ color: 'var(--text-secondary)' }}>Точность: </span>
+            <span style={{ color: 'var(--text-secondary)' }}>{t('eventsPage.confidence')}</span>
             {(event.confidence * 100).toFixed(0)}%
           </span>
           {plateText && (
             <span>
-              <span style={{ color: 'var(--text-secondary)' }}>Номер: </span>
+              <span style={{ color: 'var(--text-secondary)' }}>{t('eventsPage.plateNumber')}</span>
               <strong style={{ fontFamily: 'monospace' }}>{plateText}</strong>
             </span>
           )}
           {event.match_type && event.match_type !== 'unknown' && (
             <span style={{ color: event.match_type === 'blocked' ? 'var(--danger)' : 'var(--success)' }}>
-              {event.match_type === 'blocked' ? 'Заблокирован' : 'Из справочника'}
+              {event.match_type === 'blocked' ? t('eventsPage.blocked') : t('eventsPage.fromDirectory')}
               {event.matched_name ? `: ${event.matched_name}` : ''}
             </span>
           )}
           {trigger && (
             <span style={{ color: 'var(--text-secondary)' }}>
-              Триггер: {TRIGGER_LABELS[trigger] || trigger}
+              {t('eventsPage.trigger', { name: triggerText(t, trigger) })}
             </span>
           )}
         </div>

@@ -2317,18 +2317,9 @@ export interface RecognitionSettings {
   plates: PlateRecognitionSettings
 }
 
-// Подписи и цвета для триггеров записи — используются в архиве.
-export const TRIGGER_LABELS: Record<TriggerType, string> = {
-  manual: 'Вручную',
-  always: 'Непрерывно',
-  object: 'Объект',
-  line: 'Пересечение линии',
-  face: 'Лицо',
-  plate: 'Номер авто',
-  // Запись создана по событию доступа: сработал считыватель, кнопка
-  // выхода или датчик двери. Расшифровка — в trigger_detail.
-  acs: 'СКУД (доступ)',
-}
+// Подписи к причинам записи (триггерам) лежат в переводах
+// (eventsPage.trigger*): код приходит с сервера, текст ставит интерфейс.
+// Русская строка рядом с кодом оказалась бы русской на всех языках сразу.
 
 export const facesAPI = {
   list: (all = false) => api.get<{ faces: KnownFace[]; total: number }>('/faces', { params: { all } }),
