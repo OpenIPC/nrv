@@ -280,16 +280,16 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       <div style={{ display: 'grid', gap: 6, marginBottom: 18 }}>
         {/* Переменная цикла переименована в dt: имя t занято функцией перевода */}
         {DETECT_TYPES.map((dt) => (
-          <label key={dt.value} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', padding: '6px 8px', borderRadius: 6, background: form.detect_types.includes(dt.value) ? 'rgba(120,140,255,0.08)' : 'transparent' }}>
+          <label key={dt} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', padding: '6px 8px', borderRadius: 6, background: form.detect_types.includes(dt) ? 'rgba(120,140,255,0.08)' : 'transparent' }}>
             <input
               type="checkbox"
-              checked={form.detect_types.includes(dt.value)}
-              onChange={() => patch('detect_types', toggleArrayItem(form.detect_types, dt.value))}
+              checked={form.detect_types.includes(dt)}
+              onChange={() => patch('detect_types', toggleArrayItem(form.detect_types, dt))}
               style={{ marginTop: 3, accentColor: 'var(--accent)' }}
             />
             <span>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>{t(DETECT_TYPE_KEYS[dt.value]?.label ?? dt.label)}</span>
-              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)' }}>{t(DETECT_TYPE_KEYS[dt.value]?.hint ?? dt.hint)}</span>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>{t(DETECT_TYPE_KEYS[dt].label)}</span>
+              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)' }}>{t(DETECT_TYPE_KEYS[dt].hint)}</span>
             </span>
           </label>
         ))}
@@ -301,16 +301,16 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
           <h4 style={{ fontSize: 14, margin: '0 0 8px' }}>{t('detectionPanel.objectClasses')}</h4>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
             {OBJECT_CLASSES.map((c) => {
-              const active = form.object_classes.includes(c.value)
+              const active = form.object_classes.includes(c)
               return (
                 <button
-                  key={c.value}
-                  onClick={() => patch('object_classes', toggleArrayItem(form.object_classes, c.value))}
+                  key={c}
+                  onClick={() => patch('object_classes', toggleArrayItem(form.object_classes, c))}
                   className={`btn btn-sm ${active ? 'btn-primary' : 'btn-outline'}`}
                   style={{ fontSize: 12, padding: '4px 10px' }}
                 >
                   {active && <CheckCircle2 size={12} />}
-                  {t(CLASS_KEYS[c.value] ?? c.label)}
+                  {t(CLASS_KEYS[c])}
                 </button>
               )
             })}
@@ -469,8 +469,8 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
               }}
               style={{ fontSize: 12, padding: '3px 8px', width: 'auto' }}
             >
-              {Object.entries(PLATE_PATTERNS).map(([key, v]) => (
-                <option key={key} value={key}>{t(PATTERN_KEYS[key] ?? v.label)}</option>
+              {Object.entries(PLATE_PATTERNS).map(([key]) => (
+                <option key={key} value={key}>{t(PATTERN_KEYS[key])}</option>
               ))}
               <option value="custom">{t('detectionPanel.patternCustom')}</option>
             </select>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { acsAPI, ACSDoor, ACSGroup, ACSHolder, ACSHolderInput,
-  KEY_TYPE_TITLES, KeyType } from '../api/client'
+  KEY_TYPES, KeyType } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import {
@@ -586,7 +586,7 @@ function CardReaderInput({ onCard, keyType, onKeyTypeChange }: {
           onChange={(e) => onKeyTypeChange(e.target.value as KeyType)}
         >
           {/* Переменная переименована в kt: имя t занято функцией перевода. */}
-          {(Object.keys(KEY_TYPE_TITLES) as KeyType[]).map((kt) => (
+          {KEY_TYPES.map((kt) => (
             <option key={kt} value={kt}>{t(KEY_TYPE_TITLE_KEYS[kt])}</option>
           ))}
         </select>

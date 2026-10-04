@@ -766,26 +766,12 @@ export interface ACSEvent {
 // программой, чтобы оператор видел одни и те же слова.
 export type KeyType = 'simple' | 'master' | 'blocking'
 
-// KEY_TYPE_TITLES — названия типов для интерфейса.
+// KEY_TYPES — список типов ключей в порядке показа.
 //
-// Отдельная карта, а не условие в каждом месте: список типов нужен и в
-// выпадающем списке карточки, и в подписи к уже сохранённому ключу.
-export const KEY_TYPE_TITLES: Record<KeyType, string> = {
-  simple: 'простой',
-  master: 'мастер',
-  blocking: 'блокирующий',
-}
-
-// KEY_TYPE_HINTS — пояснения к типам для оператора.
-//
-// Без пояснений разница между «мастер» и «блокирующий» неочевидна, и
-// ключ легко завести не тем типом: последствия проявятся только при
-// попытке записать его на контроллер.
-export const KEY_TYPE_HINTS: Record<KeyType, string> = {
-  simple: 'обычный пропуск: открывает дверь по правам владельца',
-  master: 'служебный: программирует контроллер, дверь не открывает',
-  blocking: 'переключатель режима: в обычном состоянии работает как пропуск',
-}
+// Подписи и пояснения к типам лежат в переводах
+// (cardsModal.keyType*): здесь только коды. Иначе русский текст
+// оказался бы на всех языках интерфейса сразу.
+export const KEY_TYPES: KeyType[] = ['simple', 'master', 'blocking']
 
 // CardCapture — ожидание карты на считывателе контроллера.
 //
@@ -821,13 +807,10 @@ export interface CapturedCardInfo {
 // считыватель снаружи, замок на двери, и на плане это две точки.
 export type ACSPlanPointKind = 'camera' | 'door' | 'controller' | 'reader'
 
-// PLAN_POINT_TITLES — названия видов устройств для интерфейса.
-export const PLAN_POINT_TITLES: Record<ACSPlanPointKind, string> = {
-  camera: 'камера',
-  door: 'дверь',
-  controller: 'контроллер',
-  reader: 'считыватель',
-}
+// PLAN_POINT_KINDS — виды устройств на плане в порядке показа.
+//
+// Подписи — в переводах (plansPage.kind*).
+export const PLAN_POINT_KINDS: ACSPlanPointKind[] = ['camera', 'door', 'controller', 'reader']
 
 // ACSPlanPoint — устройство, привязанное к месту на плане.
 export interface ACSPlanPoint {
@@ -905,13 +888,15 @@ export type PortAction =
   | 'extend_off'
 
 /** Названия действий для интерфейса. */
-export const PORT_ACTION_TITLES: Record<PortAction, string> = {
-  power_on: 'Включить питание',
-  power_off: 'Выключить питание',
-  power_cycle: 'Перезагрузить питанием',
-  extend_on: 'Режим удлинения',
-  extend_off: 'Обычный режим',
-}
+// PORT_ACTION_TITLES — убрано: подписи к действиям с портом лежат в
+// переводах (switchesPage.*). Здесь остаются только сами действия.
+export const PORT_ACTIONS: PortAction[] = [
+  'power_on',
+  'power_off',
+  'power_cycle',
+  'extend_on',
+  'extend_off',
+]
 
 export interface SwitchPort {
   id: string
@@ -2084,25 +2069,15 @@ export interface ServerSettings {
 
 // Классы объектов COCO, которые умеет распознавать YOLOv8.
 // Значение — класс модели, подпись — то, что видит пользователь.
-export const OBJECT_CLASSES: { value: string; label: string }[] = [
-  { value: 'person', label: 'Люди' },
-  { value: 'bicycle', label: 'Велосипеды' },
-  { value: 'car', label: 'Легковые авто' },
-  { value: 'motorcycle', label: 'Мотоциклы' },
-  { value: 'bus', label: 'Автобусы' },
-  { value: 'truck', label: 'Грузовики' },
-  { value: 'dog', label: 'Собаки' },
-  { value: 'cat', label: 'Кошки' },
-  { value: 'backpack', label: 'Рюкзаки' },
-  { value: 'suitcase', label: 'Чемоданы' },
+// Подписи — в переводах (detectionPanel.class*): здесь только коды
+// классов COCO, чтобы русский текст не оказался на всех языках сразу.
+export const OBJECT_CLASSES: string[] = [
+  'person', 'bicycle', 'car', 'motorcycle', 'bus',
+  'truck', 'dog', 'cat', 'backpack', 'suitcase',
 ]
 
-export const DETECT_TYPES: { value: DetectType; label: string; hint: string }[] = [
-  { value: 'object', label: 'Объекты', hint: 'Люди, машины и другие объекты' },
-  { value: 'line', label: 'Пересечение линии', hint: 'Подсчёт пересечений через линию' },
-  { value: 'face', label: 'Лица', hint: 'Распознавание лиц (требует модель)' },
-  { value: 'plate', label: 'Номера', hint: 'Распознавание автономеров (требует модель)' },
-]
+// Подписи и пояснения — в переводах (detectionPanel.type*).
+export const DETECT_TYPES: DetectType[] = ['object', 'line', 'face', 'plate']
 
 /**
  * Шаблоны формата автомобильных номеров.
@@ -2112,24 +2087,22 @@ export const DETECT_TYPES: { value: DetectType; label: string; hint: string }[] 
  * Шаблон нужен, чтобы OCR не принимал за номер надписи из кадра —
  * логотип камеры, название улицы и подобное.
  */
-export const PLATE_PATTERNS: Record<string, { label: string; pattern: string; example: string }> = {
+// Подписи к форматам — в переводах (detectionPanel.pattern*): здесь
+// только шаблон и пример, чтобы русский текст не оказался на всех языках.
+export const PLATE_PATTERNS: Record<string, { pattern: string; example: string }> = {
   ru: {
-    label: 'Россия (А123ВС77)',
     pattern: '^[ABEKMHOPCTYX]\\d{3}[ABEKMHOPCTYX]{2}\\d{2,3}$',
     example: 'А123ВС77',
   },
   by: {
-    label: 'Беларусь (1234АВ5)',
     pattern: '^\\d{4}[ABEKMHOPCTYX]{2}\\d$',
     example: '1234АВ5',
   },
   kz: {
-    label: 'Казахстан (123АВ77)',
     pattern: '^\\d{3}[ABEKMHOPCTYX]{2}\\d{2,3}$',
     example: '123АВ77',
   },
   any: {
-    label: 'Любой формат (только длина)',
     pattern: '',
     example: '12345678',
   },
