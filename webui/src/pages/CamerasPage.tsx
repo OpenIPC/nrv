@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { camerasAPI, Camera, CameraHealth } from '../api/client'
+import { camerasAPI, Camera, CameraHealth, HealthIssue } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import VendorBadge from '../components/VendorBadge'
@@ -8,11 +9,57 @@ import { Plus, Trash2, RefreshCw, Eye, Radio, Wifi, WifiOff, Activity, AlertTria
 
 // Цвет и подпись для уровня здоровья камеры. Один источник правды, чтобы
 // карточка и подсказка не расходились.
-const HEALTH_STYLE: Record<CameraHealth['level'], { color: string; label: string }> = {
-  ok:       { color: 'var(--success, #22c55e)', label: 'норма' },
-  warning:  { color: 'var(--warning, #f59e0b)', label: 'внимание' },
-  critical: { color: 'var(--danger, #ef4444)',  label: 'проблема' },
-  unknown:  { color: 'var(--text-secondary)',   label: 'нет данных' },
+const HEALTH_STYLE: Record<CameraHealth['level'], { color: string; key: string }> = {
+  ok:       { color: 'var(--success, #22c55e)', key: 'camerasPage.healthOk' },
+  warning:  { color: 'var(--warning, #f59e0b)', key: 'camerasPage.healthWarning' },
+  critical: { color: 'var(--danger, #ef4444)',  key: 'camerasPage.healthCritical' },
+  unknown:  { color: 'var(--text-secondary)',   key: 'camerasPage.healthUnknown' },
+}
+
+// Подписи к замечаниям о состоянии камеры. Коды приходят с сервера
+// (см. backend/internal/service/camera_health_service.go), подпись ставит
+// интерфейс — иначе замечание было бы русским на всех языках.
+const ISSUE_KEYS: Record<string, string> = {
+  metrics_unavailable: 'camerasPage.issueMetricsUnavailable',
+  no_stream: 'camerasPage.issueNoStream',
+  overload_critical: 'camerasPage.issueOverloadCritical',
+  overload_high: 'camerasPage.issueOverloadHigh',
+  mem_critical: 'camerasPage.issueMemCritical',
+  mem_low: 'camerasPage.issueMemLow',
+  sensor_fps: 'camerasPage.issueSensorFps',
+  encoder_gaps: 'camerasPage.issueEncoderGaps',
+}
+
+// Подписи к причинам, по которым мониторинг камеры недоступен.
+const ERROR_KEYS: Record<string, string> = {
+  streamer_not_responding: 'camerasPage.errStreamerNotResponding',
+  other_openipc_build: 'camerasPage.errOtherOpenIPCBuild',
+  openipc_no_majestic: 'camerasPage.errOpenipcNoMajestic',
+  not_majestic: 'camerasPage.errNotMajestic',
+}
+
+/**
+ * Текст замечания по коду.
+ *
+ * Незнакомый код показываем как есть: список замечаний может пополниться
+ * на сервере раньше, чем здесь появится подпись, и терять сведения о
+ * неисправности из-за этого нельзя.
+ */
+function issueText(t: (key: string, params?: Record<string, string>) => string, issue: HealthIssue): string {
+  const key = ISSUE_KEYS[issue.code]
+  return key ? t(key, issue.params) : issue.code
+}
+
+/**
+ * Понятная причина, по которой мониторинг камеры недоступен.
+ *
+ * Сервер может её и не назвать — тогда возвращаем пустую строку, и
+ * остаётся только техническая подробность.
+ */
+function healthErrorText(t: (key: string) => string, code?: string): string {
+  if (!code) return ''
+  const key = ERROR_KEYS[code]
+  return key ? t(key) : code
 }
 
 // Очередь запросов кадров. Камеры слабые: если открыть список из 19 плиток,
@@ -46,21 +93,24 @@ function releasePreviewSlot() {
 // Плашка здоровья камеры: загрузка CPU, свободная память и fps сенсора.
 // Показывается только для камер с Majestic — для остальных метрик нет.
 function HealthBadge({ health }: { health?: CameraHealth }) {
+  const { t } = useTranslation()
   if (!health || !health.supported) return null
   const style = HEALTH_STYLE[health.level] ?? HEALTH_STYLE.unknown
-  const mem = health.mem_available_mb != null ? `${health.mem_available_mb.toFixed(0)} МБ` : '—'
+  const mem = health.mem_available_mb != null
+    ? t('camerasPage.megabytes', { value: health.mem_available_mb.toFixed(0) })
+    : '—'
 
   return (
     <div
       title={[
-        `Состояние: ${style.label}`,
-        health.load1 != null ? `Загрузка CPU: ${health.load1.toFixed(2)}` : null,
-        `Свободно памяти: ${mem}`,
-        health.isp_fps != null ? `FPS сенсора: ${health.isp_fps}` : null,
-        health.rtsp_clients != null ? `Клиентов RTSP: ${health.rtsp_clients}` : null,
-        health.rtsp_mbps ? `Отдача: ${health.rtsp_mbps.toFixed(1)} Мбит/с` : null,
-        health.night_enabled ? 'Ночной режим: включён' : null,
-        health.issues?.length ? `Проблемы: ${health.issues.join('; ')}` : null,
+        t('camerasPage.healthState', { level: t(style.key) }),
+        health.load1 != null ? t('camerasPage.healthLoad', { value: health.load1.toFixed(2) }) : null,
+        t('camerasPage.healthMem', { value: mem }),
+        health.isp_fps != null ? t('camerasPage.healthFps', { value: health.isp_fps }) : null,
+        health.rtsp_clients != null ? t('camerasPage.healthRtspClients', { value: health.rtsp_clients }) : null,
+        health.rtsp_mbps ? t('camerasPage.healthThroughput', { value: health.rtsp_mbps.toFixed(1) }) : null,
+        health.night_enabled ? t('camerasPage.healthNight') : null,
+        health.issues?.length ? t('camerasPage.healthIssues', { list: health.issues.map((i) => issueText(t, i)).join('; ') }) : null,
       ].filter(Boolean).join('\n')}
       style={{
         display: 'flex', alignItems: 'center', gap: 5,
@@ -81,6 +131,7 @@ function HealthBadge({ health }: { health?: CameraHealth }) {
 export default function CamerasPage() {
   const navigate = useNavigate()
   const toast = useToast()
+  const { t } = useTranslation()
   const { data: cameras, loading, error, refetch } = useAsync<Camera[]>(() => camerasAPI.list())
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({
@@ -113,11 +164,11 @@ export default function CamerasPage() {
         name: '', rtsp_url: '', main_stream: '', sub_stream: '',
         ip: '', mac: '', firmware: '', username: '', password: '', wg_ip: '',
       })
-      toast.success(`Камера «${form.name}» добавлена`)
+      toast.success(t('camerasPage.added', { name: form.name }))
       refetch()
     } catch (err: any) {
-      setFormError(err.response?.data?.error || 'Ошибка')
-      toast.error('Не удалось добавить камеру')
+      setFormError(err.response?.data?.error || t('camerasPage.formError'))
+      toast.error(t('camerasPage.addFailed'))
     } finally {
       setSaving(false)
     }
@@ -125,13 +176,13 @@ export default function CamerasPage() {
 
   const handleDelete = async (e: React.MouseEvent, id: string, name: string) => {
     e.stopPropagation()
-    if (!confirm(`Удалить камеру «${name}»?`)) return
+    if (!confirm(t('camerasPage.confirmDelete', { name }))) return
     try {
       await camerasAPI.delete(id)
-      toast.success(`Камера «${name}» удалена`)
+      toast.success(t('camerasPage.deleted', { name }))
       refetch()
     } catch {
-      toast.error('Ошибка удаления')
+      toast.error(t('camerasPage.deleteFailed'))
     }
   }
 
@@ -141,12 +192,12 @@ export default function CamerasPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>Камеры</h1>
+          <h1>{t('camerasPage.title')}</h1>
           <p>
-            Управление подключёнными камерами OpenIPC
+            {t('camerasPage.subtitle')}
             {problemCount > 0 && (
               <span style={{ color: 'var(--warning, #f59e0b)', marginLeft: 8 }}>
-                • требуют внимания: {problemCount}
+                {t('camerasPage.needAttention', { count: problemCount })}
               </span>
             )}
           </p>
@@ -157,11 +208,11 @@ export default function CamerasPage() {
             onClick={() => { refetch(); refetchHealth() }}
           >
             <RefreshCw size={16} />
-            Обновить
+            {t('camerasPage.refresh')}
           </button>
           <button className="btn btn-primary" onClick={() => setShowModal(true)}>
             <Plus size={18} />
-            Добавить камеру
+            {t('camerasPage.addCamera')}
           </button>
         </div>
       </div>
@@ -170,8 +221,8 @@ export default function CamerasPage() {
 
       {!cameras || cameras.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
-          <p style={{ fontSize: 18, marginBottom: 8 }}>Нет добавленных камер</p>
-          <p>Нажмите «Добавить камеру», чтобы подключить устройство OpenIPC</p>
+          <p style={{ fontSize: 18, marginBottom: 8 }}>{t('camerasPage.emptyTitle')}</p>
+          <p>{t('camerasPage.emptyText')}</p>
         </div>
       ) : (
         <div className="grid grid-3">
@@ -254,16 +305,19 @@ export default function CamerasPage() {
                     что именно случилось с камерой. */}
                 {healthByCamera.get(cam.id)?.issues?.length ? (
                   <div style={{ fontSize: 11, color: HEALTH_STYLE[healthByCamera.get(cam.id)!.level].color }}>
-                    {healthByCamera.get(cam.id)!.issues!.join(', ')}
+                    {healthByCamera.get(cam.id)!.issues!.map((i) => issueText(t, i)).join(', ')}
                   </div>
                 ) : null}
+                {healthByCamera.get(cam.id)?.error_code && (
+                  <div style={{ fontSize: 11 }}>{healthErrorText(t, healthByCamera.get(cam.id)!.error_code)}</div>
+                )}
                 {healthByCamera.get(cam.id)?.error && (
                   <div style={{ fontSize: 11, opacity: 0.7 }}>{healthByCamera.get(cam.id)!.error}</div>
                 )}
                 {cam.main_stream && <div style={{ fontSize: 11, wordBreak: 'break-all', opacity: 0.7 }}>Main: {cam.main_stream.slice(0, 40)}...</div>}
                 {cam.sub_stream && <div style={{ fontSize: 11, wordBreak: 'break-all', opacity: 0.7 }}>Sub: {cam.sub_stream.slice(0, 40)}...</div>}
                 {!cam.main_stream && !cam.sub_stream && cam.rtsp_url && <div style={{ fontSize: 11, wordBreak: 'break-all' }}>RTSP: {cam.rtsp_url.slice(0, 35)}...</div>}
-                <div style={{ marginTop: 4 }}>Добавлена: {new Date(cam.created_at).toLocaleDateString('ru')}</div>
+                <div style={{ marginTop: 4 }}>{t('camerasPage.addedAt', { date: new Date(cam.created_at).toLocaleDateString() })}</div>
               </div>
 
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
@@ -276,13 +330,13 @@ export default function CamerasPage() {
                   }}
                 >
                   <Eye size={14} />
-                  Просмотр
+                  {t('camerasPage.view')}
                 </button>
                 <button
                   className="btn btn-outline btn-sm"
                   style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
                   onClick={(e) => handleDelete(e, cam.id, cam.name)}
-                  title="Удалить"
+                  title={t('camerasPage.deleteHint')}
                 >
                   <Trash2 size={14} />
                 </button>
@@ -296,18 +350,18 @@ export default function CamerasPage() {
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
-            <h2>Добавить камеру</h2>
+            <h2>{t('camerasPage.addTitle')}</h2>
             <form onSubmit={handleAdd}>
-              <label>Название *</label>
+              <label>{t('camerasPage.fieldName')}</label>
               <input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Камера входа"
+                placeholder={t('camerasPage.namePlaceholder')}
                 required
               />
               <div className="grid grid-2" style={{ gap: 10 }}>
                 <div>
-                  <label>IP-адрес</label>
+                  <label>{t('camerasPage.fieldIP')}</label>
                   <input
                     value={form.ip}
                     onChange={(e) => setForm({ ...form, ip: e.target.value })}
@@ -323,19 +377,19 @@ export default function CamerasPage() {
                   />
                 </div>
               </div>
-              <label>Основной поток (main) — запись + полный экран</label>
+              <label>{t('camerasPage.fieldMain')}</label>
               <input
                 value={form.main_stream}
                 onChange={(e) => setForm({ ...form, main_stream: e.target.value })}
                 placeholder="rtsp://192.168.1.75:554/stream=0"
               />
-              <label>Доп. поток (sub) — сетка + детекция</label>
+              <label>{t('camerasPage.fieldSub')}</label>
               <input
                 value={form.sub_stream}
                 onChange={(e) => setForm({ ...form, sub_stream: e.target.value })}
                 placeholder="rtsp://192.168.1.75:554/stream=1"
               />
-              <label>RTSP URL (совместимость)</label>
+              <label>{t('camerasPage.fieldRtsp')}</label>
               <input
                 value={form.rtsp_url}
                 onChange={(e) => setForm({ ...form, rtsp_url: e.target.value })}
@@ -343,7 +397,7 @@ export default function CamerasPage() {
               />
               <div className="grid grid-2" style={{ gap: 10 }}>
                 <div>
-                  <label>Логин камеры</label>
+                  <label>{t('camerasPage.fieldLogin')}</label>
                   <input
                     value={form.username}
                     onChange={(e) => setForm({ ...form, username: e.target.value })}
@@ -351,7 +405,7 @@ export default function CamerasPage() {
                   />
                 </div>
                 <div>
-                  <label>Пароль камеры</label>
+                  <label>{t('camerasPage.fieldPassword')}</label>
                   <input
                     type="password"
                     value={form.password}
@@ -362,7 +416,7 @@ export default function CamerasPage() {
               </div>
               <div className="grid grid-2" style={{ gap: 10 }}>
                 <div>
-                  <label>MAC-адрес</label>
+                  <label>{t('camerasPage.fieldMac')}</label>
                   <input
                     value={form.mac}
                     onChange={(e) => setForm({ ...form, mac: e.target.value })}
@@ -370,7 +424,7 @@ export default function CamerasPage() {
                   />
                 </div>
                 <div>
-                  <label>Версия прошивки</label>
+                  <label>{t('camerasPage.fieldFirmware')}</label>
                   <input
                     value={form.firmware}
                     onChange={(e) => setForm({ ...form, firmware: e.target.value })}
@@ -381,10 +435,10 @@ export default function CamerasPage() {
               {formError && <p style={{ color: 'var(--danger)', marginBottom: 12, fontSize: 13 }}>{formError}</p>}
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
                 <button type="button" className="btn btn-outline" onClick={() => setShowModal(false)}>
-                  Отмена
+                  {t('common.cancel')}
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={saving}>
-                  {saving ? 'Добавление...' : 'Добавить'}
+                  {saving ? t('camerasPage.adding') : t('camerasPage.add')}
                 </button>
               </div>
             </form>

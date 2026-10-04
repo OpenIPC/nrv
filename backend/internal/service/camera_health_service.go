@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -38,6 +39,22 @@ const HealthCacheTTL = 60 * time.Second
 // утечку памяти, но не создаёт постоянной нагрузки на камеры.
 const healthInterval = 60 * time.Second
 
+// HealthIssue — замечание к состоянию камеры.
+//
+// Code — ключ перевода, Params — подстановки к нему. Готовый текст сервер
+// не составляет: интерфейс показывается на четырёх языках, и русская фраза
+// из ответа осталась бы русской для всех (см. docs/TRANSLATIONS.md).
+// Подпись ставит интерфейс, в CamerasPage.
+type HealthIssue struct {
+	Code   string            `json:"code"`
+	Params map[string]string `json:"params,omitempty"`
+}
+
+// addIssue добавляет замечание к состоянию камеры.
+func (h *CameraHealth) addIssue(code string, params map[string]string) {
+	h.Issues = append(h.Issues, HealthIssue{Code: code, Params: params})
+}
+
 // healthParallel — сколько камер опрашивать одновременно.
 //
 // Последовательный обход 19 камер занял бы больше минуты, а полный
@@ -53,7 +70,15 @@ type CameraHealth struct {
 	// вендоров мониторинг недоступен, и это не ошибка.
 	Supported bool   `json:"supported"`
 	Online    bool   `json:"online"`
-	Error     string `json:"error,omitempty"`
+	// Error — техническая подробность: адрес, код ответа, текст обрыва
+	// соединения. Показывается как есть, потому что это данные от
+	// устройства, а не подпись интерфейса.
+	Error string `json:"error,omitempty"`
+	// ErrorCode — код причины, понятной оператору (not_majestic и т. п.).
+	// Подпись к нему ставит интерфейс. Отделён от Error намеренно: для
+	// части отказов понятной фразы не сложить — тогда остаётся только
+	// техническая подробность.
+	ErrorCode string `json:"error_code,omitempty"`
 
 	// --- Состояние потоков (из /api/v1/sources) ---
 	// Flowing — поток реально идёт с сенсора.
@@ -93,8 +118,8 @@ type CameraHealth struct {
 	// --- Оценка ---
 	// Level: ok, warning, critical.
 	Level string `json:"level"`
-	// Issues — что именно не в порядке, человеческим языком.
-	Issues []string `json:"issues,omitempty"`
+	// Issues — что именно не в порядке.
+	Issues []HealthIssue `json:"issues,omitempty"`
 
 	// CollectedAt — когда сняты показатели.
 	CollectedAt time.Time `json:"collected_at"`
@@ -231,8 +256,7 @@ func (s *CameraHealthService) collectOne(ctx context.Context, cam domain.Camera)
 		// в сторону: оператор идёт проверять сеть, которой всё в порядке.
 		if !errors.Is(err, ErrNotMajestic) && s.reachable(ctx, cam) {
 			h.Online = true
-			h.Error = "камера в сети, но стример не отвечает: " +
-				"устройство перегружено или зависла обработка кадров"
+			h.ErrorCode = "streamer_not_responding"
 			return h
 		}
 
@@ -242,9 +266,11 @@ func (s *CameraHealthService) collectOne(ctx context.Context, cam domain.Camera)
 		// а не как «не поддерживает API».
 		if errors.Is(err, ErrNotMajestic) {
 			if client.HasConfig(ctx) {
-				h.Error = "камера на другой сборке OpenIPC: метрики потоков недоступны, настройки доступны"
+				h.ErrorCode = "other_openipc_build"
 			} else if client.IsOpenIPCCamera(ctx) {
-				h.Error = ErrOpenIPCNoMajestic.Error()
+				h.ErrorCode = "openipc_no_majestic"
+			} else {
+				h.ErrorCode = "not_majestic"
 			}
 		}
 		return h
@@ -268,8 +294,11 @@ func (s *CameraHealthService) collectOne(ctx context.Context, cam domain.Camera)
 	// они тяжелее, и на перегруженной камере запрос может не пройти.
 	health, err := client.GetHealth(ctx)
 	if err != nil {
-		h.Issues = append(h.Issues, "метрики недоступны")
+		// Замечание добавляем после evaluate, а не до него: evaluate
+		// начинает с очистки списка, и добавленное раньше замечание
+		// пропадало — оператор видел «нет данных» без объяснения причины.
 		s.evaluate(h)
+		h.addIssue("metrics_unavailable", nil)
 		return h
 	}
 
@@ -338,13 +367,13 @@ func (s *CameraHealthService) evaluate(h *CameraHealth) {
 	switch {
 	case !h.Flowing:
 		// Камера отвечает, но видео не идёт: сенсор или энкодер не работают.
-		h.Issues = append(h.Issues, "нет видеопотока")
+		h.addIssue("no_stream", nil)
 		h.Level = "critical"
 	case h.Load1 >= 4:
-		h.Issues = append(h.Issues, fmt.Sprintf("сильная перегрузка (load %.1f)", h.Load1))
+		h.addIssue("overload_critical", map[string]string{"load": fmt.Sprintf("%.1f", h.Load1)})
 		h.Level = "critical"
 	case h.Load1 >= 1.5:
-		h.Issues = append(h.Issues, fmt.Sprintf("высокая нагрузка (load %.1f)", h.Load1))
+		h.addIssue("overload_high", map[string]string{"load": fmt.Sprintf("%.1f", h.Load1)})
 		h.Level = "warning"
 	}
 
@@ -353,10 +382,10 @@ func (s *CameraHealthService) evaluate(h *CameraHealth) {
 	if h.MemTotalMB > 0 {
 		switch {
 		case h.MemAvailableMB < 5:
-			h.Issues = append(h.Issues, fmt.Sprintf("критически мало памяти (%.1f МБ)", h.MemAvailableMB))
+			h.addIssue("mem_critical", map[string]string{"mb": fmt.Sprintf("%.1f", h.MemAvailableMB)})
 			h.Level = "critical"
 		case h.MemAvailableMB < 12:
-			h.Issues = append(h.Issues, fmt.Sprintf("мало памяти (%.1f МБ)", h.MemAvailableMB))
+			h.addIssue("mem_low", map[string]string{"mb": fmt.Sprintf("%.1f", h.MemAvailableMB)})
 			if h.Level == "ok" {
 				h.Level = "warning"
 			}
@@ -365,14 +394,17 @@ func (s *CameraHealthService) evaluate(h *CameraHealth) {
 
 	// Падение fps сенсора против заявленного у энкодера: камера не тянет.
 	if h.ISPFPS > 0 && h.MainFPS > 0 && h.ISPFPS < h.MainFPS/2 {
-		h.Issues = append(h.Issues, fmt.Sprintf("сенсор выдаёт %d к/с вместо %d", h.ISPFPS, h.MainFPS))
+		h.addIssue("sensor_fps", map[string]string{
+			"actual":   strconv.Itoa(h.ISPFPS),
+			"expected": strconv.Itoa(h.MainFPS),
+		})
 		if h.Level == "ok" {
 			h.Level = "warning"
 		}
 	}
 
 	if h.VencEmptyFrames > 1000 {
-		h.Issues = append(h.Issues, fmt.Sprintf("сбои энкодера (%d пустых кадров)", h.VencEmptyFrames))
+		h.addIssue("encoder_gaps", map[string]string{"frames": strconv.FormatInt(h.VencEmptyFrames, 10)})
 		if h.Level == "ok" {
 			h.Level = "warning"
 		}

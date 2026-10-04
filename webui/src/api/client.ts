@@ -364,6 +364,13 @@ export interface CameraSettingsView {
 
 // Здоровье камеры OpenIPC: собирается сервером раз в минуту из метрик
 // Majestic. Уровень задаёт цвет индикатора, issues — что именно не так.
+export interface HealthIssue {
+  // code — код замечания (no_stream, mem_critical и т. п.).
+  // Подпись к коду ставит интерфейс: сервер отдаёт код, а не текст,
+  // потому что интерфейс переводится, а ответ один для всех языков.
+  code: string
+  params?: Record<string, string>
+}
 export interface CameraHealth {
   camera_id: string
   camera_name: string
@@ -371,8 +378,12 @@ export interface CameraHealth {
   supported: boolean
   online: boolean
   level: 'ok' | 'warning' | 'critical' | 'unknown'
+  // error — техническая подробность (адрес, код ответа, обрыв соединения).
+  // Показывается как есть: это данные от устройства, а не подпись.
   error?: string
-  issues?: string[]
+  // error_code — код понятной причины. Подпись ставит интерфейс.
+  error_code?: string
+  issues?: HealthIssue[]
   flowing: boolean
   main_width?: number
   main_height?: number
