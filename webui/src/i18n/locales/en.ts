@@ -1673,4 +1673,80 @@ export default {
     failed: 'Could not connect to the camera',
     retry: 'Retry',
   },
+
+  systemNotifications: {
+    title: 'Watch the server state',
+    enabled: 'Enabled',
+    disabledNote:
+      'The checks run anyway, but no messages are sent. That way, when you turn this on, you do not get a batch of notifications about things that have been going on for a long time.',
+    channelsHint:
+      'Messages go to the same channels configured on the Telegram and MAX tabs. If both channels are off, the notifications will go nowhere.',
+
+    about: 'What to report',
+    selected: 'selected: {{count}}',
+
+    thresholds: 'Trigger thresholds',
+    zeroDisables: 'Zero in a field turns the corresponding check off.',
+    cpuPercent: 'CPU load, %',
+    cpuHint:
+      'Short spikes during clip export are normal, so the hold time is checked as well.',
+    cpuMinutes: 'Hold the load for, minutes',
+    cpuMinutesHint: 'The message is sent only if the excess lasts that long.',
+    memPercent: 'Memory used, %',
+    memHint:
+      'A share rather than megabytes: on servers with different memory sizes the same headroom means different things.',
+    diskPercent: 'Disk space used, %',
+    diskHint: 'The most important check: once the disk fills up, recording stops.',
+    temperature: 'Temperature, °C',
+    temperatureHint:
+      'The CPU and the GPU are checked. Virtual machines usually have no sensors, and the check simply will not trigger.',
+    gpuPercent: 'GPU load, %',
+    gpuHint: 'A warning that detection acceleration is at its limit.',
+    gpuOffline: 'Report if the GPU disappears',
+    gpuOfflineHint: 'Without the GPU, detection will either stop or slow down sharply.',
+
+    reminders: 'Reminders',
+    repeatMinutes: 'Repeat at most every, minutes',
+    repeatHint:
+      'While the problem is not resolved, it is reminded about with this pause. Zero turns reminders off — you will be told about an unresolved problem once.',
+
+    missedCameras: 'Missing cameras',
+    offlineMinutes: 'Consider missing after, minutes',
+    offlineHint:
+      'The camera and MediaMTX survive short connection breaks on their own. Zero means «report immediately».',
+    whichCameras: 'Which cameras to watch',
+    allCamerasHint: 'Nothing selected — every camera is watched.',
+
+    schedule: 'Schedule',
+    quietHours: 'Do not disturb during the given time',
+    quietHint:
+      'Missing cameras and a full disk happen at night too: that is what cannot be put off. Turn this off if you want every message.',
+    from: 'From',
+    to: 'To',
+    remindEvery: 'Remind about the problem every, minutes',
+    remindEveryHint:
+      'While the problem is not resolved, the messages will repeat with this pause. Zero turns reminders off.',
+
+    save: 'Save the server settings',
+  },
+
+  systemEvents: {
+    system_camera_offline_label: 'A camera left the network',
+    system_camera_offline_hint: 'The camera has been unavailable longer than the hold time set below',
+    system_camera_unavailable_label: 'A camera was unavailable at startup',
+    system_camera_unavailable_hint:
+      'The camera was already not answering when the server started — for example, after a reboot. Reported at once, without a hold time',
+    system_camera_online_label: 'A camera is back online',
+    system_camera_online_hint: 'A recovery message, so that it is clear the problem is gone',
+    system_cpu_label: 'High CPU load',
+    system_cpu_hint: 'The server cannot keep up with the video',
+    system_memory_label: 'Little RAM',
+    system_memory_hint: 'Recording and detection may start failing',
+    system_disk_label: 'Running out of disk space',
+    system_disk_hint: 'The most important one: once the disk fills up, recording stops',
+    system_temperature_label: 'Overheating',
+    system_temperature_hint: 'The CPU or GPU temperature is above the threshold',
+    system_gpu_label: 'A GPU problem',
+    system_gpu_hint: 'The card is unavailable or running at its limit',
+  },
 }

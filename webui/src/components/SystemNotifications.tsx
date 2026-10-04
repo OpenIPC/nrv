@@ -1,4 +1,5 @@
 import type { Camera } from '../api/client'
+import { useTranslation } from 'react-i18next'
 import {
   SYSTEM_EVENT_OPTIONS,
   type SystemConfig,
@@ -70,6 +71,7 @@ interface SystemNotificationsProps {
 export default function SystemNotifications({
   config, cameras, patch, patchThreshold, toggleEvent, toggleCamera, saving, onSave,
 }: SystemNotificationsProps) {
+  const { t } = useTranslation()
   const th = config.thresholds
   // Пороги, привязанные к камерам: показываем их отдельно, чтобы
   // оператор понимал, что настраивает именно поведение камер.
@@ -81,14 +83,14 @@ export default function SystemNotifications({
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
           <AlertTriangle size={18} />
-          <strong>Следить за состоянием сервера</strong>
+          <strong>{t('systemNotifications.title')}</strong>
           <label style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
             <input
               type="checkbox"
               checked={config.enabled}
               onChange={(e) => patch('enabled', e.target.checked)}
             />
-            <span>Включено</span>
+            <span>{t('systemNotifications.enabled')}</span>
           </label>
         </div>
 
@@ -100,24 +102,21 @@ export default function SystemNotifications({
               fontSize: 13, lineHeight: 1.5,
             }}
           >
-            Проверки выполняются в любом случае, но сообщения не отправляются.
-            Так при включении вы не получите пачку уведомлений о том, что
-            длится уже давно.
+            {t('systemNotifications.disabledNote')}
           </div>
         )}
 
         <div style={hintStyle}>
-          Сообщения уходят в те же каналы, что настроены во вкладках Telegram и MAX.
-          Если оба канала выключены, уведомления никуда не придут.
+          {t('systemNotifications.channelsHint')}
         </div>
       </div>
 
       {/* О чём сообщать */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <strong>О чём сообщать</strong>
+          <strong>{t('systemNotifications.about')}</strong>
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            выбрано: {config.events.length}
+            {t('systemNotifications.selected', { count: config.events.length })}
           </span>
         </div>
 
@@ -144,8 +143,8 @@ export default function SystemNotifications({
                 />
                 <Icon size={16} style={{ marginTop: 2, flexShrink: 0, opacity: on ? 1 : 0.5 }} />
                 <span style={{ flex: 1 }}>
-                  <span style={{ display: 'block', fontSize: 14 }}>{opt.label}</span>
-                  <span style={{ ...hintStyle, marginTop: 2, display: 'block' }}>{opt.hint}</span>
+                  <span style={{ display: 'block', fontSize: 14 }}>{t(`systemEvents.${opt.value}_label`)}</span>
+                  <span style={{ ...hintStyle, marginTop: 2, display: 'block' }}>{t(`systemEvents.${opt.value}_hint`)}</span>
                 </span>
               </label>
             )
@@ -156,85 +155,82 @@ export default function SystemNotifications({
       {/* Пороги */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-          <strong>Пороги срабатывания</strong>
+          <strong>{t('systemNotifications.thresholds')}</strong>
         </div>
         <div style={{ ...hintStyle, marginBottom: 16 }}>
-          Ноль в поле отключает соответствующую проверку.
+          {t('systemNotifications.zeroDisables')}
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
           <div>
-            <label style={labelStyle}>Загрузка процессора, %</label>
+            <label style={labelStyle}>{t('systemNotifications.cpuPercent')}</label>
             <input
               type="number" min={0} max={100} style={inputStyle}
               value={th.cpu_percent}
               onChange={(e) => patchThreshold('cpu_percent', Number(e.target.value))}
             />
             <div style={hintStyle}>
-              Кратковременные всплески при экспорте клипа — норма,
-              поэтому дополнительно проверяется выдержка.
+              {t('systemNotifications.cpuHint')}
             </div>
           </div>
 
           <div>
-            <label style={labelStyle}>Держать загрузку, минут</label>
+            <label style={labelStyle}>{t('systemNotifications.cpuMinutes')}</label>
             <input
               type="number" min={0} max={120} style={inputStyle}
               value={th.cpu_minutes}
               onChange={(e) => patchThreshold('cpu_minutes', Number(e.target.value))}
             />
             <div style={hintStyle}>
-              Сообщение уйдёт, только если превышение держится столько времени.
+              {t('systemNotifications.cpuMinutesHint')}
             </div>
           </div>
 
           <div>
-            <label style={labelStyle}>Занято памяти, %</label>
+            <label style={labelStyle}>{t('systemNotifications.memPercent')}</label>
             <input
               type="number" min={0} max={100} style={inputStyle}
               value={th.memory_percent}
               onChange={(e) => patchThreshold('memory_percent', Number(e.target.value))}
             />
             <div style={hintStyle}>
-              Доля, а не мегабайты: на серверах с разным объёмом памяти
-              один и тот же запас означает разное.
+              {t('systemNotifications.memHint')}
             </div>
           </div>
 
           <div>
-            <label style={labelStyle}>Занято места на диске, %</label>
+            <label style={labelStyle}>{t('systemNotifications.diskPercent')}</label>
             <input
               type="number" min={0} max={100} style={inputStyle}
               value={th.disk_percent}
               onChange={(e) => patchThreshold('disk_percent', Number(e.target.value))}
             />
             <div style={hintStyle}>
-              Самая важная проверка: при заполнении диска запись прекратится.
+              {t('systemNotifications.diskHint')}
             </div>
           </div>
 
           <div>
-            <label style={labelStyle}>Температура, °C</label>
+            <label style={labelStyle}>{t('systemNotifications.temperature')}</label>
             <input
               type="number" min={0} max={150} style={inputStyle}
               value={th.temperature_c}
               onChange={(e) => patchThreshold('temperature_c', Number(e.target.value))}
             />
             <div style={hintStyle}>
-              Проверяются процессор и видеокарта. На виртуальных машинах
-              датчиков обычно нет, и проверка просто не сработает.
+              {t('systemNotifications.temperatureHint')}
             </div>
           </div>
 
           <div>
-            <label style={labelStyle}>Загрузка видеокарты, %</label>
+            <label style={labelStyle}>{t('systemNotifications.gpuPercent')}</label>
             <input
               type="number" min={0} max={100} style={inputStyle}
               value={th.gpu_percent}
               onChange={(e) => patchThreshold('gpu_percent', Number(e.target.value))}
             />
             <div style={hintStyle}>
-              Предупреждение о том, что ускорение детекции на пределе.
+              {t('systemNotifications.gpuHint')}
             </div>
           </div>
         </div>
@@ -245,10 +241,10 @@ export default function SystemNotifications({
             checked={th.gpu_offline}
             onChange={(e) => patchThreshold('gpu_offline', e.target.checked)}
           />
-          <span style={{ fontSize: 14 }}>Сообщать, если видеокарта исчезла</span>
+          <span style={{ fontSize: 14 }}>{t('systemNotifications.gpuOffline')}</span>
         </label>
         <div style={hintStyle}>
-          Без видеокарты детекция либо остановится, либо резко замедлится.
+          {t('systemNotifications.gpuOfflineHint')}
         </div>
       </div>
 
@@ -256,20 +252,18 @@ export default function SystemNotifications({
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
           <BellRing size={18} />
-          <strong>Напоминания</strong>
+          <strong>{t('systemNotifications.reminders')}</strong>
         </div>
 
         <div style={{ maxWidth: 320 }}>
-          <label style={labelStyle}>Повторять не реже, чем раз в, минут</label>
+          <label style={labelStyle}>{t('systemNotifications.repeatMinutes')}</label>
           <input
             type="number" min={0} max={1440} style={inputStyle}
             value={th.repeat_minutes}
             onChange={(e) => patchThreshold('repeat_minutes', Number(e.target.value))}
           />
           <div style={hintStyle}>
-            Пока проблема не устранена, о ней напоминают с этой паузой.
-            Ноль отключает напоминания — о неустранённой проблеме сообщат
-            один раз.
+            {t('systemNotifications.repeatHint')}
           </div>
         </div>
       </div>
@@ -278,27 +272,26 @@ export default function SystemNotifications({
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
           <VideoOff size={18} />
-          <strong>Пропавшие камеры</strong>
+          <strong>{t('systemNotifications.missedCameras')}</strong>
         </div>
 
         <div style={{ marginBottom: 16, maxWidth: 320 }}>
-          <label style={labelStyle}>Считать пропавшей после, минут</label>
+          <label style={labelStyle}>{t('systemNotifications.offlineMinutes')}</label>
           <input
             type="number" min={0} max={1440} style={inputStyle}
             value={th.camera_offline_minutes}
             onChange={(e) => patchThreshold('camera_offline_minutes', Number(e.target.value))}
           />
           <div style={hintStyle}>
-            Короткие обрывы связи камера и MediaMTX переживают сами.
-            Ноль означает «сообщать сразу».
+            {t('systemNotifications.offlineHint')}
           </div>
         </div>
 
         {cameraEvents.length > 0 && (
           <>
-            <label style={labelStyle}>Какие камеры отслеживать</label>
+            <label style={labelStyle}>{t('systemNotifications.whichCameras')}</label>
             <div style={hintStyle}>
-              Ничего не отмечено — отслеживаются все камеры.
+              {t('systemNotifications.allCamerasHint')}
             </div>
             <div
               style={{
@@ -334,7 +327,7 @@ export default function SystemNotifications({
       {/* Тихие часы и напоминания */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <strong>Расписание</strong>
+          <strong>{t('systemNotifications.schedule')}</strong>
         </div>
 
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
@@ -343,17 +336,16 @@ export default function SystemNotifications({
             checked={config.quiet_hours_enabled}
             onChange={(e) => patch('quiet_hours_enabled', e.target.checked)}
           />
-          <span style={{ fontSize: 14 }}>Не беспокоить в указанное время</span>
+          <span style={{ fontSize: 14 }}>{t('systemNotifications.quietHours')}</span>
         </label>
         <div style={hintStyle}>
-          Пропавшие камеры и заполненный диск приходят и ночью: это то,
-          что нельзя отложить. Выключите, если нужны все сообщения.
+          {t('systemNotifications.quietHint')}
         </div>
 
         {config.quiet_hours_enabled && (
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', marginTop: 12 }}>
             <div>
-              <label style={labelStyle}>С</label>
+              <label style={labelStyle}>{t('systemNotifications.from')}</label>
               <input
                 type="time" style={inputStyle}
                 value={config.quiet_hours_from}
@@ -361,7 +353,7 @@ export default function SystemNotifications({
               />
             </div>
             <div>
-              <label style={labelStyle}>До</label>
+              <label style={labelStyle}>{t('systemNotifications.to')}</label>
               <input
                 type="time" style={inputStyle}
                 value={config.quiet_hours_to}
@@ -372,15 +364,14 @@ export default function SystemNotifications({
         )}
 
         <div style={{ marginTop: 16, maxWidth: 320 }}>
-          <label style={labelStyle}>Напоминать о проблеме каждые, минут</label>
+          <label style={labelStyle}>{t('systemNotifications.remindEvery')}</label>
           <input
             type="number" min={0} max={10080} style={inputStyle}
             value={config.repeat_minutes}
             onChange={(e) => patch('repeat_minutes', Number(e.target.value))}
           />
           <div style={hintStyle}>
-            Пока проблема не устранена, сообщения будут повторяться с этой
-            паузой. Ноль отключает напоминания.
+            {t('systemNotifications.remindEveryHint')}
           </div>
         </div>
       </div>
@@ -392,7 +383,7 @@ export default function SystemNotifications({
         style={{ display: 'flex', alignItems: 'center', gap: 8 }}
       >
         {saving ? <Loader2 size={16} className="spin" /> : <Save size={16} />}
-        Сохранить настройки сервера
+        {t('systemNotifications.save')}
       </button>
     </>
   )

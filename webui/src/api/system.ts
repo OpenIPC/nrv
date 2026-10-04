@@ -27,48 +27,22 @@ export interface SystemConfig {
   thresholds: SystemThresholds
 }
 
-/** Типы системных событий с подписями для интерфейса. */
-export const SYSTEM_EVENT_OPTIONS: { value: string; label: string; hint: string }[] = [
-  {
-    value: 'system_camera_offline',
-    label: 'Камера пропала из сети',
-    hint: 'Камера недоступна дольше выдержки, указанной ниже',
-  },
-  {
-    value: 'system_camera_unavailable',
-    label: 'Камера недоступна при запуске',
-    hint: 'Камера не отвечала уже на момент запуска сервера — например, после перезагрузки. Сообщается сразу, без выдержки',
-  },
-  {
-    value: 'system_camera_online',
-    label: 'Камера снова на связи',
-    hint: 'Сообщение о восстановлении, чтобы было видно, что проблема ушла',
-  },
-  {
-    value: 'system_cpu',
-    label: 'Высокая загрузка процессора',
-    hint: 'Сервер не успевает обрабатывать видео',
-  },
-  {
-    value: 'system_memory',
-    label: 'Мало оперативной памяти',
-    hint: 'Запись и детекция могут начать сбоить',
-  },
-  {
-    value: 'system_disk',
-    label: 'Заканчивается место на диске',
-    hint: 'Самое важное: при заполнении запись прекратится',
-  },
-  {
-    value: 'system_temperature',
-    label: 'Перегрев оборудования',
-    hint: 'Температура процессора или видеокарты выше порога',
-  },
-  {
-    value: 'system_gpu',
-    label: 'Проблема с видеокартой',
-    hint: 'Карта недоступна или работает на пределе',
-  },
+/**
+ * Типы системных событий.
+ *
+ * Здесь только коды: подписи и пояснения лежат в переводах (раздел
+ * systemEvents) и берутся по коду. Раньше рядом с кодом стоял готовый
+ * русский текст, и на других языках подписи оставались русскими.
+ */
+export const SYSTEM_EVENT_OPTIONS: { value: string }[] = [
+  { value: 'system_camera_offline' },
+  { value: 'system_camera_unavailable' },
+  { value: 'system_camera_online' },
+  { value: 'system_cpu' },
+  { value: 'system_memory' },
+  { value: 'system_disk' },
+  { value: 'system_temperature' },
+  { value: 'system_gpu' },
 ]
 
 export const DEFAULT_SYSTEM: SystemConfig = {

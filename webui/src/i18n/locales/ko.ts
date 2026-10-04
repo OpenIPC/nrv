@@ -1636,4 +1636,74 @@ export default {
     failed: '카메라에 연결할 수 없습니다',
     retry: '다시 시도',
   },
+
+  systemNotifications: {
+    title: '서버 상태 감시',
+    enabled: '사용',
+    disabledNote:
+      '검사는 어찌하든 수행되지만 메시지는 보내지 않습니다. 그래서 켤 때 이미 오래된 문제에 대한 알림이 한꺼번에 오지 않습니다.',
+    channelsHint:
+      '메시지는 Telegram과 MAX 화면에서 설정한 동일한 채널로 나갑니다. 두 채널이 모두 꺼져 있으면 알림은 어디에도 가지 않습니다.',
+
+    about: '무엇을 알릴지',
+    selected: '선택: {{count}}',
+
+    thresholds: '발동 임계값',
+    zeroDisables: '0을 넣으면 해당 검사가 꺼집니다.',
+    cpuPercent: 'CPU 부하, %',
+    cpuHint: '클립 내보낼 때의 짧은 치솟음은 정상이므로 지속 시간도 함께 확인합니다.',
+    cpuMinutes: '부하를 유지해야 하는 시간, 분',
+    cpuMinutesHint: '초과가 이만큼 이어져야 메시지를 보냅니다.',
+    memPercent: '메모리 사용, %',
+    memHint: '메가바이트가 아니라 비율입니다: 메모리 용량이 다른 서버에서 같은 여유는 다른 뜻입니다.',
+    diskPercent: '디스크 사용, %',
+    diskHint: '가장 중요한 검사입니다: 디스크가 차면 녹화가 멈춥니다.',
+    temperature: '온도, °C',
+    temperatureHint: 'CPU와 그래픽카드를 확인합니다. 가상 머신에는 보통 센서가 없어 이 검사는 동작하지 않습니다.',
+    gpuPercent: '그래픽카드 부하, %',
+    gpuHint: '감지 가속이 한계에 이르렀다는 경고입니다.',
+    gpuOffline: '그래픽카드가 사라지면 알림',
+    gpuOfflineHint: '그래픽카드가 없으면 감지가 멈추거나 크게 느려집니다.',
+
+    reminders: '반복 알림',
+    repeatMinutes: '반복 간격(최소), 분',
+    repeatHint:
+      '문제가 해결되지 않은 동안 이 간격으로 다시 알립니다. 0을 넣으면 반복이 꺼집니다 — 해결되지 않은 문제는 한 번만 알립니다.',
+
+    missedCameras: '사라진 카메라',
+    offlineMinutes: '얼마나 지나면 없어진 것으로 볼지, 분',
+    offlineHint: '짧은 연결 끊김은 카메라와 MediaMTX가 스스로 견딥니다. 0은 「즉시 알림」입니다.',
+    whichCameras: '어떤 카메라를 감시할지',
+    allCamerasHint: '아무것도 고르지 않으면 모든 카메라를 감시합니다.',
+
+    schedule: '일정',
+    quietHours: '지정한 시간에는 알리지 않기',
+    quietHint: '사라진 카메라와 꽉 찬 디스크는 밤에도 생깁니다: 미룰 수 없는 일입니다. 모든 메시지가 필요하면 끄십시오.',
+    from: '부터',
+    to: '까지',
+    remindEvery: '문제를 몇 분마다 알릴지',
+    remindEveryHint: '문제가 해결되지 않은 동안 이 간격으로 메시지가 반복됩니다. 0을 넣으면 반복이 꺼집니다.',
+
+    save: '서버 설정 저장',
+  },
+
+  systemEvents: {
+    system_camera_offline_label: '카메라가 네트워크에서 사라짐',
+    system_camera_offline_hint: '아래에 지정한 대기 시간보다 오래 카메라에 접속할 수 없었습니다',
+    system_camera_unavailable_label: '시작할 때 카메라를 사용할 수 없었음',
+    system_camera_unavailable_hint:
+      '서버가 시작될 때 이미 카메라가 응답하지 않았습니다 — 예를 들어 재부팅 후입니다. 대기 시간 없이 즉시 알립니다',
+    system_camera_online_label: '카메라가 다시 연결됨',
+    system_camera_online_hint: '문제가 지나갔음을 알 수 있게 하는 복구 알림입니다',
+    system_cpu_label: 'CPU 부하가 높음',
+    system_cpu_hint: '서버가 영상 처리를 따라가지 못합니다',
+    system_memory_label: '메모리가 부족함',
+    system_memory_hint: '녹화와 감지가 오류를 내기 시작할 수 있습니다',
+    system_disk_label: '디스크 공간이 부족해짐',
+    system_disk_hint: '가장 중요한 항목입니다: 디스크가 차면 녹화가 멈춥니다',
+    system_temperature_label: '장비 과열',
+    system_temperature_hint: 'CPU 또는 그래픽카드 온도가 임계값을 넘었습니다',
+    system_gpu_label: '그래픽카드 문제',
+    system_gpu_hint: '카드를 사용할 수 없거나 한계에서 동작합니다',
+  },
 }

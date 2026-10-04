@@ -1612,4 +1612,73 @@ export default {
     failed: '无法连接到摄像机',
     retry: '重试',
   },
+
+  systemNotifications: {
+    title: '监视服务器状态',
+    enabled: '已启用',
+    disabledNote:
+      '检查无论如何都会进行，只是不发送消息。这样在打开时，你不会一下子收到一堆「早就存在」的通知。',
+    channelsHint: '消息发送到 Telegram 和 MAX 两个页面里配置的渠道。如果两个渠道都关着，通知就无处可发。',
+
+    about: '上报什么',
+    selected: '已选 {{count}} 项',
+
+    thresholds: '触发阈值',
+    zeroDisables: '填 0 即关闭对应的检查。',
+    cpuPercent: 'CPU 负载，%',
+    cpuHint: '导出片段时的短暂冲高是正常现象，所以还会检查持续时长。',
+    cpuMinutes: '负载需持续，分钟',
+    cpuMinutesHint: '只有超出持续这么久，才会发出消息。',
+    memPercent: '内存占用，%',
+    memHint: '用比例而不是兆字节：内存大小不同的服务器上，同样的余量含义不同。',
+    diskPercent: '磁盘占用，%',
+    diskHint: '最重要的一项检查：磁盘写满后录像就会停止。',
+    temperature: '温度，°C',
+    temperatureHint: '检查 CPU 和显卡。虚拟机上通常没有传感器，这项检查不会触发。',
+    gpuPercent: '显卡负载，%',
+    gpuHint: '提醒检测加速已经到极限。',
+    gpuOffline: '显卡消失时通知',
+    gpuOfflineHint: '没有显卡，检测要么停下，要么明显变慢。',
+
+    reminders: '重复提醒',
+    repeatMinutes: '最多每隔多少分钟重复',
+    repeatHint:
+      '问题没有解决期间，按这个间隔重复提醒。填 0 即关闭提醒——未解决的问题只通知一次。',
+
+    missedCameras: '失联的摄像机',
+    offlineMinutes: '多久算失联，分钟',
+    offlineHint: '短时间的连接中断，摄像机和 MediaMTX 自己能缓过来。填 0 表示「立即通知」。',
+    whichCameras: '监视哪些摄像机',
+    allCamerasHint: '一个都不选——则监视全部摄像机。',
+
+    schedule: '时间安排',
+    quietHours: '指定时段内不打扰',
+    quietHint: '摄像机失联和磁盘写满夜里也会发生：这些不能拖。如果需要收到全部消息，请关掉。',
+    from: '从',
+    to: '到',
+    remindEvery: '每隔多少分钟提醒一次问题',
+    remindEveryHint: '问题没有解决期间，会按这个间隔重复发送。填 0 即关闭提醒。',
+
+    save: '保存服务器设置',
+  },
+
+  systemEvents: {
+    system_camera_offline_label: '摄像机从网络中消失',
+    system_camera_offline_hint: '摄像机不可用的时长超过了下面设置的等待时间',
+    system_camera_unavailable_label: '启动时摄像机就不可用',
+    system_camera_unavailable_hint:
+      '服务器启动时摄像机就已经不响应了——比如重启之后。这种情况立即上报，不设等待时间',
+    system_camera_online_label: '摄像机恢复连接',
+    system_camera_online_hint: '恢复通知，让人看到问题已经过去',
+    system_cpu_label: 'CPU 负载过高',
+    system_cpu_hint: '服务器来不及处理视频',
+    system_memory_label: '内存不足',
+    system_memory_hint: '录像和检测可能开始出错',
+    system_disk_label: '磁盘快满了',
+    system_disk_hint: '最重要的一项：磁盘写满后录像会停止',
+    system_temperature_label: '设备过热',
+    system_temperature_hint: 'CPU 或显卡温度超过阈值',
+    system_gpu_label: '显卡出问题',
+    system_gpu_hint: '显卡不可用或已经在极限上工作',
+  },
 }

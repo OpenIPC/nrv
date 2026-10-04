@@ -52,6 +52,20 @@ const lang = process.argv[3] || 'zh-CN'
 
   await page.waitForTimeout(2500)
 
+  // NVR_TAB — текст кнопки, которую надо нажать перед проверкой.
+  // Нужен для экранов, где часть подписей лежит на вкладке, которая по
+  // умолчанию не открыта: иначе проверка молча смотрит не туда и
+  // показывает, что всё переведено.
+  if (process.env.NVR_TAB) {
+    const tab = page.locator('button', { hasText: process.env.NVR_TAB }).first()
+    if (await tab.count()) {
+      await tab.click()
+      await page.waitForTimeout(1500)
+    } else {
+      console.log(`Кнопка «${process.env.NVR_TAB}» не найдена — проверяю открытую вкладку.`)
+    }
+  }
+
   const found = await page.evaluate(() => {
     const out = []
     const walk = (node) => {
