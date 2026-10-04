@@ -697,7 +697,9 @@ func (s *SwitchService) pollMacTable(ctx context.Context, sw *domain.Switch) {
 //     портам, и определить привязки по такой таблице невозможно.
 func (s *SwitchService) mapMacEntries(sw *domain.Switch, tbl *sscpoe.MacTable) ([]domain.SwitchMacEntry, domain.MacTableState, string) {
 	if tbl.Empty {
-		return nil, domain.MacTableOK, "таблица MAC пуста: устройства не обнаружены"
+		// Пояснения нет: пустая таблица — не ошибка, и дежурная фраза
+		// только занимала бы место рядом с переведённой подписью.
+		return nil, domain.MacTableOK, ""
 	}
 
 	// Одинаковая маска у всех записей означает, что поле не несёт
@@ -710,7 +712,7 @@ func (s *SwitchService) mapMacEntries(sw *domain.Switch, tbl *sscpoe.MacTable) (
 			entries = append(entries, domain.SwitchMacEntry{SwitchID: sw.ID, MAC: e.MAC})
 		}
 		return entries, domain.MacTableNoPorts,
-			"модель не сообщает порт для адреса: маска портов одинакова у всех записей, привязки задаются вручную"
+			domain.MacNoteUniformBitmap
 	}
 
 	entries := make([]domain.SwitchMacEntry, 0, len(tbl.Entries))
@@ -741,16 +743,17 @@ func (s *SwitchService) mapMacEntries(sw *domain.Switch, tbl *sscpoe.MacTable) (
 func describeMacTableError(err error) (domain.MacTableState, string) {
 	switch {
 	case errors.Is(err, sscpoe.ErrAuthRequired):
-		return domain.MacTableUnknown, "нужен пароль коммутатора для чтения таблицы MAC"
+		return domain.MacTableUnknown, domain.MacNoteAuthRequired
 	case errors.Is(err, sscpoe.ErrWrongPassword):
-		return domain.MacTableUnknown, "коммутатор отклонил пароль при чтении таблицы MAC"
+		return domain.MacTableUnknown, domain.MacNoteWrongPassword
 	case errors.Is(err, sscpoe.ErrTimeout):
 		// Модель не понимает команду и просто молчит. Отличить это от
 		// недоступности можно только потому, что запрос состояния на том
 		// же устройстве прошёл успешно — сюда мы попадаем уже после него.
-		return domain.MacTableUnsupported, "модель не поддерживает чтение таблицы MAC"
+		return domain.MacTableUnsupported, domain.MacNoteUnsupported
 	default:
-		return domain.MacTableUnknown, "не удалось прочитать таблицу MAC: " + err.Error()
+		log.Warn().Err(err).Msg("не удалось прочитать таблицу MAC")
+		return domain.MacTableUnknown, domain.MacNoteReadFailed
 	}
 }
 
@@ -826,26 +829,34 @@ func (s *SwitchService) needsLogin(sw *domain.Switch) bool {
 	return sw.Password != ""
 }
 
-// describeSwitchError переводит ошибку протокола в текст для оператора.
+// describeSwitchError переводит ошибку протокола в код для оператора.
 //
-// Общий текст «офлайн» бесполезен: за ним скрываются разные причины с
-// разными действиями. Таймаут означает, что коммутатор выключен или не
-// доступен по сети, отказ устройства — что оно на связи, но команду не
-// принимает, а требование пароля — что устройство работает, но закрыто.
+// Общее «офлайн» бесполезно: за ним скрываются разные причины с разными
+// действиями. Таймаут означает, что коммутатор выключен или не доступен по
+// сети, отказ устройства — что оно на связи, но команду не принимает, а
+// требование пароля — что устройство работает, но закрыто.
+//
+// Отдаётся код, а не фраза: подпись ставит интерфейс, и один и тот же
+// список должен читаться на языке оператора.
 func describeSwitchError(err error) string {
 	switch {
 	case errors.Is(err, sscpoe.ErrTimeout):
-		return "нет ответа: коммутатор выключен или недоступен по сети"
+		return domain.SwitchErrTimeout
 	case errors.Is(err, sscpoe.ErrNoRoute):
-		return "нет маршрута до коммутатора: проверьте адрес и подсеть"
+		return domain.SwitchErrNoRoute
 	case errors.Is(err, sscpoe.ErrWrongPassword):
-		return "коммутатор отклонил пароль: проверьте его в настройках"
+		return domain.SwitchErrWrongPassword
 	case errors.Is(err, sscpoe.ErrAuthRequired):
-		return "коммутатор требует пароль: задайте его в настройках"
+		return domain.SwitchErrAuthRequired
 	case errors.Is(err, sscpoe.ErrDeviceCode):
-		return "устройство вернуло ошибку: " + err.Error()
+		// Ответ устройства уходит в журнал сервера, а не в интерфейс: там
+		// он был бы подробностью на языке прошивки, которую оператор всё
+		// равно не сможет прочитать.
+		log.Warn().Err(err).Msg("коммутатор вернул ошибку на команду")
+		return domain.SwitchErrDevice
 	default:
-		return err.Error()
+		log.Warn().Err(err).Msg("не удалось связаться с коммутатором")
+		return domain.SwitchErrOther
 	}
 }
 

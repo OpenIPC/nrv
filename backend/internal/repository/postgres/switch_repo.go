@@ -87,14 +87,14 @@ func fillPowerControl(p *domain.SwitchPort) {
 	switch {
 	case !p.PoeCapable:
 		p.CanControlPower = false
-		p.PowerControlNote = "порт не поддерживает питание PoE"
+		p.PowerControlNote = domain.PowerNoteNoPoe
 	case p.IsUplink:
 		// Запрет на выключение транзитного порта — не перестраховка:
 		// через него идёт канал связи с сервером, и сняв питание, мы
 		// потеряем управление всем коммутатором, включая возможность
 		// включить питание обратно.
 		p.CanControlPower = false
-		p.PowerControlNote = "транзитный порт: отключение лишит связи весь коммутатор"
+		p.PowerControlNote = domain.PowerNoteUplink
 	default:
 		p.CanControlPower = true
 	}

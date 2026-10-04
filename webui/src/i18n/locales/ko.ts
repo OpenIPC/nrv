@@ -204,6 +204,22 @@ export default {
     powerOnTitle: '전원 켜기',
     powerCycleTitle: '전원 재부팅: 끊었다가 다시 공급',
     powerControlUnavailable: '제어할 수 없음',
+    powerNoteNoPoe: '이 포트는 PoE 전원을 지원하지 않습니다',
+    powerNoteUplink: '업링크 포트: 전원을 끊으면 스위치 전체가 연결을 잃습니다',
+
+    errTimeout: '응답 없음: 스위치가 꺼져 있거나 네트워크에서 닿지 않습니다',
+    errNoRoute: '스위치로 가는 경로가 없습니다: 주소와 서브넷을 확인하십시오',
+    errWrongPassword: '스위치가 비밀번호를 거부했습니다: 설정에서 확인하십시오',
+    errAuthRequired: '스위치가 비밀번호를 요구합니다: 설정에서 입력하십시오',
+    errDeviceError: '장치가 명령에 오류를 반환했습니다',
+    errOther: '스위치와 통신하지 못했습니다',
+
+    macNoteUniformBitmap:
+      '이 모델은 주소의 포트를 알려주지 않습니다: 모든 레코드의 포트 마스크가 같아서 바인딩은 직접 지정해야 합니다',
+    macNoteAuthRequired: 'MAC 테이블을 읽으려면 스위치 비밀번호가 필요합니다',
+    macNoteWrongPassword: 'MAC 테이블을 읽는 중 스위치가 비밀번호를 거부했습니다',
+    macNoteUnsupported: '이 모델은 MAC 테이블을 읽지 못합니다',
+    macNoteReadFailed: 'MAC 테이블을 읽지 못했습니다',
 
     macTitle: '포트에 연결된 장치',
     macUnsupported: '이 모델은 MAC 표를 읽지 못합니다.',

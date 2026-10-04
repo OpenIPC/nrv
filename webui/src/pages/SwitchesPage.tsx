@@ -214,6 +214,48 @@ const PORT_ACTION_TITLE_KEYS: Record<PortAction, string> = {
   extend_off: 'switchesPage.actionExtendOff',
 }
 
+/**
+ * Подписи к коду причины, по которой коммутатор недоступен.
+ *
+ * Незнакомый код показываем как есть: в базе остались записи со старыми
+ * русскими фразами, и потерять их нельзя — по ним разбирают случаи,
+ * случившиеся раньше.
+ */
+const SWITCH_ERROR_KEYS: Record<string, string> = {
+  timeout: 'switchesPage.errTimeout',
+  no_route: 'switchesPage.errNoRoute',
+  wrong_password: 'switchesPage.errWrongPassword',
+  auth_required: 'switchesPage.errAuthRequired',
+  device_error: 'switchesPage.errDeviceError',
+  error: 'switchesPage.errOther',
+}
+
+/** Коды причин, по которым питанием порта управлять нельзя. */
+const POWER_NOTE_KEYS: Record<string, string> = {
+  no_poe: 'switchesPage.powerNoteNoPoe',
+  uplink: 'switchesPage.powerNoteUplink',
+}
+
+/** Коды пояснений к состоянию таблицы MAC. */
+const MAC_NOTE_KEYS: Record<string, string> = {
+  uniform_bitmap: 'switchesPage.macNoteUniformBitmap',
+  auth_required: 'switchesPage.macNoteAuthRequired',
+  wrong_password: 'switchesPage.macNoteWrongPassword',
+  unsupported: 'switchesPage.macNoteUnsupported',
+  read_failed: 'switchesPage.macNoteReadFailed',
+}
+
+/** Подпись к коду из словаря; незнакомый код возвращается как есть. */
+function codeText(
+  t: (key: string) => string,
+  keys: Record<string, string>,
+  code: string,
+): string {
+  if (!code) return ''
+  const key = keys[code]
+  return key ? t(key) : code
+}
+
 function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
   device: SwitchDevice
   onRefresh: () => void
@@ -318,7 +360,7 @@ function SwitchDetail({ device, onRefresh, onOpenSettings, onDeleted }: {
         {!current.online && current.last_error && (
           <div style={warningBoxStyle}>
             <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-            <span>{current.last_error}</span>
+            <span>{codeText(t, SWITCH_ERROR_KEYS, current.last_error)}</span>
           </div>
         )}
 
@@ -546,7 +588,9 @@ function PortRow({ port, busy, onAction }: {
           // Неактивная кнопка без объяснения заставляет искать причину
           // наугад, поэтому показываем текст причины.
           <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-            {port.power_control_note || t('switchesPage.powerControlUnavailable')}
+            {port.power_control_note
+              ? codeText(t, POWER_NOTE_KEYS, port.power_control_note)
+              : t('switchesPage.powerControlUnavailable')}
           </span>
         )}
       </td>
@@ -619,7 +663,7 @@ function MacTableCard({ device, onBound }: {
       <div className="card" style={{ marginTop: 16 }}>
         <h3 style={{ margin: '0 0 8px', fontSize: 15 }}>{t('switchesPage.macTitle')}</h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0 }}>
-          {device.mac_table_note || t('switchesPage.macUnsupported')}{' '}
+          {t('switchesPage.macUnsupported')}{' '}
           {t('switchesPage.macUnsupportedTail')}
         </p>
       </div>
@@ -646,7 +690,7 @@ function MacTableCard({ device, onBound }: {
         <div style={warnBoxStyle}>
           <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
           <span>
-            {device.mac_table_note}. {t('switchesPage.macNoPortsTail')}
+            {codeText(t, MAC_NOTE_KEYS, device.mac_table_note)}. {t('switchesPage.macNoPortsTail')}
           </span>
         </div>
       )}

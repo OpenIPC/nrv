@@ -49,8 +49,12 @@ type Switch struct {
 	Online      bool `json:"online"`
 	// LastSeenAt — когда коммутатор в последний раз ответил.
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
-	// LastError — текст последней ошибки связи. Пусто, если связь есть.
+	// LastError — код последней ошибки связи. Пусто, если связь есть.
 	// Показывается оператору вместо общего «офлайн».
+	//
+	// Код, а не готовая фраза: подпись ставит интерфейс на языке
+	// оператора. Незнакомый код показывается как есть — в базе остались
+	// записи со старыми русскими текстами.
 	LastError string `json:"last_error"`
 
 	// MacTableState — умеет ли модель сообщать, какое устройство на каком
@@ -61,8 +65,9 @@ type Switch struct {
 	// автоматически, где-то их задают руками, а где-то автоматика вообще
 	// невозможна.
 	MacTableState MacTableState `json:"mac_table_state"`
-	// MacTableNote — пояснение к состоянию словами. Показывается вместо
-	// того, чтобы оператор гадал, почему кнопка неактивна.
+	// MacTableNote — код пояснения к состоянию. Подпись ставит интерфейс:
+	// причина одна на все языки, а собранная здесь фраза показывалась бы
+	// китайцу по-русски.
 	MacTableNote string `json:"mac_table_note"`
 
 	// Питание и температура, разобранные из Detail. Отдаются отдельными
@@ -252,6 +257,48 @@ const (
 	MacTableNoPorts MacTableState = "no_ports"
 	// MacTableUnsupported — модель не понимает команду таблицы MAC.
 	MacTableUnsupported MacTableState = "unsupported"
+)
+
+// Коды причин, по которым питанием порта управлять нельзя.
+//
+// Интерфейс переводит их сам: сам текст собирается из двух условий, и
+// готовую фразу пришлось бы держать на четырёх языках в трёх местах.
+const (
+	// PowerNoteNoPoe — порт без поддержки питания PoE.
+	PowerNoteNoPoe = "no_poe"
+	// PowerNoteUplink — транзитный порт, отключение лишит связи весь
+	// коммутатор.
+	PowerNoteUplink = "uplink"
+)
+
+// Коды пояснений к состоянию таблицы MAC.
+const (
+	// MacNoteUniformBitmap — маска портов одинакова у всех записей, порт
+	// по ней не определить.
+	MacNoteUniformBitmap = "uniform_bitmap"
+	// MacNoteAuthRequired — для чтения таблицы нужен пароль коммутатора.
+	MacNoteAuthRequired = "auth_required"
+	// MacNoteWrongPassword — коммутатор отклонил пароль.
+	MacNoteWrongPassword = "wrong_password"
+	// MacNoteUnsupported — модель молчит на команду таблицы MAC.
+	MacNoteUnsupported = "unsupported"
+	// MacNoteReadFailed — прочая ошибка чтения.
+	MacNoteReadFailed = "read_failed"
+)
+
+// Коды последней ошибки связи с коммутатором.
+const (
+	SwitchErrTimeout       = "timeout"
+	SwitchErrNoRoute       = "no_route"
+	SwitchErrWrongPassword = "wrong_password"
+	SwitchErrAuthRequired  = "auth_required"
+	// SwitchErrDevice — устройство вернуло ошибку на команду. Ответ
+	// устройства остаётся в журнале сервера: в интерфейсе он был бы
+	// технической подробностью на языке прошивки.
+	SwitchErrDevice = "device_error"
+	// SwitchErrOther — всё остальное: показываем общий код, подробность в
+	// журнале.
+	SwitchErrOther = "error"
 )
 
 // SwitchMacEntry — запись таблицы MAC-адресов коммутатора.

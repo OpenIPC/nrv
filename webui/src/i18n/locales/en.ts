@@ -203,6 +203,22 @@ export default {
     powerOnTitle: 'Turn power on',
     powerCycleTitle: 'Power cycle: cut and restore power',
     powerControlUnavailable: 'control unavailable',
+    powerNoteNoPoe: 'the port does not support PoE power',
+    powerNoteUplink: 'uplink port: powering it down cuts the whole switch off',
+
+    errTimeout: 'no response: the switch is off or unreachable over the network',
+    errNoRoute: 'no route to the switch: check the address and subnet',
+    errWrongPassword: 'the switch rejected the password: check it in the settings',
+    errAuthRequired: 'the switch requires a password: set it in the settings',
+    errDeviceError: 'the device returned an error for the command',
+    errOther: 'no connection to the switch',
+
+    macNoteUniformBitmap:
+      'the model does not report a port for the address: the port mask is the same for every entry, bindings are set manually',
+    macNoteAuthRequired: 'the switch password is required to read the MAC table',
+    macNoteWrongPassword: 'the switch rejected the password while reading the MAC table',
+    macNoteUnsupported: 'the model does not support reading the MAC table',
+    macNoteReadFailed: 'could not read the MAC table',
 
     macTitle: 'Devices on ports',
     macUnsupported: 'This model cannot read the MAC table.',

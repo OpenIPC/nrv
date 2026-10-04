@@ -200,6 +200,22 @@ export default {
     powerOnTitle: '开启供电',
     powerCycleTitle: '重启供电：断电后再送电',
     powerControlUnavailable: '不支持控制',
+    powerNoteNoPoe: '该端口不支持 PoE 供电',
+    powerNoteUplink: '上联端口：断电会使整个交换机失去连接',
+
+    errTimeout: '无响应：交换机已断电或网络不可达',
+    errNoRoute: '无法到达交换机：请检查地址和子网',
+    errWrongPassword: '交换机拒绝了密码：请在设置中检查',
+    errAuthRequired: '交换机需要密码：请在设置中填写',
+    errDeviceError: '设备对命令返回了错误',
+    errOther: '无法与交换机通信',
+
+    macNoteUniformBitmap:
+      '该型号不报告地址所属端口：所有记录的端口掩码相同，绑定需手动设置',
+    macNoteAuthRequired: '读取 MAC 表需要交换机密码',
+    macNoteWrongPassword: '读取 MAC 表时交换机拒绝了密码',
+    macNoteUnsupported: '该型号无法读取 MAC 表',
+    macNoteReadFailed: '未能读取 MAC 表',
 
     macTitle: '端口上的设备',
     macUnsupported: '该型号无法读取 MAC 表。',
