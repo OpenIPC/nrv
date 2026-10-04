@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { audioAPI, type AudioEvent } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import {
@@ -28,20 +29,28 @@ const CLASS_ICONS: Record<string, React.ReactNode> = {
 /** Классы, которые считаются тревожными — подсвечиваем красным. */
 const ALERT_CLASSES = new Set(['gunshot', 'explosion', 'scream', 'glass_break', 'shout', 'alarm'])
 
-const CLASS_LABELS: Record<string, string> = {
-  speech: 'Речь',
-  shout: 'Крик',
-  scream: 'Вопль',
-  gunshot: 'Выстрел',
-  explosion: 'Взрыв',
-  glass_break: 'Разбитое стекло',
-  dog: 'Лай собаки',
-  car_alarm: 'Автосигнализация',
-  alarm: 'Сирена',
-  music: 'Музыка',
+/**
+ * Подписи к классам звуков.
+ *
+ * Класс приходит с сервера кодом (gunshot, glass_break), подпись ставит
+ * интерфейс: рядом с кодом русская строка оказалась бы русской на всех
+ * языках сразу.
+ */
+const CLASS_KEYS: Record<string, string> = {
+  speech: 'audioEventsPage.classSpeech',
+  shout: 'audioEventsPage.classShout',
+  scream: 'audioEventsPage.classScream',
+  gunshot: 'audioEventsPage.classGunshot',
+  explosion: 'audioEventsPage.classExplosion',
+  glass_break: 'audioEventsPage.classGlassBreak',
+  dog: 'audioEventsPage.classDog',
+  car_alarm: 'audioEventsPage.classCarAlarm',
+  alarm: 'audioEventsPage.classAlarm',
+  music: 'audioEventsPage.classMusic',
 }
 
 export default function AudioEventsPage() {
+  const { t } = useTranslation()
   const [page, setPage] = useState(1)
   const [classFilter, setClassFilter] = useState('')
 
@@ -62,27 +71,27 @@ export default function AudioEventsPage() {
     <div>
       <div className="page-header">
         <div>
-          <h1>События звука</h1>
+          <h1>{t('audioEventsPage.title')}</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-            Звуки, распознанные YAMNet: выстрелы, крики, разбитое стекло и другие
+            {t('audioEventsPage.subtitle')}
           </p>
         </div>
         <button className="btn btn-outline btn-sm" onClick={() => refetch()}>
           <RefreshCw size={16} />
-          Обновить
+          {t('audioEventsPage.refresh')}
         </button>
       </div>
 
       {/* Фильтр по классу */}
       <div className="card" style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Класс:</span>
+        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('audioEventsPage.classLabel')}</span>
         <button
           className={`btn btn-sm ${classFilter === '' ? 'btn-primary' : 'btn-outline'}`}
           onClick={() => { setClassFilter(''); setPage(1) }}
         >
-          Все
+          {t('audioEventsPage.all')}
         </button>
-        {Object.entries(CLASS_LABELS).map(([value, label]) => (
+        {Object.entries(CLASS_KEYS).map(([value, key]) => (
           <button
             key={value}
             className={`btn btn-sm ${classFilter === value ? 'btn-primary' : 'btn-outline'}`}
@@ -90,7 +99,7 @@ export default function AudioEventsPage() {
             style={{ display: 'flex', alignItems: 'center', gap: 5 }}
           >
             {CLASS_ICONS[value]}
-            {label}
+            {t(key)}
           </button>
         ))}
       </div>
@@ -102,30 +111,30 @@ export default function AudioEventsPage() {
           </div>
         ) : error ? (
           <div style={{ textAlign: 'center', padding: 32, color: 'var(--danger)' }}>
-            Не удалось загрузить события: {error}
+            {t('audioEventsPage.loadFailed', { error })}
           </div>
         ) : events.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
             <Volume2 size={40} style={{ opacity: 0.2, marginBottom: 12 }} />
-            <p>Звуковых событий нет</p>
+            <p>{t('audioEventsPage.empty')}</p>
             <p style={{ fontSize: 13, marginTop: 6 }}>
-              Включите «Распознавать звуковые события» во вкладке «Звук» карточки камеры
+              {t('audioEventsPage.emptyHint')}
             </p>
           </div>
         ) : (
           <>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-              Всего событий: {total}
+              {t('audioEventsPage.total', { count: total })}
             </div>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Время</th>
-                    <th>Класс</th>
-                    <th>Уверенность</th>
-                    <th>Громкость</th>
-                    <th>Длительность</th>
+                    <th>{t('audioEventsPage.thTime')}</th>
+                    <th>{t('audioEventsPage.thClass')}</th>
+                    <th>{t('audioEventsPage.thConfidence')}</th>
+                    <th>{t('audioEventsPage.thLoudness')}</th>
+                    <th>{t('audioEventsPage.thDuration')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -134,7 +143,7 @@ export default function AudioEventsPage() {
                     return (
                       <tr key={ev.id}>
                         <td style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
-                          {new Date(ev.timestamp).toLocaleString('ru')}
+                          {new Date(ev.timestamp).toLocaleString()}
                         </td>
                         <td>
                           <span style={{
@@ -143,7 +152,7 @@ export default function AudioEventsPage() {
                             fontWeight: alert ? 600 : undefined,
                           }}>
                             {CLASS_ICONS[ev.event_class] || <Volume2 size={16} />}
-                            {CLASS_LABELS[ev.event_class] || ev.event_class}
+                            {CLASS_KEYS[ev.event_class] ? t(CLASS_KEYS[ev.event_class]) : ev.event_class}
                           </span>
                         </td>
                         <td>
@@ -166,10 +175,10 @@ export default function AudioEventsPage() {
                           </span>
                         </td>
                         <td style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                          {ev.loudness_db != null ? `${ev.loudness_db.toFixed(0)} дБ` : '—'}
+                          {ev.loudness_db != null ? t('audioEventsPage.decibels', { value: ev.loudness_db.toFixed(0) }) : '—'}
                         </td>
                         <td style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                          {ev.duration_sec != null ? `${ev.duration_sec.toFixed(1)} с` : '—'}
+                          {ev.duration_sec != null ? t('audioEventsPage.seconds', { value: ev.duration_sec.toFixed(1) }) : '—'}
                         </td>
                       </tr>
                     )
@@ -183,14 +192,14 @@ export default function AudioEventsPage() {
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'center', marginTop: 16 }}>
                 <button className="btn btn-outline btn-sm" disabled={page <= 1}
                   onClick={() => setPage((p) => p - 1)}>
-                  Назад
+                  {t('audioEventsPage.back')}
                 </button>
                 <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                  Страница {page} из {pages}
+                  {t('audioEventsPage.pageOf', { page, pages })}
                 </span>
                 <button className="btn btn-outline btn-sm" disabled={page >= pages}
                   onClick={() => setPage((p) => p + 1)}>
-                  Вперёд
+                  {t('audioEventsPage.forward')}
                 </button>
               </div>
             )}
