@@ -68,8 +68,8 @@ type CameraHealth struct {
 	IP         string    `json:"ip"`
 	// Supported — камера ответила на API OpenIPC. Для камер других
 	// вендоров мониторинг недоступен, и это не ошибка.
-	Supported bool   `json:"supported"`
-	Online    bool   `json:"online"`
+	Supported bool `json:"supported"`
+	Online    bool `json:"online"`
 	// Error — техническая подробность: адрес, код ответа, текст обрыва
 	// соединения. Показывается как есть, потому что это данные от
 	// устройства, а не подпись интерфейса.

@@ -448,8 +448,12 @@ func (s *ACSService) UpdateController(ctx context.Context, id uuid.UUID, req dom
 	if ctrl.CaptureEvents == nil {
 		ctrl.CaptureEvents = []string{}
 	}
+	// Коды событий задаёт интерфейс, но проверяем их и здесь: неизвестный
+	// код не совпадёт ни с одним событием контроллера, и съёмка молча не
+	// заработает — оператор будет ждать снимков, которых не будет.
 	for _, e := range ctrl.CaptureEvents {
-			if !isCaptureEvent(e) {
+		if !isCaptureEvent(e) {
+			return nil, fmt.Errorf("неизвестное событие для съёмки: %s", e)
 		}
 	}
 
