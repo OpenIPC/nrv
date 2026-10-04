@@ -915,9 +915,14 @@ type DiscoveredCamera struct {
 	// Отличается от Vendor тем, что это человекочитаемая строка:
 	// код нужен для ветвлений, имя — для списка найденных устройств.
 	VendorName string `json:"vendor_name,omitempty"`
-	// HowFound объясняет, как определён производитель: по ONVIF,
-	// по MAC-префиксу, по заголовкам HTTP. Это важно для разбора спорных
-	// случаев: оператор видит, на чём основан вывод, а не верит вслепую.
+	// HowFound — код того, как определён производитель: onvif, mac,
+	// http_headers, model, majestic, isapi, cgi.
+	//
+	// Именно код: интерфейс переводится на четыре языка, и русская
+	// строка из ответа осталась бы русской для всех. Подпись ставит
+	// интерфейс (см. webui/src/pages/ScannerPage.tsx).
+	// Это важно для разбора спорных случаев: оператор видит, на чём
+	// основан вывод, а не верит вслепую.
 	HowFound   string `json:"how_found,omitempty"`
 	MainStream string `json:"main_stream"`
 	SubStream  string `json:"sub_stream"`
@@ -949,8 +954,21 @@ type ScanResult struct {
 	// «камер нет» от «сеть недоступна» было невозможно — оператор
 	// проверял настройки камер, а дело было в маршрутизации.
 	Reachable bool `json:"reachable"`
-	// Note — объяснение, когда камер не нашлось, но должна была быть сеть.
-	Note string `json:"note,omitempty"`
+	// Notes — объяснения, когда камер не нашлось, но сеть должна была быть.
+	//
+	// Код и подстановки вместо готового текста: причин несколько
+	// (нет маршрута, не отвечает ни один адрес, ошибка одной из
+	// нескольких подсетей), и текст каждой должен быть на языке
+	// оператора. Для случаев, где понятной подписи не сложить, есть
+	// Detail — техническая подробность.
+	Notes []ScanNote `json:"notes,omitempty"`
+}
+
+// ScanNote — пояснение к результату сканирования.
+type ScanNote struct {
+	Code   string            `json:"code"`
+	Params map[string]string `json:"params,omitempty"`
+	Detail string            `json:"detail,omitempty"`
 }
 
 type CreateACSControllerRequest struct {

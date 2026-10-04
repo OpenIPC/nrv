@@ -1,10 +1,12 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { scannerAPI, camerasAPI, type DiscoveredCamera, type ScanResult, type StreamProbeResult } from '../api/client'
 import { useToast } from '../context/ToastContext'
 import { Search, Wifi, Plus, Check, Loader2, Camera, PlugZap, Volume2, VolumeX, XCircle } from 'lucide-react'
 
 export default function ScannerPage() {
   const toast = useToast()
+  const { t } = useTranslation()
   const [subnet, setSubnet] = useState('192.168.1.0/24')
   const [username, setUsername] = useState('root')
   const [password, setPassword] = useState('')
@@ -50,12 +52,12 @@ export default function ScannerPage() {
         // Пустой результат — не всегда «камер нет». Сервер объясняет
         // причину в примечании, и повторять общий совет незачем.
         if (res.data.reachable === false) {
-          toast.error('Подсеть недоступна с сервера — нужен маршрут')
+          toast.error(t('scannerPage.subnetUnreachable'))
         } else {
-          toast.info('Устройства не найдены — проверьте подсеть и учётные данные')
+          toast.info(t('scannerPage.nothingFound'))
         }
       } else {
-        toast.success(`Найдено устройств: ${res.data.found}`)
+        toast.success(t('scannerPage.found', { count: res.data.found }))
       }
     } catch (err: any) {
       // axios не возвращает response, если запрос отменён или истёк таймаут —
@@ -63,8 +65,8 @@ export default function ScannerPage() {
       const message =
         err.response?.data?.error ||
         (err.code === 'ECONNABORTED'
-          ? 'Сканирование не завершилось за отведённое время. Сузьте подсеть, например 192.168.1.0/28'
-          : 'Ошибка сканирования')
+          ? t('scannerPage.timeout')
+          : t('scannerPage.scanFailed'))
       toast.error(message)
     } finally {
       clearInterval(ticker)
@@ -92,7 +94,7 @@ export default function ScannerPage() {
     } catch {
       setProbes((prev) => ({
         ...prev,
-        [cam.ip]: { ok: false, message: 'не удалось проверить поток', has_audio: false },
+        [cam.ip]: { ok: false, message: t('scannerPage.probeFailed'), has_audio: false },
       }))
     } finally {
       setProbing((s) => {
@@ -107,7 +109,7 @@ export default function ScannerPage() {
     setAdding((s) => new Set(s).add(cam.ip))
     try {
       await camerasAPI.create({
-        name: `Камера ${cam.ip}`,
+        name: t('scannerPage.cameraName', { ip: cam.ip }),
         main_stream: cam.main_stream,
         sub_stream: cam.sub_stream,
         ip: cam.ip,
@@ -121,9 +123,9 @@ export default function ScannerPage() {
         password,
       })
       setAdded((s) => new Set(s).add(cam.ip))
-      toast.success(`Камера ${cam.ip} добавлена`)
+      toast.success(t('scannerPage.added', { ip: cam.ip }))
     } catch (err: any) {
-      toast.error(`Ошибка: ${err.response?.data?.error || err.message}`)
+      toast.error(t('scannerPage.addError', { error: err.response?.data?.error || err.message }))
     } finally {
       setAdding((s) => {
         const ns = new Set(s)
@@ -133,12 +135,26 @@ export default function ScannerPage() {
     }
   }
 
+  /**
+   * Пояснения к пустому результату.
+   *
+   * Сервер отдаёт коды (subnet_unreachable, no_hosts, subnet_error) и
+   * подстановки; подпись ставим здесь. Для ошибки одной из нескольких
+   * подсетей показываем и техническую подробность: понятной фразы для
+   * неё не сложить, а причина нужна.
+   */
+  const notes: string[] = (result?.notes || []).map((n) => {
+    const key = NOTE_KEYS[n.code]
+    const text = key ? t(key, n.params) : n.code
+    return n.detail ? `${text}: ${n.detail}` : text
+  })
+
   return (
     <div>
       <div className="page-header">
         <div>
-          <h1>Сканер камер</h1>
-          <p>Поиск камер в локальной сети и в подключённых подсетях — OpenIPC, Hikvision, Dahua, Vivotek, ONVIF</p>
+          <h1>{t('scannerPage.title')}</h1>
+          <p>{t('scannerPage.subtitle')}</p>
         </div>
       </div>
 
@@ -147,7 +163,7 @@ export default function ScannerPage() {
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 180 }}>
             <label style={{ display: 'block', marginBottom: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
-              Подсеть или несколько через запятую
+              {t('scannerPage.subnetLabel')}
             </label>
             <input
               value={subnet}
@@ -158,18 +174,18 @@ export default function ScannerPage() {
                 скана: без маршрута сервер до них не дойдёт, и оператор
                 потратит время на поиск причины в другом месте. */}
             <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
-              Чужие подсети сканируются только при наличии маршрута у сервера.
+              {t('scannerPage.subnetHint')}
             </div>
           </div>
           <div style={{ width: 140 }}>
             <label style={{ display: 'block', marginBottom: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
-              Логин
+              {t('scannerPage.login')}
             </label>
             <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="root" />
           </div>
           <div style={{ width: 160 }}>
             <label style={{ display: 'block', marginBottom: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
-              Пароль
+              {t('scannerPage.password')}
             </label>
             <input
               type="password"
@@ -180,9 +196,9 @@ export default function ScannerPage() {
           </div>
           <button className="btn btn-primary" onClick={handleScan} disabled={scanning}>
             {scanning ? (
-              <><Loader2 size={16} style={{ animation: 'spin 0.8s linear infinite' }} /> Сканирую...</>
+              <><Loader2 size={16} style={{ animation: 'spin 0.8s linear infinite' }} /> {t('scannerPage.scanning')}</>
             ) : (
-              <><Search size={16} /> Сканировать</>
+              <><Search size={16} /> {t('scannerPage.scan')}</>
             )}
           </button>
         </div>
@@ -193,12 +209,10 @@ export default function ScannerPage() {
         <div className="card" style={{ textAlign: 'center', padding: 40 }}>
           <Loader2 size={32} style={{ animation: 'spin 0.8s linear infinite', color: 'var(--accent)', marginBottom: 12 }} />
           <p style={{ color: 'var(--text-secondary)', marginBottom: 8 }}>
-            Сканирование сети {subnet} — {scanSeconds} с
+            {t('scannerPage.scanningSubnet', { subnet, seconds: scanSeconds })}
           </p>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13, maxWidth: 480, margin: '0 auto' }}>
-            Сначала проверяются все адреса подсети, затем у отвечающих
-            опрашиваются OpenIPC, Hikvision, Dahua и ONVIF. Это занимает
-            до минуты. Не закрывайте страницу.
+            {t('scannerPage.scanningHint')}
           </p>
         </div>
       )}
@@ -206,16 +220,15 @@ export default function ScannerPage() {
       {result && !scanning && (
         <div className="card" style={{ padding: 0 }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
-            <span style={{ fontWeight: 600 }}>Результаты:</span>{' '}
-            <span style={{ color: 'var(--success)' }}>{result.found} камер</span> найдено из{' '}
-            {result.total} проверенных IP
+            <span style={{ fontWeight: 600 }}>{t('scannerPage.results')}</span>{' '}
+            <span style={{ color: 'var(--success)' }}>{t('scannerPage.foundCameras', { count: result.found })}</span>{' '}
+            {t('scannerPage.outOfIps', { count: result.total })}
             {/* Сколько из найденных уже заведено: без этого числа
                 оператор считает список новыми устройствами и начинает
                 добавлять то, что уже работает. */}
             {result.added > 0 && (
               <>
-                , из них{' '}
-                <span style={{ color: 'var(--warning)' }}>{result.added} уже добавлено</span>
+                , <span style={{ color: 'var(--warning)' }}>{t('scannerPage.alreadyAddedCount', { count: result.added })}</span>
               </>
             )}
           </div>
@@ -229,24 +242,24 @@ export default function ScannerPage() {
                 <>
                   <XCircle size={48} style={{ marginBottom: 16, color: 'var(--danger)', opacity: 0.7 }} />
                   <p style={{ color: 'var(--danger)', fontSize: 15 }}>
-                    Подсеть недоступна с сервера
+                    {t('scannerPage.unreachableTitle')}
                   </p>
                   <p style={{ fontSize: 13, marginTop: 8, maxWidth: 560, margin: '8px auto 0' }}>
-                    {result.note ||
-                      `Ни один адрес в ${subnet} не отвечает. Сканирование чужой подсети возможно только при наличии маршрута: проверьте, что у сервера есть путь в эту сеть.`}
+                    {notes.length > 0
+                      ? notes
+                      : t('scannerPage.unreachableDefault', { subnet })}
                   </p>
                   <p style={{ fontSize: 12, marginTop: 12, opacity: 0.8 }}>
-                    Маршрут добавляется на роутере или на сервере командой{' '}
-                    <code style={{ fontFamily: 'monospace' }}>ip route add &lt;сеть&gt; via &lt;шлюз&gt;</code>
+                    {t('scannerPage.routeHint')}{' '}
+                    <code style={{ fontFamily: 'monospace' }}>{t('scannerPage.routeCommand')}</code>
                   </p>
                 </>
               ) : (
                 <>
                   <Wifi size={48} style={{ marginBottom: 16, opacity: 0.3 }} />
-                  <p>Устройства не найдены в подсети {subnet}</p>
+                  <p>{t('scannerPage.emptyTitle', { subnet })}</p>
                   <p style={{ fontSize: 13, marginTop: 8, maxWidth: 560, margin: '8px auto 0' }}>
-                    {result.note ||
-                      'Проверьте подсеть и учётные данные. Если камеры в другой подсети, укажите её — поддерживается любая маска, включая /16.'}
+                    {notes.length > 0 ? notes : t('scannerPage.emptyDefault')}
                   </p>
                 </>
               )}
@@ -257,11 +270,11 @@ export default function ScannerPage() {
                 <thead>
                   <tr>
                     <th>IP</th>
-                    <th>Производитель</th>
-                    <th>Модель</th>
-                    <th>Прошивка</th>
+                    <th>{t('scannerPage.thVendor')}</th>
+                    <th>{t('scannerPage.thModel')}</th>
+                    <th>{t('scannerPage.thFirmware')}</th>
                     <th>MAC</th>
-                    <th>Проверка</th>
+                    <th>{t('scannerPage.thCheck')}</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -282,11 +295,11 @@ export default function ScannerPage() {
                             подписью: для спорных случаев важно понять,
                             на чём основан вывод, а не верить вслепую. */}
                         <span className={`badge ${vendorBadgeClass(cam.vendor)}`}>
-                          {vendorLabel(cam.vendor, cam.vendor_name)}
+                          {vendorLabel(cam.vendor, cam.vendor_name, t('scannerPage.unknownVendor'))}
                         </span>
                         {cam.how_found && (
                           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                            {cam.how_found}
+                            {howFoundText(t, cam.how_found)}
                           </div>
                         )}
                       </td>
@@ -305,7 +318,7 @@ export default function ScannerPage() {
                             {probing.has(cam.ip)
                               ? <Loader2 size={13} className="spin" />
                               : <PlugZap size={13} />}
-                            {probing.has(cam.ip) ? 'Проверка...' : 'Проверить'}
+                            {probing.has(cam.ip) ? t('scannerPage.checking') : t('scannerPage.check')}
                           </button>
                         ) : probe.ok ? (
                           <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--success)' }}>
@@ -329,9 +342,9 @@ export default function ScannerPage() {
                             сверка в интерфейсе была бы неточной — она
                             видела бы только текущую страницу. */}
                         {cam.already_added ? (
-                          <span className="badge badge-online" title="Камера уже заведена в системе">
+                          <span className="badge badge-online" title={t('scannerPage.alreadyAdded')}>
                             <Check size={14} />
-                            Добавлена
+                            {t('scannerPage.addedBadge')}
                           </span>
                         ) : (
                           <button
@@ -344,7 +357,7 @@ export default function ScannerPage() {
                             ) : (
                               <Plus size={14} />
                             )}
-                            Добавить
+                            {t('scannerPage.add')}
                           </button>
                         )}
                       </td>
@@ -370,7 +383,7 @@ export default function ScannerPage() {
  * вида «xiongmai». Локальный разбор оставлен только для старых ответов
  * сервера, где поля vendor_name ещё нет.
  */
-function vendorLabel(vendor?: string, vendorName?: string): string {
+function vendorLabel(vendor: string | undefined, vendorName: string | undefined, unknown: string): string {
   if (vendorName) return vendorName
 
   switch (vendor) {
@@ -391,10 +404,41 @@ function vendorLabel(vendor?: string, vendorName?: string): string {
     case 'onvif':
       return 'ONVIF'
     case 'generic':
-      return 'Неизвестный'
+      return unknown
     default:
       return vendor || '—'
   }
+}
+
+/**
+ * Подписи к способу, которым опознан производитель.
+ *
+ * Код приходит с сервера, подпись ставит интерфейс. Незнакомый код
+ * показываем как есть: список способов может пополниться на сервере
+ * раньше, чем здесь появится подпись.
+ */
+const HOW_FOUND_KEYS: Record<string, string> = {
+  onvif: 'scannerPage.howOnvif',
+  model: 'scannerPage.howModel',
+  mac: 'scannerPage.howMac',
+  auth_header: 'scannerPage.howAuthHeader',
+  device_page: 'scannerPage.howDevicePage',
+  majestic: 'scannerPage.howMajestic',
+  isapi: 'scannerPage.howIsapi',
+  cgi: 'scannerPage.howCgi',
+  http_headers: 'scannerPage.howHttpHeaders',
+}
+
+/** Подписи к причинам, по которым камер не нашлось. */
+const NOTE_KEYS: Record<string, string> = {
+  subnet_unreachable: 'scannerPage.noteSubnetUnreachable',
+  no_hosts: 'scannerPage.noteNoHosts',
+  subnet_error: 'scannerPage.noteSubnetError',
+}
+
+function howFoundText(t: (key: string) => string, code: string): string {
+  const key = HOW_FOUND_KEYS[code]
+  return key ? t(key) : code
 }
 
 /**

@@ -199,16 +199,15 @@ func (s *CameraScanner) Scan(ctx context.Context, req domain.ScanRequest) (*doma
 		// «ничего не найдено» без пояснения отправляет оператора искать
 		// не там: чаще всего дело не в камерах, а в отсутствии маршрута.
 		if !result.Reachable {
-			result.Note = fmt.Sprintf(
-				"Подсеть %s недоступна с сервера: ни один адрес в ней не отвечает. "+
-					"Проверьте, что у сервера есть маршрут в эту сеть — без него сканирование "+
-					"невозможно, сколько бы камер там ни было.",
-				req.Subnet)
+			result.Notes = append(result.Notes, domain.ScanNote{
+				Code:   "subnet_unreachable",
+				Params: map[string]string{"subnet": req.Subnet},
+			})
 		} else {
-			result.Note = fmt.Sprintf(
-				"В подсети %s не отвечает ни один адрес. Если камеры там есть, "+
-					"проверьте, не блокирует ли их шлюз и включён ли на них ответ на ping.",
-				req.Subnet)
+			result.Notes = append(result.Notes, domain.ScanNote{
+				Code:   "no_hosts",
+				Params: map[string]string{"subnet": req.Subnet},
+			})
 		}
 		log.Info().Str("subnet", req.Subnet).Bool("reachable", result.Reachable).
 			Msg("scan complete: нет отвечающих адресов")
@@ -365,7 +364,7 @@ func localIPInSubnet(ipnet *net.IPNet) (bool, error) {
 // получить больше отказов от камер, а не более быстрый результат.
 func (s *CameraScanner) ScanMany(ctx context.Context, req domain.ScanRequest) (*domain.ScanResult, error) {
 	merged := &domain.ScanResult{Cameras: []domain.DiscoveredCamera{}}
-	var notes []string
+	var notes []domain.ScanNote
 	anyReachable := false
 
 	for _, subnet := range req.Subnets {
@@ -383,7 +382,11 @@ func (s *CameraScanner) ScanMany(ctx context.Context, req domain.ScanRequest) (*
 			// Одна непонятная сеть не должна отменять весь скан: остальные
 			// могут быть доступны и содержать камеры. Запоминаем причину
 			// и продолжаем — оператор увидит её в примечании.
-			notes = append(notes, fmt.Sprintf("%s — ошибка: %v", subnet, err))
+			notes = append(notes, domain.ScanNote{
+				Code:   "subnet_error",
+				Params: map[string]string{"subnet": subnet},
+				Detail: err.Error(),
+			})
 			continue
 		}
 
@@ -392,8 +395,8 @@ func (s *CameraScanner) ScanMany(ctx context.Context, req domain.ScanRequest) (*
 		if one.Reachable {
 			anyReachable = true
 		}
-		if one.Note != "" {
-			notes = append(notes, one.Note)
+		if len(one.Notes) > 0 {
+			notes = append(notes, one.Notes...)
 		}
 	}
 
@@ -404,7 +407,7 @@ func (s *CameraScanner) ScanMany(ctx context.Context, req domain.ScanRequest) (*
 	// камер после слияния стал другим.
 	s.markAlreadyAdded(ctx, merged)
 	merged.Reachable = anyReachable
-	merged.Note = strings.Join(notes, " ")
+	merged.Notes = notes
 
 	log.Info().Int("found", merged.Found).Int("subnets", len(req.Subnets)).
 		Msg("сканирование нескольких подсетей завершено")
@@ -699,7 +702,7 @@ func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint 
 				Msg("камера опознана по MAC-адресу")
 			cam := genericCamera(ip, vendor)
 			cam.VendorName = VendorName(vendor)
-			cam.HowFound = "по MAC-адресу"
+			cam.HowFound = "mac"
 			return cam
 		}
 
@@ -709,7 +712,7 @@ func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint 
 		cam := genericCamera(ip, vendor)
 		cam.VendorName = VendorName(vendor)
 		if vendor != "generic" {
-			cam.HowFound = "по заголовкам HTTP"
+			cam.HowFound = "http_headers"
 		}
 		return cam
 	}
@@ -894,17 +897,17 @@ func (s *CameraScanner) probeONVIF(ctx context.Context, ip, username, password s
 func (s *CameraScanner) resolveVendor(ctx context.Context, ip string, info deviceInfo) (string, string) {
 	// Производитель заполнен — этого достаточно.
 	if v := normalizeVendor(info.Manufacturer); v != "onvif" {
-		return v, "по ONVIF"
+		return v, "onvif"
 	}
 
 	// Производитель пуст или незнаком, но модель узнаваема.
 	if v := vendorByModel(info.Model); v != "" {
-		return v, "по модели устройства"
+		return v, "model"
 	}
 
 	// Пробуем MAC: он не зависит от прошивки.
 	if v := vendorByMAC(s.getMAC(ip)); v != "" {
-		return v, "по MAC-адресу"
+		return v, "mac"
 	}
 
 	// Последняя попытка — заголовки HTTP и текст страницы.
@@ -913,7 +916,7 @@ func (s *CameraScanner) resolveVendor(ctx context.Context, ip string, info devic
 
 	if header := s.fetchAuthHeader(detectCtx, ip); header != "" {
 		if v := vendorByRealm(header); v != "" {
-			return v, "по заголовку авторизации"
+			return v, "auth_header"
 		}
 	}
 
@@ -929,11 +932,11 @@ func (s *CameraScanner) resolveVendor(ctx context.Context, ip string, info devic
 	// Так вышло с камерой 192.168.1.83: страница «Net Video Browser»
 	// с кодировкой gb2312, но определялась она как ONVIF-совместимая.
 	if v := classifyLegacyDevice(page); v != "" {
-		return v, "по странице устройства"
+		return v, "device_page"
 	}
 
 	if v := classifyVendorPage(page); v != "" && v != "generic" {
-		return v, "по странице устройства"
+		return v, "device_page"
 	}
 
 	return "onvif", "только по ONVIF"
@@ -1373,7 +1376,7 @@ func (s *CameraScanner) probeMajestic(ctx context.Context, ip, username, passwor
 		IP:         ip,
 		Vendor:     "openipc",
 		VendorName: VendorName("openipc"),
-		HowFound:   "по API Majestic",
+		HowFound:   "majestic",
 		Online:     true,
 		MAC:        s.getMAC(ip),
 		Username:   username,
@@ -1463,7 +1466,7 @@ func (s *CameraScanner) probeHikvision(ctx context.Context, ip, username, passwo
 		IP:         ip,
 		Vendor:     "hikvision",
 		VendorName: VendorName("hikvision"),
-		HowFound:   "по ISAPI",
+		HowFound:   "isapi",
 		Model:      info.Model,
 		Firmware:   info.FirmwareVersion,
 		Online:     true,
@@ -1526,7 +1529,7 @@ func (s *CameraScanner) probeDahua(ctx context.Context, ip, username, password s
 		IP:         ip,
 		Vendor:     "dahua",
 		VendorName: VendorName("dahua"),
-		HowFound:   "по CGI API",
+		HowFound:   "cgi",
 		Model:      model,
 		Firmware:   strVal(magicBox, "firmwareVersion"),
 		MAC:        s.getMAC(ip),

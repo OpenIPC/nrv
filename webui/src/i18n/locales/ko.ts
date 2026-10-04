@@ -1706,4 +1706,70 @@ export default {
     system_gpu_label: '그래픽카드 문제',
     system_gpu_hint: '카드를 사용할 수 없거나 한계에서 동작합니다',
   },
+
+  scannerPage: {
+    title: '카메라 검색',
+    subtitle: '로컬 네트워크와 라우팅된 서브넷에서 카메라 찾기 — OpenIPC, Hikvision, Dahua, Vivotek, ONVIF',
+
+    subnetUnreachable: '서버에서 서브넷에 닿을 수 없습니다 — 라우트가 필요합니다',
+    nothingFound: '장치를 찾지 못했습니다 — 서브넷과 계정을 확인하십시오',
+    found: '찾은 장치: {{count}}대',
+    timeout: '정해진 시간 안에 검색이 끝나지 않았습니다. 서브넷을 좁히십시오. 예: 192.168.1.0/28',
+    scanFailed: '검색 오류',
+    probeFailed: '스트림을 확인하지 못했습니다',
+    cameraName: '카메라 {{ip}}',
+    added: '카메라 {{ip}}을(를) 추가했습니다',
+    addError: '오류: {{error}}',
+
+    subnetLabel: '서브넷, 또는 쉼표로 구분한 여러 개',
+    subnetHint: '다른 쪽 서브넷은 서버에 해당 라우트가 있을 때만 검색됩니다.',
+    login: '로그인',
+    password: '비밀번호',
+    scanning: '검색 중…',
+    scan: '검색',
+
+    scanningSubnet: '네트워크 {{subnet}} 검색 중 — {{seconds}}초',
+    scanningHint:
+      '먼저 서브넷의 모든 주소를 확인하고, 응답한 주소에 OpenIPC, Hikvision, Dahua, ONVIF를 차례로 물어봅니다. 1분 정도 걸립니다. 페이지를 닫지 마십시오.',
+
+    results: '결과:',
+    foundCameras: '카메라 {{count}}대',
+    outOfIps: '확인한 IP {{count}}개 중',
+    alreadyAddedCount: '그중 {{count}}대는 이미 추가됨',
+
+    unreachableTitle: '서버에서 서브넷에 닿을 수 없습니다',
+    unreachableDefault:
+      '{{subnet}}의 어떤 주소도 응답하지 않습니다. 다른 서브넷 검색은 라우트가 있을 때만 가능합니다: 서버에 그 네트워크로 가는 경로가 있는지 확인하십시오.',
+    routeHint: '라우트는 라우터에서 또는 서버에서 다음 명령으로 추가합니다',
+    routeCommand: 'ip route add <네트워크> via <게이트웨이>',
+    emptyTitle: '서브넷 {{subnet}}에서 장치를 찾지 못했습니다',
+    emptyDefault:
+      '서브넷과 계정을 확인하십시오. 카메라가 다른 서브넷에 있다면 그것을 지정하십시오 — /16을 포함해 어떤 마스크든 됩니다.',
+
+    thVendor: '제조사',
+    thModel: '모델',
+    thFirmware: '펌웨어',
+    thCheck: '확인',
+    checking: '확인 중…',
+    check: '확인',
+    alreadyAdded: '이미 시스템에 등록된 카메라입니다',
+    addedBadge: '추가됨',
+    add: '추가',
+    unknownVendor: '알 수 없음',
+
+    noteSubnetUnreachable:
+      '서버에서 서브넷 {{subnet}}에 닿을 수 없습니다: 어떤 주소도 응답하지 않습니다. 서버에 그 네트워크로 가는 라우트가 있는지 확인하십시오 — 없으면 카메라가 몇 대든 검색할 수 없습니다.',
+    noteNoHosts: '서브넷 {{subnet}}에서 어떤 주소도 응답하지 않습니다. 그곳에 카메라가 있다면 게이트웨이가 막고 있는지, ping 응답이 켜져 있는지 확인하십시오.',
+    noteSubnetError: '{{subnet}} — 검색 오류',
+
+    howOnvif: 'ONVIF로',
+    howModel: '장치 모델로',
+    howMac: 'MAC 주소로',
+    howAuthHeader: '인증 헤더로',
+    howDevicePage: '장치 페이지로',
+    howMajestic: 'Majestic API로',
+    howIsapi: 'ISAPI로',
+    howCgi: 'CGI API로',
+    howHttpHeaders: 'HTTP 헤더로',
+  },
 }

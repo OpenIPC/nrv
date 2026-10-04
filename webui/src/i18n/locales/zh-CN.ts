@@ -1681,4 +1681,70 @@ export default {
     system_gpu_label: '显卡出问题',
     system_gpu_hint: '显卡不可用或已经在极限上工作',
   },
+
+  scannerPage: {
+    title: '摄像机扫描',
+    subtitle: '在本网和已接通路由的子网中查找摄像机——OpenIPC、Hikvision、Dahua、Vivotek、ONVIF',
+
+    subnetUnreachable: '服务器到不了该子网——需要路由',
+    nothingFound: '没有找到设备——请检查子网和账号密码',
+    found: '找到设备：{{count}} 台',
+    timeout: '扫描没有在限定时间内完成。请把子网改小，例如 192.168.1.0/28',
+    scanFailed: '扫描出错',
+    probeFailed: '无法检查码流',
+    cameraName: '摄像机 {{ip}}',
+    added: '摄像机 {{ip}} 已添加',
+    addError: '出错：{{error}}',
+
+    subnetLabel: '子网，或多个用逗号分隔',
+    subnetHint: '别人的子网只有在服务器有对应路由时才能扫描。',
+    login: '用户名',
+    password: '密码',
+    scanning: '正在扫描…',
+    scan: '扫描',
+
+    scanningSubnet: '正在扫描网络 {{subnet}} — {{seconds}} 秒',
+    scanningHint:
+      '先检查子网里所有地址，再对响应的地址依次询问 OpenIPC、Hikvision、Dahua 和 ONVIF。大约需要一分钟。请不要关闭页面。',
+
+    results: '结果：',
+    foundCameras: '{{count}} 台摄像机',
+    outOfIps: '，共检查了 {{count}} 个 IP',
+    alreadyAddedCount: '其中 {{count}} 台已经添加过',
+
+    unreachableTitle: '服务器到不了该子网',
+    unreachableDefault:
+      '{{subnet}} 里没有一个地址响应。扫描别人的子网必须有路由：请确认服务器有通往该网络的路径。',
+    routeHint: '路由在路由器上或服务器上用下面的命令添加',
+    routeCommand: 'ip route add <网络> via <网关>',
+    emptyTitle: '在子网 {{subnet}} 中没有找到设备',
+    emptyDefault:
+      '请检查子网和账号密码。如果摄像机在别的子网，请填上——支持任何掩码，包括 /16。',
+
+    thVendor: '厂商',
+    thModel: '型号',
+    thFirmware: '固件',
+    thCheck: '检查',
+    checking: '正在检查…',
+    check: '检查',
+    alreadyAdded: '该摄像机已在系统中',
+    addedBadge: '已添加',
+    add: '添加',
+    unknownVendor: '未知',
+
+    noteSubnetUnreachable:
+      '服务器到不了子网 {{subnet}}：里面没有一个地址响应。请确认服务器有通往该网络的路由——没有路由就扫不了，里面有多少摄像机都没用。',
+    noteNoHosts: '子网 {{subnet}} 里没有一个地址响应。如果那里确实有摄像机，请检查网关是否拦截以及是否允许 ping 响应。',
+    noteSubnetError: '{{subnet}} —— 扫描出错',
+
+    howOnvif: '通过 ONVIF',
+    howModel: '通过设备型号',
+    howMac: '通过 MAC 地址',
+    howAuthHeader: '通过认证头',
+    howDevicePage: '通过设备页面',
+    howMajestic: '通过 Majestic API',
+    howIsapi: '通过 ISAPI',
+    howCgi: '通过 CGI API',
+    howHttpHeaders: '通过 HTTP 头',
+  },
 }

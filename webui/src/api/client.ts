@@ -468,8 +468,17 @@ export interface ScanResult {
    * до сети не дойти. Требуют совершенно разных действий.
    */
   reachable: boolean
-  /** Объяснение, когда камер не нашлось. */
-  note?: string
+  /** Пояснения, когда камер не нашлось. Текст ставит интерфейс по коду. */
+  notes?: ScanNote[]
+}
+
+/** Пояснение к результату сканирования. */
+export interface ScanNote {
+  /** code — причина: subnet_unreachable, no_hosts, subnet_error. */
+  code: string
+  params?: Record<string, string>
+  /** detail — техническая подробность, когда понятной подписи не сложить. */
+  detail?: string
 }
 
 export interface DetectionEvent {

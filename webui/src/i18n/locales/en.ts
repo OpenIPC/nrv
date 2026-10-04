@@ -1749,4 +1749,73 @@ export default {
     system_gpu_label: 'A GPU problem',
     system_gpu_hint: 'The card is unavailable or running at its limit',
   },
+
+  scannerPage: {
+    title: 'Camera scanner',
+    subtitle:
+      'Finding cameras on the local network and in routed subnets — OpenIPC, Hikvision, Dahua, Vivotek, ONVIF',
+
+    subnetUnreachable: 'The subnet is not reachable from the server — a route is needed',
+    nothingFound: 'No devices found — check the subnet and the credentials',
+    found: 'Devices found: {{count}}',
+    timeout:
+      'The scan did not finish in the allotted time. Narrow the subnet, for example 192.168.1.0/28',
+    scanFailed: 'The scan failed',
+    probeFailed: 'could not check the stream',
+    cameraName: 'Camera {{ip}}',
+    added: 'Camera {{ip}} added',
+    addError: 'Error: {{error}}',
+
+    subnetLabel: 'A subnet, or several separated by commas',
+    subnetHint: 'Other people\u2019s subnets are scanned only if the server has a route to them.',
+    login: 'Login',
+    password: 'Password',
+    scanning: 'Scanning…',
+    scan: 'Scan',
+
+    scanningSubnet: 'Scanning the network {{subnet}} — {{seconds}} s',
+    scanningHint:
+      'First every address in the subnet is checked, then OpenIPC, Hikvision, Dahua and ONVIF are asked on the ones that answer. This takes up to a minute. Do not close the page.',
+
+    results: 'Results:',
+    foundCameras: '{{count}} cameras',
+    outOfIps: 'found out of {{count}} checked IPs',
+    alreadyAddedCount: '{{count}} of them already added',
+
+    unreachableTitle: 'The subnet is not reachable from the server',
+    unreachableDefault:
+      'No address in {{subnet}} answers. Scanning another subnet is possible only if a route exists: check that the server has a path into that network.',
+    routeHint: 'A route is added on the router or on the server with the command',
+    routeCommand: 'ip route add <network> via <gateway>',
+    emptyTitle: 'No devices found in the subnet {{subnet}}',
+    emptyDefault:
+      'Check the subnet and the credentials. If the cameras are on another subnet, give it — any mask is supported, including /16.',
+
+    thVendor: 'Vendor',
+    thModel: 'Model',
+    thFirmware: 'Firmware',
+    thCheck: 'Check',
+    checking: 'Checking…',
+    check: 'Check',
+    alreadyAdded: 'The camera is already registered',
+    addedBadge: 'Added',
+    add: 'Add',
+    unknownVendor: 'Unknown',
+
+    noteSubnetUnreachable:
+      'The subnet {{subnet}} is not reachable from the server: no address in it answers. Check that the server has a route into that network — without it scanning is impossible, however many cameras are there.',
+    noteNoHosts:
+      'No address in the subnet {{subnet}} answers. If there are cameras there, check whether the gateway blocks them and whether they answer ping.',
+    noteSubnetError: '{{subnet}} — the scan failed',
+
+    howOnvif: 'over ONVIF',
+    howModel: 'by the device model',
+    howMac: 'by the MAC address',
+    howAuthHeader: 'by the authorisation header',
+    howDevicePage: 'by the device page',
+    howMajestic: 'over the Majestic API',
+    howIsapi: 'over ISAPI',
+    howCgi: 'over the CGI API',
+    howHttpHeaders: 'by the HTTP headers',
+  },
 }
