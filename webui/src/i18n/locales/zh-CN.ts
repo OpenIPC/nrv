@@ -1800,4 +1800,50 @@ export default {
     acsOnline: '{{total}} 台控制器中 {{online}} 台在线',
     noControllers: ' —— 未添加控制器',
   },
+
+  majesticPage: {
+    title: '推流程序看护',
+    intro:
+      '网页界面就装在推流程序里，所以它一倒，摄像机页面也跟着没了。服务器会检查推流程序并把它拉起来，如果倒得太频繁——就整机重启摄像机。倒下的原因可以在日志里看到。',
+    loadFailed: '无法加载看护状态',
+    streamerOk: '推流程序有响应',
+    checkUpdated: '检查结果已更新',
+    checkFailed: '检查失败',
+    saved: '看护设置已保存',
+    saveFailed: '无法保存设置',
+
+    stateOk: '有响应',
+    stateFallen: '无响应',
+    stateUnknown: '未检查',
+    fallenCount: '无响应：{{count}}',
+    refresh: '刷新',
+
+    settings: '设置',
+    enabled: '看护已开启',
+    checkEvery: '检查间隔',
+    checkEveryHint: '比 10 秒更频繁没有意义：只会白白加重摄像机的负担。',
+    restartsBeforeReboot: '重启多少次后重启设备',
+    restartsBeforeRebootHint: '填 0 表示「第一次倒下就重启设备」。',
+    window: '统计时段',
+    windowHint: '窗口是滑动的：统计最近这些小时内的倒下次数，而不是从零点算起。',
+    cooldown: '重启后的等待时间',
+    cooldownHint: '推流程序不是瞬间起来的：没有等待时间，系统会以为没起作用。',
+    rebootEnabled: '超过阈值时重启摄像机',
+    rebootHint:
+      '重启能清掉内存，往往能管很久，但摄像机会失联一分钟。如果你想自己决定——请取消勾选：推流程序依然会被拉起，频繁倒下会通过通知告诉你。',
+    save: '保存',
+    cancel: '放弃更改',
+    secondsSuffix: '秒',
+    hoursSuffix: '小时',
+
+    notCheckedTitle: '还没有检查过摄像机',
+    notCheckedText: '首次检查在服务器启动三分钟后进行：更早摄像机还没准备好响应，会被全部当成倒下。',
+    restartCount: '重启次数：{{count}}',
+    check: '检查',
+
+    errCameraUnreachable: '摄像机不可达',
+    errNotResponding: 'Majestic 没有响应',
+    errRestartFailed: '推流程序重启失败，详情见服务器日志',
+    errRebootFailed: '摄像机重启失败，详情见服务器日志',
+  },
 }

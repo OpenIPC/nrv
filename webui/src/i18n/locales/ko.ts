@@ -1825,4 +1825,51 @@ export default {
     acsOnline: '{{total}}대 컨트롤러 중 {{online}}대 온라인',
     noControllers: ' — 추가된 컨트롤러가 없음',
   },
+
+  majesticPage: {
+    title: '스트리머 감시',
+    intro:
+      '웹 인터페이스가 스트리머 자체에 들어 있어서, 스트리머가 멈추면 카메라 페이지도 함께 사라집니다. 서버가 스트리머를 확인해 스스로 다시 올리며, 너무 자주 멈추면 카메라를 통째로 재부팅합니다. 멈춘 이유는 로그에서 볼 수 있습니다.',
+    loadFailed: '감시 상태를 불러올 수 없습니다',
+    streamerOk: '스트리머가 응답합니다',
+    checkUpdated: '확인 결과를 갱신했습니다',
+    checkFailed: '확인에 실패했습니다',
+    saved: '감시 설정을 저장했습니다',
+    saveFailed: '설정을 저장할 수 없습니다',
+
+    stateOk: '응답함',
+    stateFallen: '응답 없음',
+    stateUnknown: '확인 전',
+    fallenCount: '응답 없음: {{count}}',
+    refresh: '새로 고침',
+
+    settings: '설정',
+    enabled: '감시 켜짐',
+    checkEvery: '확인 주기',
+    checkEveryHint: '10초보다 자주 확인할 이유가 없습니다: 카메라에 부담만 됩니다.',
+    restartsBeforeReboot: '몇 번 재시작하면 재부팅할지',
+    restartsBeforeRebootHint: '0은 「처음 멈추면 바로 재부팅」을 뜻합니다.',
+    window: '집계 기간',
+    windowHint: '기간은 이동식입니다: 자정이 아니라 최근 몇 시간의 멈춤을 셉니다.',
+    cooldown: '재시작 후 대기 시간',
+    cooldownHint: '스트리머는 즉시 올라오지 않습니다: 대기 시간이 없으면 도움이 안 됐다고 판단합니다.',
+    rebootEnabled: '임계값을 넘으면 카메라 재부팅',
+    rebootHint:
+      '재부팅은 메모리를 비우고 오래 효과가 가지만, 카메라가 1분 동안 사라집니다. 직접 판단하려면 체크를 해제하십시오: 스트리머는 그래도 다시 올라가고, 잦은 중단은 알림으로 알게 됩니다.',
+    save: '저장',
+    cancel: '변경 취소',
+    secondsSuffix: '초',
+    hoursSuffix: '시간',
+
+    notCheckedTitle: '아직 카메라를 확인하지 않았습니다',
+    notCheckedText:
+      '첫 확인은 서버가 시작된 지 3분 뒤에 합니다: 그전에는 카메라가 응답할 준비가 안 되어 모두 멈춘 것처럼 보입니다.',
+    restartCount: '재시작: {{count}}',
+    check: '확인',
+
+    errCameraUnreachable: '카메라에 접속할 수 없음',
+    errNotResponding: 'Majestic이 응답하지 않음',
+    errRestartFailed: '스트리머 재시작 실패, 자세한 내용은 서버 로그에 있습니다',
+    errRebootFailed: '카메라 재부팅 실패, 자세한 내용은 서버 로그에 있습니다',
+  },
 }

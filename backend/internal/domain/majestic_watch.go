@@ -105,6 +105,22 @@ const (
 	MajesticStateUnknown = "unknown"
 )
 
+// Причины, по которым присмотр не смог привести стример в порядок.
+//
+// Это коды, а не готовый текст: подпись к ним ставит интерфейс, который
+// переводится на четыре языка. Русская строка, записанная здесь, попала бы
+// в базу одинаковой для всех.
+const (
+	// MajesticErrCameraUnreachable — камера не отвечает по сети.
+	MajesticErrCameraUnreachable = "camera_unreachable"
+	// MajesticErrNotResponding — камера доступна, но стример не отвечает.
+	MajesticErrNotResponding = "majestic_not_responding"
+	// MajesticErrRestartFailed — поднять стример не удалось.
+	MajesticErrRestartFailed = "restart_failed"
+	// MajesticErrRebootFailed — перезагрузить камеру не удалось.
+	MajesticErrRebootFailed = "reboot_failed"
+)
+
 // IsMajesticEvent сообщает, относится ли тип события к присмотру за Majestic.
 func IsMajesticEvent(eventType string) bool {
 	return eventType == SystemTriggerMajestic || eventType == SystemTriggerMajesticReboot

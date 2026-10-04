@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   majesticAPI, camerasAPI,
   type MajesticWatchState, type MajesticWatchConfig, type Camera,
@@ -19,13 +20,34 @@ const REFRESH_MS = 30_000
 
 /** Оформление состояний. Цвет выбирается по тому, что делать оператору. */
 const STATE_STYLES = {
-  ok: { label: 'отвечает', color: '#34c759', icon: CheckCircle2 },
-  fallen: { label: 'не отвечает', color: '#ff453a', icon: XCircle },
-  unknown: { label: 'нет проверки', color: '#8b98a5', icon: HelpCircle },
+  ok: { key: 'majesticPage.stateOk', color: '#34c759', icon: CheckCircle2 },
+  fallen: { key: 'majesticPage.stateFallen', color: '#ff453a', icon: XCircle },
+  unknown: { key: 'majesticPage.stateUnknown', color: '#8b98a5', icon: HelpCircle },
+}
+
+/**
+ * Подписи к причинам, по которым присмотр не смог привести стример в порядок.
+ *
+ * Код приходит с сервера, подпись ставит интерфейс. Незнакомое значение
+ * показываем как есть: в базе лежат записи, сделанные до перехода на коды,
+ * и терять объяснение из-за этого нельзя.
+ */
+const ERROR_KEYS: Record<string, string> = {
+  camera_unreachable: 'majesticPage.errCameraUnreachable',
+  majestic_not_responding: 'majesticPage.errNotResponding',
+  restart_failed: 'majesticPage.errRestartFailed',
+  reboot_failed: 'majesticPage.errRebootFailed',
+}
+
+function errorText(t: (key: string) => string, error?: string): string {
+  if (!error) return ''
+  const key = ERROR_KEYS[error]
+  return key ? t(key) : error
 }
 
 export default function MajesticPage() {
   const toast = useToast()
+  const { t } = useTranslation()
 
   const [states, setStates] = useState<MajesticWatchState[]>([])
   const [cameras, setCameras] = useState<Camera[]>([])
@@ -45,11 +67,11 @@ export default function MajesticPage() {
       // то, что оператор только что ввёл, но ещё не сохранил.
       setDraft(prev => prev ?? res.data.config)
     } catch {
-      if (!silent) toast.error('Не удалось загрузить состояние присмотра')
+      if (!silent) toast.error(t('majesticPage.loadFailed'))
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   useEffect(() => {
     load()
@@ -70,10 +92,10 @@ export default function MajesticPage() {
         return [res.data, ...next]
       })
       toast.success(res.data.last_state === 'ok'
-        ? 'Стример отвечает'
-        : 'Результат проверки обновлён')
+        ? t('majesticPage.streamerOk')
+        : t('majesticPage.checkUpdated'))
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Проверка не удалась')
+      toast.error(e?.response?.data?.error || t('majesticPage.checkFailed'))
     } finally {
       setBusyCamera(null)
     }
@@ -86,9 +108,9 @@ export default function MajesticPage() {
       const res = await majesticAPI.updateConfig(draft)
       setConfig(res.data)
       setDraft(res.data)
-      toast.success('Настройки присмотра сохранены')
+      toast.success(t('majesticPage.saved'))
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'Не удалось сохранить настройки')
+      toast.error(e?.response?.data?.error || t('majesticPage.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -112,7 +134,7 @@ export default function MajesticPage() {
     <div style={{ padding: '20px 24px', maxWidth: 1200, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <Activity size={22} />
-        <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Присмотр за стримером</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>{t('majesticPage.title')}</h1>
 
         {fallen > 0 && (
           <span style={{
@@ -121,7 +143,7 @@ export default function MajesticPage() {
             background: 'rgba(255,69,58,0.12)',
           }}>
             <AlertTriangle size={13} />
-            не отвечает: {fallen}
+            {t('majesticPage.fallenCount', { count: fallen })}
           </span>
         )}
 
@@ -135,15 +157,12 @@ export default function MajesticPage() {
           }}
         >
           <RefreshCw size={14} />
-          Обновить
+          {t('majesticPage.refresh')}
         </button>
       </div>
 
       <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 18, maxWidth: 780, lineHeight: 1.5 }}>
-        Веб-интерфейс встроен в сам стример, поэтому при его падении пропадает
-        и страница камеры. Сервер проверяет стример и поднимает его сам,
-        а если тот падает слишком часто — перезагружает камеру целиком.
-        Причина падения видна в журнале логов.
+        {t('majesticPage.intro')}
       </p>
 
       {/* Настройки */}
@@ -154,7 +173,7 @@ export default function MajesticPage() {
           padding: 16, marginBottom: 20,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Настройки</h2>
+            <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>{t('majesticPage.settings')}</h2>
             <label style={{
               marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 7,
               fontSize: 13, cursor: 'pointer',
@@ -164,7 +183,7 @@ export default function MajesticPage() {
                 checked={draft.enabled}
                 onChange={e => setDraft({ ...draft, enabled: e.target.checked })}
               />
-              Присмотр включён
+              {t('majesticPage.enabled')}
             </label>
           </div>
 
@@ -176,43 +195,43 @@ export default function MajesticPage() {
             opacity: draft.enabled ? 1 : 0.5,
           }}>
             <NumberField
-              label="Проверять каждые"
-              suffix="с"
+              label={t('majesticPage.checkEvery')}
+              suffix={t('majesticPage.secondsSuffix')}
               value={draft.check_seconds}
               min={10}
               max={3600}
               disabled={!draft.enabled}
               onChange={v => setDraft({ ...draft, check_seconds: v })}
-              hint="Чаще раза в 10 секунд проверять незачем: это лишняя нагрузка на камеры."
+              hint={t('majesticPage.checkEveryHint')}
             />
             <NumberField
-              label="Перезапусков до перезагрузки"
+              label={t('majesticPage.restartsBeforeReboot')}
               value={draft.restart_threshold}
               min={0}
               max={50}
               disabled={!draft.enabled}
               onChange={v => setDraft({ ...draft, restart_threshold: v })}
-              hint="Ноль означает «перезагружать при первом же падении»."
+              hint={t('majesticPage.restartsBeforeRebootHint')}
             />
             <NumberField
-              label="Считать за период"
-              suffix="ч"
+              label={t('majesticPage.window')}
+              suffix={t('majesticPage.hoursSuffix')}
               value={draft.window_hours}
               min={1}
               max={168}
               disabled={!draft.enabled}
               onChange={v => setDraft({ ...draft, window_hours: v })}
-              hint="Окно скользящее: считаются падения за последние часы, а не с полуночи."
+              hint={t('majesticPage.windowHint')}
             />
             <NumberField
-              label="Пауза после перезапуска"
-              suffix="с"
+              label={t('majesticPage.cooldown')}
+              suffix={t('majesticPage.secondsSuffix')}
               value={draft.restart_cooldown_seconds}
               min={0}
               max={3600}
               disabled={!draft.enabled}
               onChange={v => setDraft({ ...draft, restart_cooldown_seconds: v })}
-              hint="Стример поднимается не мгновенно: без паузы система решит, что не помогло."
+              hint={t('majesticPage.cooldownHint')}
             />
           </div>
 
@@ -226,16 +245,13 @@ export default function MajesticPage() {
                 checked={draft.reboot_enabled}
                 onChange={e => setDraft({ ...draft, reboot_enabled: e.target.checked })}
               />
-              Перезагружать камеру при превышении порога
+              {t('majesticPage.rebootEnabled')}
             </label>
           )}
 
           {draft.enabled && (
             <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 8, lineHeight: 1.5 }}>
-              Перезагрузка чистит память и часто помогает надолго, но камера
-              пропадает на минуту. Если хотите решать сами — снимите галочку:
-              стример всё равно будет подниматься, а о частых падениях вы
-              узнаете из уведомлений.
+              {t('majesticPage.rebootHint')}
             </p>
           )}
 
@@ -252,7 +268,7 @@ export default function MajesticPage() {
               }}
             >
               {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-              Сохранить
+              {t('majesticPage.save')}
             </button>
             {dirty && (
               <button
@@ -264,7 +280,7 @@ export default function MajesticPage() {
                 }}
               >
                 <RotateCcw size={14} />
-                Отменить
+                {t('majesticPage.cancel')}
               </button>
             )}
           </div>
@@ -284,10 +300,9 @@ export default function MajesticPage() {
           border: '1px solid var(--border, #30363d)', borderRadius: 8,
         }}>
           <Activity size={34} style={{ opacity: 0.4, marginBottom: 12 }} />
-          <div style={{ fontSize: 15, marginBottom: 6 }}>Камеры ещё не проверялись</div>
+          <div style={{ fontSize: 15, marginBottom: 6 }}>{t('majesticPage.notCheckedTitle')}</div>
           <div style={{ fontSize: 13, maxWidth: 480, margin: '0 auto', lineHeight: 1.5 }}>
-            Первая проверка проходит через три минуты после запуска сервера:
-            раньше камеры ещё не готовы отвечать, и все выглядели бы упавшими.
+            {t('majesticPage.notCheckedText')}
           </div>
         </div>
       ) : (
@@ -322,11 +337,11 @@ export default function MajesticPage() {
                 </div>
 
                 <span style={{ color: style.color, width: 110, flexShrink: 0 }}>
-                  {style.label}
+                  {t(style.key)}
                 </span>
 
                 <span style={{ width: 130, flexShrink: 0, fontSize: 12, color: 'var(--text-secondary, #8b98a5)' }}>
-                  {state.restart_count > 0 ? `перезапусков: ${state.restart_count}` : ''}
+                  {state.restart_count > 0 ? t('majesticPage.restartCount', { count: state.restart_count }) : ''}
                 </span>
 
                 {/* Подсказка из логов — самое полезное при разборе:
@@ -335,8 +350,8 @@ export default function MajesticPage() {
                   flex: 1, minWidth: 0, fontSize: 11, fontFamily: 'monospace',
                   color: 'var(--text-secondary, #8b98a5)',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }} title={state.last_log_hint || state.last_error}>
-                  {state.last_log_hint || state.last_error || ''}
+                }} title={state.last_log_hint || errorText(t, state.last_error)}>
+                  {state.last_log_hint || errorText(t, state.last_error) || ''}
                 </div>
 
                 <button
@@ -350,7 +365,7 @@ export default function MajesticPage() {
                 >
                   {busyCamera === state.camera_id
                     ? <Loader2 size={12} className="spin" />
-                    : 'Проверить'}
+                    : t('majesticPage.check')}
                 </button>
               </div>
             )

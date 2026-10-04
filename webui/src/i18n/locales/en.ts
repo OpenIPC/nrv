@@ -1871,4 +1871,51 @@ export default {
     acsOnline: '{{online}} of {{total}} controllers online',
     noControllers: ' — no controllers added',
   },
+
+  majesticPage: {
+    title: 'Streamer watchdog',
+    intro:
+      'The web interface is built into the streamer itself, so when it falls the camera page disappears with it. The server checks the streamer and brings it back up, and if it falls too often — reboots the whole camera. The reason for the fall is visible in the log journal.',
+    loadFailed: 'Could not load the watchdog state',
+    streamerOk: 'The streamer answers',
+    checkUpdated: 'The check result has been updated',
+    checkFailed: 'The check failed',
+    saved: 'The watchdog settings were saved',
+    saveFailed: 'Could not save the settings',
+
+    stateOk: 'answering',
+    stateFallen: 'not answering',
+    stateUnknown: 'not checked',
+    fallenCount: 'not answering: {{count}}',
+    refresh: 'Refresh',
+
+    settings: 'Settings',
+    enabled: 'Watchdog enabled',
+    checkEvery: 'Check every',
+    checkEveryHint: 'Checking more often than once per 10 seconds is pointless: it only loads the cameras.',
+    restartsBeforeReboot: 'Restarts before a reboot',
+    restartsBeforeRebootHint: 'Zero means «reboot on the very first fall».',
+    window: 'Count over a period',
+    windowHint: 'The window slides: falls over the last hours are counted, not since midnight.',
+    cooldown: 'Pause after a restart',
+    cooldownHint: 'The streamer does not come up instantly: without a pause the system would decide it did not help.',
+    rebootEnabled: 'Reboot the camera once the threshold is passed',
+    rebootHint:
+      'A reboot clears memory and often helps for a long time, but the camera disappears for a minute. If you want to decide yourself, clear the box: the streamer will still be brought up, and you will learn about frequent falls from the notifications.',
+    save: 'Save',
+    cancel: 'Discard',
+    secondsSuffix: 's',
+    hoursSuffix: 'h',
+
+    notCheckedTitle: 'The cameras have not been checked yet',
+    notCheckedText:
+      'The first check runs three minutes after the server starts: before that the cameras are not ready to answer and would all look fallen.',
+    restartCount: 'restarts: {{count}}',
+    check: 'Check',
+
+    errCameraUnreachable: 'the camera is unreachable',
+    errNotResponding: 'Majestic does not answer',
+    errRestartFailed: 'the streamer restart failed, see the server log for details',
+    errRebootFailed: 'the camera reboot failed, see the server log for details',
+  },
 }

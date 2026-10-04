@@ -252,7 +252,7 @@ func (s *MajesticWatchService) checkCamera(ctx context.Context, cam domain.Camer
 	// «падений» и была бы перезагружена без причины.
 	if !reachable {
 		state.LastState = domain.MajesticStateUnknown
-		state.LastError = "камера недоступна"
+		state.LastError = domain.MajesticErrCameraUnreachable
 		s.save(ctx, state)
 		return
 	}
@@ -298,7 +298,11 @@ func (s *MajesticWatchService) handleFall(
 		Msg("присмотр: Majestic не отвечает, перезапускаю")
 
 	if err := s.watcher.RestartMajestic(ctx, cam); err != nil {
-		state.LastError = "перезапуск не удался: " + err.Error()
+		// В поле состояния кладём код: подпись к нему ставит интерфейс,
+		// который переводится. Подробность от устройства остаётся только
+		// в журнале сервера — на странице присмотра про него и так сказано,
+		// что причина падения видна там.
+		state.LastError = domain.MajesticErrRestartFailed
 		log.Error().Err(err).Str("camera", cam.IP).Msg("присмотр: не удалось перезапустить Majestic")
 		s.save(ctx, state)
 		return
@@ -354,7 +358,7 @@ func (s *MajesticWatchService) rebootCamera(
 		Msg("присмотр: порог перезапусков достигнут, перезагружаю камеру")
 
 	if err := s.watcher.RebootCamera(ctx, cam); err != nil {
-		state.LastError = "перезагрузка не удалась: " + err.Error()
+		state.LastError = domain.MajesticErrRebootFailed
 		log.Error().Err(err).Str("camera", cam.IP).Msg("присмотр: не удалось перезагрузить камеру")
 		s.save(ctx, state)
 		return
@@ -493,13 +497,13 @@ func (s *MajesticWatchService) CheckNow(ctx context.Context, cameraID uuid.UUID)
 		switch {
 		case !reachable:
 			state.LastState = domain.MajesticStateUnknown
-			state.LastError = "камера недоступна"
+			state.LastError = domain.MajesticErrCameraUnreachable
 		case alive:
 			state.LastState = domain.MajesticStateOK
 			state.LastError = ""
 		default:
 			state.LastState = domain.MajesticStateFallen
-			state.LastError = "Majestic не отвечает"
+			state.LastError = domain.MajesticErrNotResponding
 		}
 		if err := s.store.Save(ctx, state); err != nil {
 			return nil, err
