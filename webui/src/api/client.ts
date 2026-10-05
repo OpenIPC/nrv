@@ -1123,6 +1123,9 @@ export interface StreamInfo {
   sub_hls_url: string
   main_rtsp_url: string
   sub_rtsp_url: string
+  // WebRTC дополнительного потока. Нужен для наложения детекций: детектор
+  // разбирает именно доп. поток, и рамки совпадают с картинкой только на нём.
+  sub_webrtc_url: string
   snapshot_url: string
 }
 
@@ -1648,7 +1651,9 @@ export const scannerAPI = {
     api.post<DiscoveredCamera>('/scanner/probe', { ip, username, password }, { timeout: 60000 }),
 }
 export const eventsAPI = {
-  list: (params?: { camera_id?: string; object_class?: string; page?: number; page_size?: number }) =>
+  // from/to ограничивают период (ISO). Нужны архиву: детекции запрашиваются
+  // за время записи, а не за всю историю камеры.
+  list: (params?: { camera_id?: string; object_class?: string; from?: string; to?: string; search?: string; page?: number; page_size?: number }) =>
     api.get<PaginatedResponse<DetectionEvent> & { events: DetectionEvent[] }>('/events', { params }),
   get: (id: string) => api.get<DetectionEvent>(`/events/${id}`),
 }
@@ -1669,7 +1674,9 @@ export const recordingsAPI = {
     api.get<CalendarData>('/recordings/calendar', { params }),
 
   /** Раскладка записей одного дня по времени суток. */
-  timeline: (params: { date: string; camera_id?: string }) =>
+  // Отметки детекций на шкале приходят вместе с записями дня: так шкала
+  // рисуется одним запросом, а не двумя согласованными.
+  timeline: (params: { date: string; camera_id?: string; detection_class?: string }) =>
     api.get<TimelineData>('/recordings/timeline', { params }),
 
   /**
@@ -1738,6 +1745,26 @@ export interface TimelineItem {
 export interface TimelineData {
   date: string
   items: TimelineItem[]
+  // Отметки детекций: где на сутках были события. Сгруппированы по минутам,
+  // иначе на дне с тысячами событий браузер не отрисовал бы столько элементов.
+  detections?: TimelineDetectionMark[]
+}
+
+/** Участок суток, на котором были события детекции. */
+export interface TimelineDetectionMark {
+  camera_id: string
+  /**
+   * Тип события: plate, face, line или object.
+   *
+   * Именно ТИП, а не класс объекта: у пересечения линии класс остаётся
+   * классовым (человек, машина), а признак лежит в метаданных события.
+   */
+  kind: string
+  /** Сколько событий попало в этот участок. */
+  count: number
+  /** Границы участка в долях суток (0..1). */
+  start_ratio: number
+  end_ratio: number
 }
 
 // --- Коммутаторы PoE ---
@@ -2141,6 +2168,11 @@ export const detectionAPI = {
     api.get<DetectionSettings>(`/cameras/${cameraId}/detection`),
   update: (cameraId: string, data: Partial<Omit<DetectionSettings, 'camera_id' | 'updated_at'>>) =>
     api.patch<DetectionSettings>(`/cameras/${cameraId}/detection`, data),
+  // Счётчик пересечений линии за период. Считается на сервере: за сутки по
+  // одной камере событий бывают тысячи, выгружать их ради двух чисел нельзя.
+  crossings: (cameraId: string, hours = 24) =>
+    api.get<{ hours: number; forward: number; backward: number; total: number }>(
+      `/cameras/${cameraId}/crossings?hours=${hours}`),
 }
 
 export const settingsAPI = {

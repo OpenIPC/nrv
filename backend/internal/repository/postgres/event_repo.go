@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,7 +22,12 @@ func NewEventRepo(db *pgxpool.Pool) *EventRepo {
 
 // List возвращает события с пагинацией. cameraID и objectClass —
 // необязательные фильтры; пустые значения означают «без фильтра».
-func (r *EventRepo) List(ctx context.Context, cameraID *uuid.UUID, objectClass string, page, pageSize int) ([]domain.DetectionEvent, int64, error) {
+//
+// from/to ограничивают период. Нужны архиву: чтобы показать детекции
+// поверх записи, интерфейс запрашивает события только за её время, а не
+// всю историю камеры.
+func (r *EventRepo) List(ctx context.Context, cameraID *uuid.UUID, objectClass string,
+	from, to *time.Time, search string, page, pageSize int) ([]domain.DetectionEvent, int64, error) {
 	where := "WHERE 1=1"
 	args := []interface{}{}
 	argIdx := 1
@@ -37,6 +43,31 @@ func (r *EventRepo) List(ctx context.Context, cameraID *uuid.UUID, objectClass s
 	if objectClass != "" {
 		where += " AND object_class = $" + itoa(argIdx)
 		args = append(args, objectClass)
+		argIdx++
+	}
+
+	if from != nil {
+		where += " AND timestamp >= $" + itoa(argIdx)
+		args = append(args, *from)
+		argIdx++
+	}
+	if to != nil {
+		where += " AND timestamp <= $" + itoa(argIdx)
+		args = append(args, *to)
+		argIdx++
+	}
+
+	// Поиск по распознанному номеру и по имени из справочника. Номер хранится
+	// в метаданных события (ключ plate_text), имя — в отдельной колонке.
+	//
+	// Сравнение по шаблону «содержит»: оператор помнит фрагмент номера
+	// («147», «АА47»), а не строку целиком. На десятках тысяч записей это
+	// последовательный просмотр; при росте базы сюда нужен индекс pg_trgm.
+	if search != "" {
+		pattern := "%" + search + "%"
+		where += " AND (metadata->>'plate_text' ILIKE $" + itoa(argIdx) +
+			" OR COALESCE(matched_name, '') ILIKE $" + itoa(argIdx) + ")"
+		args = append(args, pattern)
 		argIdx++
 	}
 
@@ -88,6 +119,25 @@ func (r *EventRepo) List(ctx context.Context, cameraID *uuid.UUID, objectClass s
 		events = append(events, ev)
 	}
 	return events, total, nil
+}
+
+// CrossingStats возвращает число пересечений линии за период, отдельно по
+// направлениям.
+//
+// Считается в базе, а не в интерфейсе: за сутки по одной камере событий
+// бывают тысячи, и выгружать их целиком ради двух чисел нельзя.
+// Признак направления лежит в metadata (ключ crossing), его ставит детектор
+// в момент пересечения.
+func (r *EventRepo) CrossingStats(ctx context.Context, cameraID uuid.UUID,
+	since time.Time) (forward, backward int, err error) {
+	err = r.db.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE metadata->>'crossing' = 'forward'),
+			COUNT(*) FILTER (WHERE metadata->>'crossing' = 'backward')
+		FROM detection_events
+		WHERE camera_id = $1 AND timestamp >= $2 AND metadata ? 'crossing'
+	`, cameraID, since).Scan(&forward, &backward)
+	return forward, backward, err
 }
 
 func (r *EventRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.DetectionEvent, error) {

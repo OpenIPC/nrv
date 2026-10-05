@@ -148,11 +148,19 @@ class DetectionConfigStore:
             return
         self._last_reload = now
         try:
-            self._configs = self._load()
-            stats = self.snapshot_stats()
-            logger.info(
-                f"настройки детекции обновлены: включено {stats['enabled']}/{stats['total']} камер"
-            )
+            configs = self._load()
+            # В журнал пишем только настоящее изменение настроек, а не каждый
+            # опрос. Опрос идёт раз в 10 секунд, то есть строка на опрос даёт
+            # больше восьми тысяч одинаковых записей в сутки, и при разборе
+            # сбоя нужное сообщение в них уже не найти — именно так и вышло,
+            # когда искали причину отказа чтения звука.
+            changed = configs != self._configs
+            self._configs = configs
+            if changed:
+                stats = self.snapshot_stats()
+                logger.info(
+                    f"настройки детекции обновлены: включено {stats['enabled']}/{stats['total']} камер"
+                )
         except Exception as e:
             # Настройки не критичны для работы: при сбое БД продолжаем
             # со старым кэшем, чтобы не останавливать детекцию.
@@ -219,6 +227,23 @@ class DetectionConfigStore:
         """Проходит ли объект фильтры настроек (класс, порог, зона, форма)."""
         if not cfg.wants_objects:
             return False
+        return self.passes_object_filters(cfg, obj_class, confidence, bbox,
+                                          frame_w, frame_h)
+
+    def passes_object_filters(self, cfg: DetectionConfig, obj_class: str,
+                              confidence: float, bbox: dict,
+                              frame_w: int, frame_h: int) -> bool:
+        """Те же проверки, что в should_report, но без требования «показывать объекты».
+
+        Отдельный вход нужен линии пересечения. Камера может быть настроена
+        только на линию: тип `object` выключен, а тип `line` включён. Тогда
+        should_report отбрасывает всё сразу, ещё до проверки линии — именно
+        так пересечение молча не работало на камере 192.168.1.83.
+
+        При этом проверки «это вообще объект» остаются: класс, порог
+        уверенности, размер, форма и зона. Пересечение мусорного пятна
+        событием не является.
+        """
         if confidence < cfg.min_confidence:
             return False
         # Пустой список классов означает «ничего не искать» — так пользователь

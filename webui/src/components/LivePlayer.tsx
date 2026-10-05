@@ -41,6 +41,21 @@ interface LivePlayerProps {
    * задержка и качество.
    */
   preferHls?: boolean
+  /**
+   * Слой поверх видео: рамки детекций, подписи.
+   *
+   * Рисуется внутри обёртки плеера, чтобы координаты считались от того же
+   * прямоугольника, что и картинка. Слой не перехватывает щелчки.
+   */
+  children?: React.ReactNode
+  /**
+   * Сообщает, каким каналом идёт поток.
+   *
+   * Нужно слою детекций: у HLS задержка несколько секунд, и рамка, нарисованная
+   * «по последнему событию», оказалась бы впереди картинки. Показывать её
+   * можно только на WebRTC, где задержка меньше секунды.
+   */
+  onTransport?: (transport: 'webrtc' | 'hls' | null) => void
 }
 
 /**
@@ -107,6 +122,8 @@ export default function LivePlayer({
   onAudioUnavailable,
   showControls = true,
   preferHls = false,
+  children,
+  onTransport,
 }: LivePlayerProps) {
   const { t } = useTranslation()
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -574,6 +591,15 @@ export default function LivePlayer({
     }
   }, [soundOn, audioReady])
 
+  // Сообщаем наружу, каким каналом идёт поток: слой детекций показывает
+  // рамки только на WebRTC (см. onTransport в свойствах).
+  useEffect(() => {
+    onTransport?.(transport)
+    // onTransport НЕ в зависимостях намеренно: родитель передаёт новую
+    // функцию на каждом рендере, и эффект запускался бы по кругу.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transport])
+
   return (
     <div className={`video-player-wrapper ${className}`} style={{ position: 'relative', overflow: 'hidden' }}>
       {/* Метка транспорта.
@@ -614,6 +640,10 @@ export default function LivePlayer({
         playsInline
         style={{ width: '100%', height: '100%', borderRadius: 'var(--radius)', background: '#000' }}
       />
+      {/* Слой поверх видео: рамки детекций и подписи.
+          Рисуется внутри той же обёртки, что и картинка, поэтому проценты
+          координат считаются от того же прямоугольника. */}
+      {children}
       {/* Скрытый элемент звука.
           Именно <video>, а не <audio>: hls.js/Chrome ставит <audio> без
           controls в display:none и тогда НЕ декодирует звук (readyState

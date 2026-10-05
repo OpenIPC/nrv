@@ -30,6 +30,11 @@ from urllib.parse import quote, urlsplit, urlunsplit
 import psycopg2
 from nats.aio.client import Client as NATS
 
+# Прямоугольник зоны номеров считает общий модуль: то же условие нужно
+# детектору, чтобы решить, искать ли номера на полном кадре. Разошедшиеся
+# условия дали бы молчаливый отказ распознавания (см. plate_zone.py).
+from plate_zone import zone_box
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("frame-publisher")
 
@@ -250,28 +255,6 @@ class FFmpegStream:
         return self._restarts
 
 
-def zone_box(zone: list[dict]) -> tuple[float, float, float, float] | None:
-    """Превращает полигон зоны в прямоугольник в долях кадра.
-
-    Для поиска номера достаточно прямоугольника: номер — вытянутая область,
-    а не сложная фигура. Возвращает (x1, y1, x2, y2) в долях кадра.
-    """
-    if not zone or len(zone) < 3:
-        return None
-    try:
-        xs = [float(p["x"]) for p in zone]
-        ys = [float(p["y"]) for p in zone]
-    except (KeyError, TypeError, ValueError):
-        return None
-
-    x1, x2 = max(0.0, min(xs)), min(1.0, max(xs))
-    y1, y2 = max(0.0, min(ys)), min(1.0, max(ys))
-    # Слишком маленькая зона — вероятно, ошибка разметки: не обрезаем вовсе.
-    if (x2 - x1) < 0.05 or (y2 - y1) < 0.03:
-        return None
-    return x1, y1, x2, y2
-
-
 def load_cameras(db_url: str) -> list[dict]:
     """Читает камеры с заполненным субпотоком (для детекции берём именно его).
 
@@ -283,6 +266,7 @@ def load_cameras(db_url: str) -> list[dict]:
             cur.execute("""
                 SELECT c.id::text, c.name,
                        COALESCE(NULLIF(c.sub_stream, ''), NULLIF(c.main_stream, ''), c.rtsp_url) AS stream,
+                       COALESCE(NULLIF(c.main_stream, ''), c.rtsp_url) AS main_stream,
                        COALESCE(c.settings->>'username', '') AS username,
                        COALESCE(c.settings->>'password', '') AS password,
                        -- Зона номеров нужна для быстрого потока кадров.
@@ -296,8 +280,9 @@ def load_cameras(db_url: str) -> list[dict]:
                 ORDER BY c.created_at
             """)
             return [
-                {"id": r[0], "name": r[1], "stream": r[2], "username": r[3],
-                 "password": r[4], "plate_zone": r[5], "wants_plates": r[6]}
+                {"id": r[0], "name": r[1], "stream": r[2], "main_stream": r[3],
+                 "username": r[4], "password": r[5], "plate_zone": r[6],
+                 "wants_plates": r[7]}
                 for r in cur.fetchall()
             ]
 
@@ -305,7 +290,8 @@ def load_cameras(db_url: str) -> list[dict]:
 class FramePublisher:
     def __init__(self, db_url: str, nats_url: str, interval: float,
                  width: int, reload_every: float, ffmpeg_timeout: float,
-                 plate_interval: float = 0.2, plate_width: int = 640):
+                 plate_interval: float = 0.2, plate_width: int = 640,
+                 plate_main_width: int = 0):
         self.db_url = db_url
         self.nats_url = nats_url
         self.interval = interval
@@ -315,13 +301,21 @@ class FramePublisher:
         # Быстрый поток для распознавания номеров: чаще и по зоне.
         self.plate_interval = plate_interval
         self.plate_width = plate_width
+        # Ширина кадра номеров, когда он берётся из основного потока.
+        # 0 — отдавать без уменьшения: на удалении номер должен занимать
+        # не меньше сотни пикселей по ширине, иначе OCR читать нечего.
+        self.plate_main_width = plate_main_width
         # Частота кадров зоны. Отдельно от интервала: интервал задаёт
         # таймаут чтения, а fps — частоту съёма внутри ffmpeg.
         self.plate_fps = max(1.0, 1.0 / plate_interval if plate_interval > 0 else 5.0)
         # Таймаут чтения одного кадра зоны. Первому кадру нужно время на
         # подключение к камере (около 1,5 с), а последующим — не больше
         # интервала; берём с запасом, чтобы поток не перезапускался зря.
-        self.plate_read_timeout = max(5.0, plate_interval * 5)
+        #
+        # Для кадров из основного потока запас увеличен: 4К декодируется
+        # небыстро, и прежние 5 секунд приводили к перезапуску потока
+        # примерно раз в минуту.
+        self.plate_read_timeout = max(10.0, plate_interval * 10)
 
         self.nc: NATS | None = None
         self.cameras: list[dict] = []
@@ -400,7 +394,19 @@ class FramePublisher:
         это давало 0,7 кадра в секунду вместо нужных пяти.
         """
         cam_id = cam["id"]
-        url = build_rtsp_url(cam["stream"], cam["username"], cam["password"])
+        # Источник кадров для номеров.
+        #
+        # "sub" — дополнительный поток: дешевле, но номер в нём мелкий.
+        # "main" — основной поток: нужен там, где машины проезжают вдали.
+        # Проверено на камере .87: в субпотоке номер занимает 25 px и OCR
+        # читать нечего, в основном потоке — около 120 px, и номер читается.
+        source = os.getenv("PLATE_SOURCE_STREAM", "sub").strip().lower()
+        if source == "main" and cam.get("main_stream"):
+            url = build_rtsp_url(cam["main_stream"], cam["username"], cam["password"])
+            width = self.plate_main_width
+        else:
+            url = build_rtsp_url(cam["stream"], cam["username"], cam["password"])
+            width = self.plate_width
         crop = zone_box(cam.get("plate_zone") or [])
         if crop is None:
             logger.warning(
@@ -408,7 +414,7 @@ class FramePublisher:
             )
             return
 
-        stream = FFmpegStream(url, self.plate_width, crop, fps=self.plate_fps)
+        stream = FFmpegStream(url, width, crop, fps=self.plate_fps)
         stream.start()
         logger.info(
             f"[{cam_id[:8]}] {cam['name']}: поток номеров запущен "
@@ -519,6 +525,10 @@ async def main():
         # Быстрый поток номеров: 5 кадров в секунду по зоне поиска.
         plate_interval=float(os.getenv("PLATE_FRAME_INTERVAL", "0.2")),
         plate_width=int(os.getenv("PLATE_FRAME_WIDTH", "640")),
+        # Кадры номеров из основного потока: ширина 0 — отдавать без
+        # уменьшения. Нужно там, где машины проезжают вдали и номер в
+        # субпотоке слишком мелкий для распознавания.
+        plate_main_width=int(os.getenv("PLATE_FRAME_WIDTH_MAIN", "0")),
     )
 
     loop = asyncio.get_running_loop()

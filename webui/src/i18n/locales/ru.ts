@@ -800,6 +800,9 @@ export default {
     dirBoth: 'В обе стороны',
     dirForward: 'Только прямое',
     dirBackward: 'Только обратное',
+    // Счётчик работает только когда линия задана: считаются пересечения
+    // за указанный период, отдельно по направлениям.
+    crossingsCount: 'Пересечения за {{hours}} ч: вперёд — {{forward}}, назад — {{backward}}',
     removeLine: 'Убрать линию',
 
     plateTitle: 'Распознавание номеров',
@@ -1449,6 +1452,20 @@ export default {
     legendHint: 'щелчок — смотреть, двойной — скачать',
     clipTooltip: 'Двойной щелчок — скачать клип',
 
+    overlayWrongStream: 'Рамки детекций: запись снята другим потоком, чем разбирает детектор',
+    // Подсветка детекций на шкале записей
+    markPlate: 'номера',
+    markFace: 'лица',
+    markLine: 'пересечения',
+    markObject: 'объекты',
+    detectionFilter: 'Отметки:',
+    detectAll: 'все события',
+    detectPlate: 'только номера',
+    detectFace: 'только лица',
+    detectLine: 'только пересечения',
+    detectObject: 'только объекты',
+    detectNone: 'не показывать',
+    detectionMark: 'Событий: {{count}} ({{type}})',
     cameraFallback: 'камера',
 
     durationMin: '{{count}} мин',
@@ -1700,6 +1717,10 @@ export default {
   livePlayer: {
     transportWebrtc: 'WebRTC — задержка меньше секунды',
     transportHls: 'HLS — WebRTC не удалось, задержка больше',
+    // Показывается, когда рамки детекций не рисуются: детектор разбирает
+    // доп. поток, а на экране другой, и координаты не переносятся.
+    overlayWrongStream: 'Рамки детекций: включён не тот поток (разбирается доп.)',
+    overlayLagged: 'Рамки с поправкой на задержку потока ({{seconds}} с)',
     soundOn: 'Выключить звук',
     soundOff: 'Включить звук',
     connecting: 'Подключение к потоку…',
@@ -1956,6 +1977,15 @@ export default {
     subtitle: '{{count}} событий • AI-распознавание объектов',
     refresh: 'Обновить',
     onlySnapshots: 'Только со снимками',
+    cameraLabel: 'Камера:',
+    allCameras: 'все камеры',
+    periodLabel: 'Период:',
+    periodHour: 'за час',
+    periodShift: 'за смену (8 ч)',
+    periodDay: 'за сутки',
+    periodWeek: 'за неделю',
+    periodAll: 'за всё время',
+    searchPlaceholder: 'Поиск по номеру или имени…',
     objectLabel: 'Объект:',
     all: 'Все',
     foundOf: 'найдено {{found}} из {{total}} на странице',
@@ -1967,6 +1997,10 @@ export default {
     thCamera: 'Камера',
     thSnapshot: 'Снимок',
     snapshotAlt: 'снимок события',
+    // Пометка события пересечения линии: направление лежит в метаданных
+    // события (ключ crossing), его ставит детектор в момент пересечения.
+    crossingForward: 'пересечение: вперёд',
+    crossingBackward: 'пересечение: назад',
 
     back: '← Назад',
     forward: 'Вперёд →',

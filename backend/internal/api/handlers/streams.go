@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -92,7 +93,13 @@ type StreamInfo struct {
 	SubHLS   string `json:"sub_hls_url"`
 	MainRTSP string `json:"main_rtsp_url"`
 	SubRTSP  string `json:"sub_rtsp_url"`
-	Snapshot string `json:"snapshot_url"`
+	// SubWebRTC — WebRTC для дополнительного потока.
+	//
+	// Нужен для наложения детекций: детектор разбирает именно доп. поток,
+	// и рамки совпадают с картинкой только на нём. К тому же наложение
+	// требует малой задержки, которую даёт только WebRTC.
+	SubWebRTC string `json:"sub_webrtc_url"`
+	Snapshot  string `json:"snapshot_url"`
 }
 
 // GetStream возвращает URL стримов для камеры
@@ -143,7 +150,9 @@ func (h *StreamHandler) GetStream(w http.ResponseWriter, r *http.Request) {
 		SubHLS:   fmt.Sprintf("/api/v1/cameras/%s/hls/sub/index.m3u8", streamPath),
 		MainRTSP: mainRTSP,
 		SubRTSP:  subRTSP,
-		Snapshot: snapshot,
+		// Доп. поток публикуется MediaMTX под именем <id>_sub.
+		SubWebRTC: fmt.Sprintf("/webrtc/%s_sub/whep", streamPath),
+		Snapshot:  snapshot,
 	}
 
 	writeJSON(w, http.StatusOK, info)
@@ -420,6 +429,33 @@ func (h *StreamHandler) webrtcHost() string {
 	return host + ":8889"
 }
 
+// grabRTSPFrame достаёт один JPEG-кадр из RTSP через ffmpeg.
+//
+// Нужен для показа оператору того же потока, который разбирает детектор:
+// зона номеров применяется к субпотоку, а снимок камеры по HTTP отдаёт
+// основной поток с другими пропорциями.
+func grabRTSPFrame(rtspURL string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-rtsp_transport", "tcp",
+		"-i", rtspURL,
+		"-frames:v", "1",
+		"-f", "mjpeg",
+		"-q:v", "3",
+		"pipe:1")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	if out.Len() == 0 {
+		return nil, fmt.Errorf("пустой кадр")
+	}
+	return out.Bytes(), nil
+}
+
 // snapshotPathsFor возвращает список кандидатов на получение JPEG-кадра
 // для камеры, в порядке приоритета.
 //
@@ -486,6 +522,27 @@ func (h *StreamHandler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
 		return
+	}
+	// ?stream=sub отдаёт кадр дополнительного потока.
+	//
+	// Нужно для разметки зоны номеров: детектор разбирает субпоток
+	// (номер в нём крупнее, и OCR дешевле), а обычный снимок камеры — это
+	// основной поток. У камер парка пропорции разные (1920×1080 против
+	// 704×576), поэтому зона, нарисованная по основному кадру, при
+	// применении к субпотоку смещается — в неё попадает не то, что
+	// выделял оператор.
+	if r.URL.Query().Get("stream") == "sub" && cam.SubStream != "" {
+		if data, err := grabRTSPFrame(cam.SubStream); err == nil {
+			w.Header().Set("Content-Type", "image/jpeg")
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(data)
+			return
+		} else {
+			// Кадр субпотока не получился — ниже отдадим основной.
+			// Оператору важнее увидеть хоть что-то, чем пустое место.
+			log.Warn().Err(err).Str("camera_id", id.String()[:8]).
+				Msg("не удалось получить кадр субпотока")
+		}
 	}
 	if cam.IP == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "camera has no IP address"})

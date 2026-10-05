@@ -8,6 +8,7 @@ import LivePlayer from '../components/LivePlayer'
 import EditCameraModal from '../components/EditCameraModal'
 import PTZPanel from '../components/PTZPanel'
 import DetectionSettingsPanel from '../components/DetectionSettingsPanel'
+import DetectionOverlay from '../components/DetectionOverlay'
 import AudioSettingsPanel from '../components/AudioSettingsPanel'
 import CameraSettingsPanel from '../components/CameraSettingsPanel'
 import CameraConfigPanel from '../components/CameraConfigPanel'
@@ -22,14 +23,24 @@ import {
   Clock, ScrollText, Activity, Layers,
 } from 'lucide-react'
 
+/**
+ * На сколько секунд задержать показ рамок детекций при просмотре по HLS.
+ *
+ * HLS отдаёт картинку с задержкой: плеер ждёт готовые сегменты, и картинка
+ * отстаёт от событий детектора на несколько секунд. Без поправки рамка
+ * оказалась бы впереди объекта. Четыре секунды — обычная задержка HLS без
+ * режима низкой задержки; точное значение плавает и зависит от сегментов,
+ * поэтому это именно поправка «примерно».
+ */
+const HLS_OVERLAY_LAG_SECONDS = 4
+
 /** URL снимка события. Токен в query: <img> не передаёт заголовок Authorization. */
 function eventSnapshotSrc(eventId: string): string {
   const token = localStorage.getItem('token')
   return `/api/v1/events/${eventId}/snapshot${token ? `?jwt=${encodeURIComponent(token)}` : ''}`
 }
 
-export default function CameraDetailPage() {
-  const { id } = useParams<{ id: string }>()
+export default function CameraDetailPage() {  const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { t } = useTranslation()
   const toast = useToast()
@@ -38,7 +49,8 @@ export default function CameraDetailPage() {
   const [showEdit, setShowEdit] = useState(false)
   // Какой поток показываем в плеере: основной или дополнительный.
   const [activeStream, setActiveStream] = useState<'main' | 'sub'>('main')
-  // Какая из команд выполняется сейчас (для индикации на кнопке).
+  // Транспорт живого потока: от него зависит задержка показа рамок детекций.
+  const [liveTransport, setLiveTransport] = useState<'webrtc' | 'hls' | null>(null)
   // Какая команда выполняется сейчас: блокируем все кнопки, пока идёт одна.
   const [busy, setBusy] = useState<'restart' | 'reboot' | 'recreate' | 'ntp' | 'logs' | 'majestic' | null>(null)
 
@@ -60,6 +72,12 @@ export default function CameraDetailPage() {
   const snapshotUrl = id
     ? `/api/v1/cameras/${id}/snapshot${snapshotToken ? `?jwt=${encodeURIComponent(snapshotToken)}` : ''}`
     : undefined
+
+  // Зона номеров применяется к СУБпотоку (детектор разбирает именно его),
+  // а снимок камеры по HTTP отдаёт основной поток. У камер парка пропорции
+  // разные (1920×1080 и 704×576), поэтому зону надо рисовать по тому же
+  // кадру, к которому она применяется — иначе выделенная область смещается.
+  const zoneSnapshotUrl = snapshotUrl ? `${snapshotUrl}&stream=sub` : undefined
 
   const {
     data: camera,
@@ -359,17 +377,35 @@ export default function CameraDetailPage() {
                 // WebRTC — основной транспорт живого просмотра: его задержка
                 // в разы меньше, чем у HLS, который ждёт сборки сегментов.
                 // Плеер сам откатывается на HLS, если WebRTC не прошёл.
+                //
+                // Адрес берём для выбранного потока: наложение детекций
+                // совпадает с картинкой только на доп. потоке, потому что
+                // именно его разбирает детектор.
                 webrtcUrl={
                   activeStream === 'main'
                     ? (streamInfo?.webrtc_url || '')
-                    : undefined
+                    : (streamInfo?.sub_webrtc_url || '')
                 }
                 // Звук идёт отдельным потоком: камеры отдают G.711, который
                 // браузер в HLS не играет. Бэкенд перекодирует в AAC.
                 audioUrl={`/api/v1/cameras/${camera.id}/hls/audio/index.m3u8`}
                 muted={true}
                 volume={0.7}
-              />
+                onTransport={setLiveTransport}
+              >
+                {/* Рамки детекций рисуем только на WebRTC. У HLS задержка
+                    несколько секунд, и рамка, взятая из последнего события,
+                    оказалась бы впереди объекта — лучше не показывать её
+                    вовсе, чем показывать не на своём месте. */}
+                {/* Рамки детекций. Задержка показа зависит от транспорта:
+                    у HLS картинка отстаёт на несколько секунд, и без поправки
+                    рамка оказалась бы впереди объекта. */}
+                <DetectionOverlay
+                  cameraId={camera.id}
+                  enabled={isOnline}
+                  lagSeconds={liveTransport === 'webrtc' ? 0 : HLS_OVERLAY_LAG_SECONDS}
+                />
+              </LivePlayer>
             ) : (
               <div className="video-placeholder" style={{ position: 'relative' }}>
                 <div style={{ textAlign: 'center' }}>
@@ -527,6 +563,15 @@ export default function CameraDetailPage() {
                               {t('cameraPage.track', { id: ev.track_id })}
                             </span>
                           )}
+                          {/* Пересечение линии: в ленте такое событие иначе
+                              не отличить от обычной детекции объекта. */}
+                          {ev.metadata?.crossing && (
+                            <span style={{ fontSize: 11, color: 'var(--accent)', marginLeft: 8 }}>
+                              {ev.metadata.crossing === 'backward'
+                                ? t('eventsPage.crossingBackward')
+                                : t('eventsPage.crossingForward')}
+                            </span>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -537,7 +582,7 @@ export default function CameraDetailPage() {
 
             {tab === 'detection' && (
               <div>
-                <DetectionSettingsPanel cameraId={camera.id} snapshotUrl={snapshotUrl} />
+                <DetectionSettingsPanel cameraId={camera.id} snapshotUrl={snapshotUrl} zoneSnapshotUrl={zoneSnapshotUrl} />
                 <div style={{ marginTop: 24, borderTop: '1px solid var(--border)', paddingTop: 20 }}>
                   {/* Режим съёмки стоит рядом с зоной детекции намеренно:
                       зона говорит, ГДЕ искать, а режим — чтобы номер был

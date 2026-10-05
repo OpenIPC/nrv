@@ -21,7 +21,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
+import time
 from dataclasses import dataclass, field
 
 import cv2
@@ -68,15 +70,22 @@ class FaceRecognizer:
         self.det_size = det_size
 
         try:
+            import onnxruntime
             from insightface.app import FaceAnalysis
 
-            # providers определяются устройством: CUDAExecutionProvider
-            # для GPU, CPUExecutionProvider как запасной вариант.
-            providers = ["CPUExecutionProvider"]
-            ctx_id = -1
-            if device not in ("cpu", "CPU"):
+            # Провайдер выбираем по фактическим возможностям onnxruntime, а не
+            # по наличию видеокарты: сборка без поддержки CUDA запрос
+            # CUDAExecutionProvider принимает, но считает всё равно на
+            # процессоре и при этом пишет предупреждение «provider is not in
+            # available provider names». Итог работы от этого не меняется,
+            # а журнал становится обманчивым и мешает разбирать настоящие сбои.
+            actual = set(onnxruntime.get_available_providers())
+            if device not in ("cpu", "CPU") and "CUDAExecutionProvider" in actual:
                 providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
                 ctx_id = 0
+            else:
+                providers = ["CPUExecutionProvider"]
+                ctx_id = -1
 
             self.app = FaceAnalysis(
                 name="buffalo_l",  # лёгкий набор моделей, детекция + ArcFace
@@ -86,10 +95,28 @@ class FaceRecognizer:
             # det_size задаёт входной размер детектора лиц.
             self.app.prepare(ctx_id=ctx_id, det_size=(self.det_size, self.det_size))
             self.available = True
-            logger.info(f"распознавание лиц включено (providers={providers})")
+            # В журнал идёт не список запрошенных провайдеров, а фактический:
+            # если onnxruntime собран без CUDA, запрос CUDAExecutionProvider
+            # молча откатывается на CPU, и запись в журнале оказывается ложной —
+            # по ней казалось, что лица считаются на видеокарте, а на самом
+            # деле на процессоре.
+            logger.info(f"распознавание лиц включено (провайдеры: {self._providers()})")
         except Exception as e:
             # Отсутствие модели не должно останавливать детекцию объектов.
             logger.warning(f"распознавание лиц недоступно: {e}")
+
+    def _providers(self) -> list[str]:
+        """Собирает провайдеры, на которых действительно считаются модели.
+
+        Запрошенный список и фактический совпадают не всегда: onnxruntime без
+        поддержки CUDA принимает запрос на GPU и выполняет всё на процессоре.
+        """
+        used: set[str] = set()
+        for model in (getattr(self.app, "models", {}) or {}).values():
+            session = getattr(model, "session", None)
+            if session is not None:
+                used.update(session.get_providers())
+        return sorted(used)
 
     def detect(self, img: np.ndarray) -> list[FaceProbe]:
         """Находит лица на кадре и считает эмбеддинги."""
@@ -138,11 +165,73 @@ class PlateRecognizer:
     Такой подход дешевле и не требует ещё одной модели в образе.
     """
 
+    # Сколько распознаваний Tesseract разрешено выполнять одновременно.
+    #
+    # Раньше вызовы шли строго по одному под общей блокировкой, и на потоке
+    # кадров зоны номеров это оказалось узким местом. Замер на живой камере:
+    # один вызов Tesseract стоит около 0,2 с, а кадр с несколькими
+    # кандидатами — до 0,6 с, потому что текст пробуется в нескольких
+    # вариантах подготовки. Кадры зоны идут 5 раз в секунду на каждую
+    # камеру с включёнными номерами, то есть четыре камеры давали 12-20
+    # кадров в секунду при пропускной способности около двух: очередь росла,
+    # детектор отставал от потока, и NATS выбрасывал кадры как slow consumer.
+    # Побочный эффект был хуже: распознавание номера на основном кадре
+    # вставало в ту же очередь и держало общий цикл кадров всех камер
+    # шесть секунд.
+    #
+    # Tesseract вызывается отдельным процессом на каждый запрос и никакого
+    # общего состояния не имеет (pytesseract пишет свой временный файл и
+    # убирает его за собой), поэтому параллельные вызовы безопасны.
+    # Ограничение нужно, чтобы не породить сотни процессов сразу.
+    OCR_PARALLEL = 4
+
+    # Сколько прямоугольников-кандидатов отдаётся в OCR за один кадр.
+    #
+    # Было пять. Замер на живых кадрах зоны показал, что кадр с кандидатами
+    # стоит секунды: до 5 кандидатов на 3 варианта подготовки — это до
+    # 15 запусков Tesseract по 0,2 с (медиана 3,4 с, максимум 4,4 с). При
+    # потоке 2,5 кадра в секунду на камеру очередь не разбирается, и NATS
+    # выбрасывает кадры целиком. Лучше разобрать два самых крупных кандидата
+    # и дождаться следующего кадра: кадров приходит много, номер виден на
+    # нескольких подряд.
+    MAX_CANDIDATES = 2
+
+    # Бюджет времени на распознавание одного кадра, миллисекунды.
+    #
+    # Страховка от кадра, в котором кандидатов много и все — текстуры:
+    # без ограничения один такой кадр занимает очередь на секунды, а очередь
+    # общая на все камеры. При исчерпании бюджета возвращаем то, что уже
+    # прочитано, и ждём следующий кадр.
+    OCR_BUDGET_MS = 1000
+
     def __init__(self, region: str = "ru"):
         self.available = False
         self.region = region
         self._pytesseract = None
-        self._lock = threading.Lock()
+        # Семафор вместо блокировки: параллельность ограничена, но не сведена
+        # к одному вызову.
+        self._ocr_slots = threading.Semaphore(self.OCR_PARALLEL)
+        # Нейросетевой детектор области номера: загружается при первом
+        # разборе кадра, чтобы не задерживать старт контейнера.
+        self._model = None
+        # Время последней попытки загрузки. Файл весов может появиться
+        # позже — его скачивает детектор при старте, — поэтому неудачную
+        # попытку повторяем, а не запоминаем навсегда.
+        self._model_tried_at = 0.0
+
+        # OCR номеров нейросетью вместо Tesseract.
+        #
+        # Замер на живом проезде камеры .87: номер У185КК178 Tesseract
+        # прочитал как «TYAB5KK78», а модель fast-plate-ocr — «Y185KK77».
+        # Плюс модель впятеро быстрее: 37 мс против 200 мс на кроп.
+        # Пустое значение переменной оставляет старый путь на Tesseract.
+        self.ocr_model_name = os.getenv(
+            "PLATE_OCR_MODEL", "european-plates-mobile-vit-v2-model")
+        self._ocr_model = None
+        self._ocr_model_tried_at = 0.0
+        # Детектор машин (COCO): нужен для поиска номера на крупных кадрах.
+        self._vehicle_model = None
+        self._vehicle_model_tried = False
 
         try:
             import pytesseract
@@ -185,15 +274,56 @@ class PlateRecognizer:
                     work = img[y1:y2, x1:x2]
                     offset_x, offset_y = x1, y1
 
-        candidates = self._find_plate_areas(work)
+        candidates = self._model_candidates(work)
+        if candidates is None:
+            # Модели нет — работаем старым морфологическим поиском.
+            candidates = self._find_plate_areas(work)
+        else:
+            # На крупном кадре номер занимает доли процента площади, и модель
+            # области номера его не находит — она обучена на кадрах, где
+            # номер виден крупно. Поэтому сначала находим машины обычным
+            # детектором, и уже внутри каждой ищем номер.
+            #
+            # Проверено на кадре 4К: на всём кадре модель номер не находит,
+            # а на вырезанной машине — с уверенностью 0.96.
+            if work.shape[1] >= self.VEHICLE_MODE_MIN_WIDTH:
+                inside = self._candidates_inside_vehicles(work)
+                if inside:
+                    candidates = inside
+
+            # Полосы со служебными надписями камеры исключаем и здесь: дата
+            # в углу кадра похожа на номер и по форме, и по содержанию.
+            total = len(candidates)
+            candidates = [c for c in candidates
+                          if self._center_outside_osd(c, work.shape)]
+            if total != len(candidates):
+                logger.debug("область отклонена как надпись камеры: "
+                             f"{total - len(candidates)}")
         if not candidates:
             return []
 
         out: list[PlateProbe] = []
+        deadline = time.perf_counter() + self.OCR_BUDGET_MS / 1000.0
         for (x, y, bw, bh) in candidates:
-            text, conf = self._read_text(work[y:y + bh, x:x + bw], fmt)
+            # Бюджет проверяем между кандидатами: внутри одного кандидата
+            # прерываться нельзя, иначе потеряется уже прочитанный текст.
+            if time.perf_counter() >= deadline:
+                logger.debug(
+                    f"бюджет распознавания исчерпан, разобрано "
+                    f"{len(out)} из {len(candidates)} кандидатов")
+                break
+            crop = work[y:y + bh, x:x + bw]
+            # Сначала пробуем нейросетевой OCR: на номерах он точнее и
+            # быстрее. Tesseract остаётся запасным путём — он выручает,
+            # когда модель вообще не разобрала изображение.
+            result = self._neural_read_text(crop, fmt)
+            if result is None:
+                result = self._read_text(crop, fmt)
+            text, conf = result
             if not text:
-                continue
+                text, conf = self._read_text(crop, fmt)
+                if not text:
+                    continue
 
             # Проверка формата: отсекает OSD-меню, надписи и мусор OCR.
             if fmt is not None and not plate_format.matches_format(text, fmt):
@@ -235,18 +365,7 @@ class PlateRecognizer:
             return None
         return x1, y1, x2, y2
 
-    # Доля высоты кадра снизу, где искать номер не нужно.
-    #
-    # Камеры рисуют поверх картинки служебные надписи: дату, имя модели,
-    # сообщения прошивки («Нет лицензии», «domofon»). На кадрах OpenIPC они
-    # занимают нижние 10-15% высоты, и OCR читает их как номер.
-    #
-    # Отсекаем полосу целиком: номер физически не может быть вровень с
-    # подписью, потому что подпись рисуется поверх изображения в самом низу.
-    OSD_BOTTOM_FRACTION = 0.18
-
     # Минимальный размер области, которую имеет смысл отдавать в OCR.
-    #
     # Меряется в пикселях, а не в долях кадра: распознаванию важно
     # абсолютное число точек на символ, а не то, какую часть кадра занимает
     # номер. При высоте меньше ~10 пикселей Tesseract не различает символы
@@ -257,6 +376,113 @@ class PlateRecognizer:
     # надёжнее делает проверка формата после OCR.
     MIN_PLATE_HEIGHT = 10
     MIN_PLATE_WIDTH = 30
+
+    # Верхняя граница площади кандидата, доля кадра.
+    #
+    # Было 0.5, и этого не хватило: на камере 192.168.1.106 морфология
+    # сливала в один контур половину кадра (640x274 — это 36% площади),
+    # этим «кандидатом» оказывались доски паллета. OCR честно читал с них
+    # текст, строка совпадала с форматом номера — и в базу шли события
+    # «распознан номер» на кадрах без машин. В журнале таких событий было
+    # большинство: в статистике по bbox 25 событий из 40 имели ширину во
+    # весь кадр.
+    #
+    # Номер физически не может занимать треть кадра: при высоте 20-60
+    # пикселей на кадре 640x752 это доли процента, а вплотную к камере —
+    # единицы процентов.
+    MAX_AREA_FRACTION = 0.10
+
+    # Верхняя граница ширины кандидата, доля кадра.
+    #
+    # Отдельная проверка, потому что у паллета широкий и низкий контур:
+    # по площади он проходит, а по ширине — нет. Настоящий номер даже
+    # вблизи не бывает во всю ширину кадра, потому что номер — деталь
+    # машины, а не фон.
+    MAX_WIDTH_FRACTION = 0.7
+
+    # Пороги яркости для проверки «это похоже на номерной знак».
+    #
+    # Российский номер — светлая (белая) пластина с тёмными символами.
+    # Наши камеры дали много ложных срабатываний на текстурах: доски
+    # паллета, тёмный забор, камни, надписи камеры. На замерах по живым
+    # кадрам у такого «кандидата» доля светлых пикселей 0-0.44, а доля
+    # тёмных либо почти нулевая (светлая текстура), либо 0.5-0.87 (тёмный
+    # фон). У настоящего номера светлый фон занимает больше половины
+    # области, а на символы приходится заметная часть тёмных пикселей.
+    BRIGHT_LEVEL = 180
+    DARK_LEVEL = 90
+    # Пороги вынесены в переменные окружения: на другом объекте освещение
+    # иные (ночь, тень, грязный номер), и подгонять их пересборкой образа
+    # неудобно. Значения по умолчанию подобраны по замерам на живых кадрах.
+    MIN_BRIGHT_FRACTION = float(os.getenv("PLATE_MIN_BRIGHT", "0.45"))
+    MIN_DARK_FRACTION = float(os.getenv("PLATE_MIN_DARK", "0.10"))
+
+    # Порог «почти белого» для поиска самой пластины номера.
+    #
+    # Значение подобрано замером на кадре зоны: при 160 пластина номера
+    # сливалась со светлой дорогой в один контур, при 180 она выделяется
+    # отдельно (на тестовом кадре — 255×49 с долей ярких пикселей 0.74,
+    # тогда как дорога и доски дают 0.10-0.39).
+    PLATE_BG_LEVEL = int(os.getenv("PLATE_BG_LEVEL", "180"))
+
+    # Нейросетевой детектор области номера (YOLO), файл весов.
+    #
+    # Морфологический поиск (градиенты + яркость) находил области, но
+    # настоящий номер от текстуры не отличал: на живых кадрах «номерами»
+    # становились доски паллета и забор. Модель решает эту задачу по
+    # внешнему виду номера. Если файла нет, работает старый путь —
+    # детектор обязан запускаться и без модели.
+    MODEL_PATH = os.getenv("PLATE_DETECTOR_MODEL", "/app/models/plate_yolov8n.pt")
+    # Порог уверенности модели.
+    #
+    # 0.35 выбран из компромисса: при 0.5 номер вдали пропускается, при
+    # 0.25 появляются срабатывания на надписях камеры (проверено: модель
+    # приняла дату OSD «12:09:45» за номер с уверенностью 0.60). Полосы с
+    # надписями камеры дополнительно исключаются проверкой центра.
+    MODEL_CONF = float(os.getenv("PLATE_MODEL_CONF", "0.35"))
+
+    # Поиск номера внутри найденной машины.
+    #
+    # На кадре крупного разрешения (основной поток) номер занимает доли
+    # процента площади: на 4К это ~120×32 px при кадре 3840 px, и модель
+    # области номера его не видит. Машину находит обычный детектор объектов,
+    # а в её кропе номер уже заметен — там модель давала уверенность 0.96.
+    VEHICLE_MODEL_PATH = os.getenv("PLATE_VEHICLE_MODEL", "/app/yolov8n.pt")
+    VEHICLE_CONF = float(os.getenv("PLATE_VEHICLE_CONF", "0.35"))
+    # Классы COCO: 2 — car, 5 — bus, 7 — truck.
+    VEHICLE_CLASSES = [2, 5, 7]
+    # Запас вокруг рамки машины, доля её ширины.
+    VEHICLE_PAD = 0.05
+    # С какой ширины кадра включать этот режим.
+    #
+    # Меньшие кадры — это субпоток и кадры объектов: там номер либо уже
+    # крупный относительно кадра, либо безнадёжно мал, и поиск машин только
+    # тратил бы время.
+    VEHICLE_MODE_MIN_WIDTH = int(os.getenv("PLATE_VEHICLE_MIN_WIDTH", "1200"))
+
+    # Доля высоты кадра сверху и снизу, где номер искать не нужно.
+    #
+    # Камеры пишут поверх картинки дату и служебные строки: у OpenIPC дата
+    # сверху, у клона Hikvision снизу — «Нет лицензии domofon». Такие
+    # надписи похожи на номер по форме и ловятся как моделью, так и
+    # морфологией. Номер не может быть вровень с подписью: надпись
+    # рисуется у самого края кадра.
+    OSD_TOP_FRACTION = float(os.getenv("PLATE_OSD_TOP", "0.10"))
+    OSD_BOTTOM_FRACTION = 0.18
+
+    def _looks_like_plate(self, crop: np.ndarray) -> bool:
+        """Проверяет, что область светлая с тёмными символами.
+
+        Дешёвая проверка по одному каналу яркости. Ставится ДО OCR: она
+        отсекает текстуры, на которых Tesseract честно «читает» буквы и
+        цифры, и тем самым экономит самый дорогой шаг разбора.
+        """
+        if crop.size == 0:
+            return False
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        bright = float((gray > self.BRIGHT_LEVEL).mean())
+        dark = float((gray < self.DARK_LEVEL).mean())
+        return bright >= self.MIN_BRIGHT_FRACTION and dark >= self.MIN_DARK_FRACTION
 
     # Целевая высота изображения номера перед подачей в OCR, в пикселях.
     #
@@ -303,6 +529,25 @@ class PlateRecognizer:
 
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+        # Второй источник кандидатов — сама светлая пластина номера.
+        #
+        # Поиск только по градиентам (Sobel) находил текстуры и пропускал
+        # настоящие номера. Проверено на синтетическом кадре: нарисованный
+        # номер 240×52 (белая пластина с чёрным текстом на дороге) в
+        # контурах после Sobel не появлялся вовсе — зато появлялись доски
+        # паллета и полоса дороги. Причина в том, что пластина даёт мало
+        # вертикальных градиентов: контраст создают символы, а не края.
+        #
+        # Поэтому дополнительно ищем именно светлые области: у российского
+        # номера фон почти белый, а у окружения (дорога, дерево, забор)
+        # такой яркости нет.
+        _, white = cv2.threshold(gray, self.PLATE_BG_LEVEL, 255, cv2.THRESH_BINARY)
+        white = cv2.morphologyEx(white, cv2.MORPH_CLOSE,
+                                 cv2.getStructuringElement(cv2.MORPH_RECT, (9, 3)))
+        white_contours, _ = cv2.findContours(white, cv2.RETR_EXTERNAL,
+                                             cv2.CHAIN_APPROX_SIMPLE)
+        contours = list(contours) + list(white_contours)
+
         out: list[tuple[int, int, int, int]] = []
         img_area = work.shape[0] * work.shape[1]
         for c in contours:
@@ -310,7 +555,11 @@ class PlateRecognizer:
             area = bw * bh
             # Нижняя граница площади снижена: номер вдали занимает немного
             # места, и прежний порог 0.05% отсекал его вместе с шумом.
-            if area < img_area * 0.0002 or area > img_area * 0.5:
+            if area < img_area * 0.0002 or area > img_area * self.MAX_AREA_FRACTION:
+                continue
+            # Кандидат во всю ширину кадра — это фон (дорога, паллеты,
+            # забор), а не номер. Такие области давали ложные распознавания.
+            if bw > work.shape[1] * self.MAX_WIDTH_FRACTION:
                 continue
             # Номерной знак — вытянутый. Границы расширены: стандартный
             # российский номер даёт около 4.7, но в перспективе, под углом
@@ -343,13 +592,159 @@ class PlateRecognizer:
             # и он читает одну букву вместо строки. Проверено на реальном
             # кадре — точный кроп 79×12 давал «E2147», тот же кроп с
             # запасом 12 пикселей по краям уже только «B».
+            #
+            # Проверка «светлая пластина с тёмными символами» идёт ДО
+            # отбора крупнейших областей, а не после. Это важно: раньше
+            # кандидаты сортировались по площади и брались два самых
+            # крупных. На камере .106 крупнейшими оказывались доски
+            # паллета, и настоящий номер — он гораздо меньше по площади —
+            # не попадал в разбор вообще. Проверено на синтетическом кадре:
+            # нарисованный номер 240×52 читался точно (уверенность 0.74),
+            # но среди кандидатов его не было, пока не добавили этот фильтр
+            # до сортировки.
+            if not self._looks_like_plate(work[y:y + bh, x:x + bw]):
+                continue
             out.append((x, y, bw, bh))
 
         # Берём самые крупные области: мелкие с большой вероятностью шум.
-        # Пять вместо трёх: машина может стоять рядом с другой, и настоящий
-        # номер не должен теряться из-за ограничения.
+        # Ограничение по числу согласовано с OCR_BUDGET_MS: каждый кандидат
+        # стоит до 0,6 с, а очередь кадров общая на все камеры.
         out.sort(key=lambda r: r[2] * r[3], reverse=True)
-        return out[:5]
+        return out[:self.MAX_CANDIDATES]
+
+    @property
+    def model_available(self) -> bool:
+        """Загружен ли нейросетевой детектор номера."""
+        return self._model is not None
+
+    def _candidates_inside_vehicles(
+            self, img: np.ndarray) -> list[tuple[int, int, int, int]]:
+        """Ищет номер внутри найденных машин.
+
+        Нужно для крупных кадров: модель области номера рассчитана на
+        изображения, где номер виден крупно, и на кадре целиком его
+        пропускает. Машину же находит обычный детектор объектов, а внутри
+        машины номер занимает уже заметную часть кадра.
+        """
+        if self._vehicle_model is None and not self._vehicle_model_tried:
+            self._vehicle_model_tried = True
+            path = self.VEHICLE_MODEL_PATH
+            if os.path.exists(path):
+                try:
+                    from ultralytics import YOLO
+                    self._vehicle_model = YOLO(path)
+                except Exception as e:
+                    logger.warning(f"детектор машин недоступен: {e}")
+        if self._vehicle_model is None:
+            return []
+
+        try:
+            res = self._vehicle_model.predict(
+                img, conf=self.VEHICLE_CONF, classes=self.VEHICLE_CLASSES,
+                verbose=False)
+        except Exception as e:
+            logger.debug(f"сбой поиска машин: {e}")
+            return []
+
+        out: list[tuple[int, int, int, int]] = []
+        for b in res[0].boxes:
+            vx1, vy1, vx2, vy2 = (int(v) for v in b.xyxy[0])
+            # Небольшой запас: номер стоит у края машины, и при точной
+            # обрезке по рамке часть знака может остаться за ней.
+            pad = int((vx2 - vx1) * self.VEHICLE_PAD)
+            vx1, vy1 = max(0, vx1 - pad), max(0, vy1 - pad)
+            vx2 = min(img.shape[1], vx2 + pad)
+            vy2 = min(img.shape[0], vy2 + pad)
+            vehicle = img[vy1:vy2, vx1:vx2]
+            if vehicle.size == 0:
+                continue
+            for (px, py, pw, ph) in (self._model_candidates(vehicle) or []):
+                out.append((px + vx1, py + vy1, pw, ph))
+        return out
+
+    def _model_candidates(
+            self, img: np.ndarray) -> list[tuple[int, int, int, int]] | None:
+        """Области, найденные моделью. None означает «модели нет».
+
+        Возвращаемая координаты — в системе переданного кадра.
+        """
+        if self._model is None and time.monotonic() - self._model_tried_at > 60:
+            self._model_tried_at = time.monotonic()
+            if os.path.exists(self.MODEL_PATH):
+                try:
+                    from ultralytics import YOLO
+                    self._model = YOLO(self.MODEL_PATH)
+                    logger.info(f"детектор номеров: модель {self.MODEL_PATH}")
+                except Exception as e:
+                    logger.warning(f"не удалось загрузить детектор номеров: {e}")
+            else:
+                logger.info("файл модели номеров не найден — поиск морфологией")
+
+        if self._model is None:
+            return None
+
+        try:
+            res = self._model.predict(img, conf=self.MODEL_CONF, verbose=False)
+        except Exception as e:
+            logger.debug(f"сбой модели номеров: {e}")
+            return []
+
+        out: list[tuple[int, int, int, int]] = []
+        for b in res[0].boxes:
+            x1, y1, x2, y2 = (int(v) for v in b.xyxy[0])
+            if x2 > x1 and y2 > y1:
+                out.append((x1, y1, x2 - x1, y2 - y1))
+        return out
+
+    def _center_outside_osd(self, box: tuple[int, int, int, int],
+                            shape: tuple[int, ...]) -> bool:
+        """Центр области вне полос служебных надписей камеры."""
+        h = shape[0]
+        cy = box[1] + box[3] / 2
+        return (h * self.OSD_TOP_FRACTION < cy
+                < h * (1.0 - self.OSD_BOTTOM_FRACTION))
+
+    def _neural_read_text(self, crop: np.ndarray,
+                          fmt: PlateFormat | None) -> tuple[str, float] | None:
+        """Читает номер нейросетью. None означает «модели нет».
+
+        Модель принимает изображение номера и сама приводит его к нужному
+        размеру и цветности, поэтому подготовка сводится к оттенкам серого.
+        """
+        if not self.ocr_model_name:
+            return None
+        if self._ocr_model is None and time.monotonic() - self._ocr_model_tried_at > 60:
+            self._ocr_model_tried_at = time.monotonic()
+            try:
+                from fast_plate_ocr import LicensePlateRecognizer
+                self._ocr_model = LicensePlateRecognizer(
+                    hub_ocr_model=self.ocr_model_name, device="auto")
+                logger.info(f"OCR номеров: модель {self.ocr_model_name}")
+            except Exception as e:
+                logger.warning(f"OCR номеров недоступен, остаёмся на tesseract: {e}")
+                # Больше не пробуем каждую минуту: без установленной
+                # библиотеки или сети это только засоряет журнал.
+                self.ocr_model_name = ""
+                return None
+        if self._ocr_model is None:
+            return None
+
+        try:
+            gray = (cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                    if crop.ndim == 3 else crop)
+            preds = self._ocr_model.run(gray, return_confidence=True)
+        except Exception as e:
+            logger.debug(f"сбой распознавания номера моделью: {e}")
+            return None
+        if not preds:
+            return "", 0.0
+
+        text = plate_format.normalize(preds[0].plate or "")
+        if fmt is not None:
+            text = plate_format.apply_confusions(text, fmt)
+        probs = preds[0].char_probs
+        conf = float(np.mean(probs)) if probs is not None and len(probs) else 0.5
+        return text, conf
 
     def _read_text(self, crop: np.ndarray,
                    fmt: PlateFormat | None = None) -> tuple[str, float]:
@@ -446,7 +841,7 @@ class PlateRecognizer:
         # изображение и читает содержимое: на том же кадре он стабильно
         # выдаёт «E217HY142».
         config = "--psm 6 -c tessedit_char_whitelist=ABCEHKMOPTXY0123456789"
-        with self._lock:
+        with self._ocr_slots:
             try:
                 data = self._pytesseract.image_to_data(
                     image, config=config, output_type=self._pytesseract.Output.DICT)

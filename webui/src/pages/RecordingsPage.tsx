@@ -1,9 +1,11 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
-  recordingsAPI, camerasAPI,
-  type CalendarDay, type TimelineItem, type Camera,
+  eventsAPI, recordingsAPI, camerasAPI,
+  type CalendarDay, type TimelineItem, type Camera, type DetectionEvent,
+  type TimelineDetectionMark,
 } from '../api/client'
+import ArchiveDetectionOverlay from '../components/ArchiveDetectionOverlay'
 import { useToast } from '../context/ToastContext'
 import {
   Calendar, ChevronLeft, ChevronRight, Play, Loader2, Film, Clock,
@@ -35,6 +37,14 @@ const MAX_TRACKS = 4
 const TRACK_COLORS = ['#2f81f7', '#34c759', '#ff9f0a', '#bf5af2']
 
 /** Цвета меток по причине записи. */
+/** Цвет отметки детекции по типу события. */
+const MARK_COLORS: Record<string, string> = {
+  plate: '#0a84ff',
+  face: '#bf5af2',
+  line: '#ffd60a',
+  object: '#34c759',
+}
+
 const TRIGGER_COLORS: Record<string, string> = {
   object: '#2f81f7',
   plate: '#34c759',
@@ -173,6 +183,16 @@ export default function RecordingsPage() {
   const [playing, setPlaying] = useState<{ item: TimelineItem; color: string } | null>(null)
 
   const timelineRef = useRef<HTMLDivElement>(null)
+  // Видео записи: по его позиции считается время кадра для наложения детекций.
+  const videoRef = useRef<HTMLVideoElement>(null)
+  // Детекции за время выбранной записи. Запрашиваем один раз: их немного,
+  // а по ходу воспроизведения остаётся показать нужные.
+  const [archiveEvents, setArchiveEvents] = useState<DetectionEvent[]>([])
+  // Какие детекции подсвечивать на шкале: 'none' — не подсвечивать,
+  // 'all' — все типы, иначе конкретный тип (plate, face, line, object).
+  const [detectionFilter, setDetectionFilter] = useState('all')
+  // Отметки детекций за день: приходят вместе с записями дня.
+  const [detectionMarks, setDetectionMarks] = useState<TimelineDetectionMark[]>([])
 
   // Справочник камер для панели выбора.
   useEffect(() => {
@@ -246,14 +266,22 @@ export default function RecordingsPage() {
         loading: true,
       })))
 
+      let marks: TimelineDetectionMark[] = []
       const results = await Promise.all(ids.map(async (id, idx) => {
         let items: TimelineItem[] = []
         try {
           const res = await recordingsAPI.timeline({
             date: selectedDate,
             camera_id: id || undefined,
+            // Подсветка на шкале: без фильтра сервер считает все типы,
+            // с фильтром — только выбранный. Считает он, а не браузер:
+            // за сутки событий тысячи, и выгружать их ради отметок нельзя.
+            detection_class: detectionFilter === 'all' || detectionFilter === 'none'
+              ? undefined
+              : detectionFilter,
           })
           items = res.data.items || []
+          if (!id) marks = res.data.detections || []
         } catch {
           items = []
         }
@@ -266,7 +294,10 @@ export default function RecordingsPage() {
         }
       }))
 
-      if (!cancelled) setTracks(results)
+      if (!cancelled) {
+        setTracks(results)
+        setDetectionMarks(detectionFilter === 'none' ? [] : marks)
+      }
     }
 
     load()
@@ -274,7 +305,7 @@ export default function RecordingsPage() {
     // Имена камер читаются из замыкания: список нужен только для подписи,
     // и его обновление не должно перезапускать загрузку записей.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate, camerasKey, toast])
+  }, [selectedDate, camerasKey, toast, detectionFilter])
 
   /**
    * Добавить или убрать камеру из дорожек.
@@ -388,6 +419,27 @@ export default function RecordingsPage() {
       clipFileName(item.camera_name, item.start_time, t('recordingsPage.cameraFallback')),
     )
   }, [toast, t])
+
+  // Детекции за время записи: их запрашиваем один раз, а по ходу
+  // воспроизведения остаётся показать нужные. Ограничение в 100 событий —
+  // защита от длинной записи: важнее не затормозить интерфейс, чем показать
+  // сразу все.
+  useEffect(() => {
+    if (!playing) {
+      setArchiveEvents([])
+      return
+    }
+    let cancelled = false
+    eventsAPI.list({
+      camera_id: playing.item.camera_id,
+      from: playing.item.start_time,
+      to: playing.item.end_time,
+      page_size: 100,
+    })
+      .then((res) => { if (!cancelled) setArchiveEvents(res.data.events || []) })
+      .catch(() => { if (!cancelled) setArchiveEvents([]) })
+    return () => { cancelled = true }
+  }, [playing])
 
   return (
     <div>
@@ -612,8 +664,12 @@ export default function RecordingsPage() {
                 </div>
               </div>
 
+              {/* Обёртка нужна для наложения: рамки позиционируются в
+                  процентах от того же прямоугольника, что и картинка. */}
+              <div style={{ position: 'relative' }}>
               <video
                 key={playing.item.id}
+                ref={videoRef}
                 controls
                 autoPlay
                 style={{
@@ -622,6 +678,14 @@ export default function RecordingsPage() {
                 }}
                 src={recordingsAPI.fileUrl(playing.item.file_path || '')}
               />
+              {archiveEvents.length > 0 && (
+                <ArchiveDetectionOverlay
+                  startTime={playing.item.start_time}
+                  events={archiveEvents}
+                  videoRef={videoRef}
+                />
+              )}
+              </div>
             </div>
           )}
 
@@ -637,6 +701,22 @@ export default function RecordingsPage() {
               </span>
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
                 {tracks.some((t) => t.loading) && <Loader2 size={14} className="spin" />}
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  {t('recordingsPage.detectionFilter')}
+                </span>
+                <select
+                  className="input"
+                  value={detectionFilter}
+                  onChange={(e) => setDetectionFilter(e.target.value)}
+                  style={{ fontSize: 12, padding: '3px 8px', width: 'auto' }}
+                >
+                  <option value="all">{t('recordingsPage.detectAll')}</option>
+                  <option value="plate">{t('recordingsPage.detectPlate')}</option>
+                  <option value="face">{t('recordingsPage.detectFace')}</option>
+                  <option value="line">{t('recordingsPage.detectLine')}</option>
+                  <option value="object">{t('recordingsPage.detectObject')}</option>
+                  <option value="none">{t('recordingsPage.detectNone')}</option>
+                </select>
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('recordingsPage.scale')}</span>
                 <button className="btn btn-outline btn-sm" onClick={() => setZoom((z) => Math.max(ZOOM_MIN, z / 1.5))}>−</button>
                 <span style={{ fontSize: 12, minWidth: 40, textAlign: 'center' }}>
@@ -702,6 +782,31 @@ export default function RecordingsPage() {
                     }}>
                       {tracks.length > 1 ? `${tIdx + 1}. ${track.cameraName}` : ''}
                     </div>
+
+                    {/* Подсветка детекций: тонкие полоски внизу дорожки
+                        показывают, где в течение суток были события.
+                        Рисуются ПОД клипами, чтобы не перекрывать их. */}
+                    {detectionMarks
+                      .filter((m) => !track.cameraID || m.camera_id === track.cameraID)
+                      .map((m, i) => (
+                        <div
+                          key={`mark-${i}`}
+                          title={t('recordingsPage.detectionMark', {
+                            count: m.count,
+                            type: t(`recordingsPage.mark${
+                              m.kind.charAt(0).toUpperCase() + m.kind.slice(1)
+                            }`),
+                          })}
+                          style={{
+                            position: 'absolute',
+                            left: `${m.start_ratio * 100}%`,
+                            width: `${Math.max(0.08, (m.end_ratio - m.start_ratio) * 100)}%`,
+                            bottom: 1, height: 3, borderRadius: 1,
+                            background: MARK_COLORS[m.kind] || '#8b98a5',
+                            opacity: 0.85,
+                          }}
+                        />
+                      ))}
 
                     {track.items.map((item) => {
                       const left = `${item.start_ratio * 100}%`

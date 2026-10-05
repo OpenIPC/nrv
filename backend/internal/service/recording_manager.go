@@ -15,10 +15,17 @@ import (
 
 // SavedClip описывает сохранённый клип для записи в таблицу recordings.
 type SavedClip struct {
-	CameraID    uuid.UUID
-	EventTime   time.Time
-	Path        string
-	Size        int64
+	CameraID  uuid.UUID
+	EventTime time.Time
+	// StartTime — фактическое начало клипа: он склеен из целых сегментов,
+	// поэтому не обязан совпадать с «событие минус пребуфер».
+	// Прививка времени к реальному содержимому файла — единственный способ
+	// правильно поставить метки детекций на шкале архива.
+	StartTime time.Time
+	Path      string
+	Size      int64
+	// DurationSec — измеренная длительность клипа, а не номинальные
+	// pre+post: они расходятся тем сильнее, чемреже ключевые кадры у камеры.
 	DurationSec int
 	Resolution  string
 	Codec       string
@@ -241,7 +248,7 @@ func (m *RecordingManager) handleEvent(ctx context.Context, cameraID uuid.UUID,
 func (m *RecordingManager) collectAndSave(ctx context.Context, cameraID uuid.UUID,
 	eventTime time.Time, pre, post int, triggerType domain.TriggerType, triggerDetail string) {
 
-	clip, err := m.recorder.CollectClip(cameraID, eventTime, pre, post)
+	clip, startTime, clipDuration, err := m.recorder.CollectClip(cameraID, eventTime, pre, post)
 	if err != nil {
 		// Отдельно выделяем нехватку пребуфера: это не сбой, а ожидаемое
 		// следствие того, что запись началась позже события. Оператору
@@ -266,8 +273,19 @@ func (m *RecordingManager) collectAndSave(ctx context.Context, cameraID uuid.UUI
 		log.Warn().Err(err).Str("camera_id", cameraID.String()[:8]).Msg("не удалось сохранить клип")
 		return
 	}
-	// Разрешение и кодек определяем до удаления буферного файла
-	resolution, codec := ProbeVideo(clip)
+	// Разрешение, кодек и длительность определяем до удаления буферного файла.
+	resolution, codec, probedDuration := ProbeVideo(clip)
+	if probedDuration > 0 {
+		clipDuration = probedDuration
+	}
+	if clipDuration <= 0 {
+		clipDuration = float64(pre + post)
+	}
+	if startTime.IsZero() {
+		// Время начала сегмента не разобралось — лучше отступить от события
+		// на половину клипа, чем записать нулевую дату.
+		startTime = eventTime.Add(-time.Duration(clipDuration/2) * time.Second)
+	}
 	// Буферный файл больше не нужен — данные уже в хранилище
 	removeFile(clip)
 
@@ -275,9 +293,10 @@ func (m *RecordingManager) collectAndSave(ctx context.Context, cameraID uuid.UUI
 		m.onSaved(SavedClip{
 			CameraID:      cameraID,
 			EventTime:     eventTime,
+			StartTime:     startTime,
 			Path:          stored,
 			Size:          size,
-			DurationSec:   pre + post,
+			DurationSec:   int(clipDuration + 0.5),
 			Resolution:    resolution,
 			Codec:         codec,
 			TriggerType:   triggerType,

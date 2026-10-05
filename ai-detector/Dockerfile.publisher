@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements-publisher.txt .
 RUN pip install --no-cache-dir -r requirements-publisher.txt
 
-COPY frame_publisher_service.py .
+# plate_zone.py обязателен: в нём общее с детектором условие «зона номеров
+# задана». Без него сервис не запустится с ModuleNotFoundError.
+COPY frame_publisher_service.py plate_zone.py .
 
 ENTRYPOINT ["python", "frame_publisher_service.py"]

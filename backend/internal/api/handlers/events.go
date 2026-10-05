@@ -3,6 +3,8 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -37,7 +39,9 @@ func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events, total, err := h.svc.List(r.Context(), cameraID, r.URL.Query().Get("object_class"), page, pageSize)
+	events, total, err := h.svc.List(r.Context(), cameraID, r.URL.Query().Get("object_class"),
+		parseTimeParam(r, "from"), parseTimeParam(r, "to"),
+		strings.TrimSpace(r.URL.Query().Get("search")), page, pageSize)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -49,6 +53,25 @@ func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
 		Page:     page,
 		PageSize: pageSize,
 	})
+}
+
+// parseTimeParam читает время из параметра запроса.
+//
+// Принимаем формат RFC3339 (его отдаёт браузер через toISOString) и секунды
+// Unix — второй удобно писать руками при проверке через curl.
+func parseTimeParam(r *http.Request, name string) *time.Time {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return &t
+	}
+	if sec, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		t := time.Unix(sec, 0)
+		return &t
+	}
+	return nil
 }
 
 func (h *EventHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -64,4 +87,34 @@ func (h *EventHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, event)
+}
+
+// CrossingStats отдаёт счётчик пересечений линии по камере.
+//
+// Период задаётся часами (hours), по умолчанию сутки: счётчик нужен, чтобы
+// видеть работу линии, не разбирая список событий.
+func (h *EventHandler) CrossingStats(w http.ResponseWriter, r *http.Request) {
+	cameraID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	if hours < 1 || hours > 24*30 {
+		hours = 24
+	}
+	since := time.Now().Add(-time.Duration(hours) * time.Hour)
+
+	forward, backward, err := h.svc.CrossingStats(r.Context(), cameraID, since)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"hours":    hours,
+		"forward":  forward,
+		"backward": backward,
+		"total":    forward + backward,
+	})
 }

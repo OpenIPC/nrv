@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { eventsAPI, DetectionEvent, TriggerType } from '../api/client'
+import { camerasAPI, eventsAPI, DetectionEvent, TriggerType } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { AlertTriangle, Car, User, Dog, Package, Eye, X, Download } from 'lucide-react'
 
@@ -73,10 +73,47 @@ export default function EventsPage() {
   const [objectClass, setObjectClass] = useState('')
   // Снимок, открытый на весь экран
   const [preview, setPreview] = useState<DetectionEvent | null>(null)
+  // Поиск по распознанному номеру и по имени из справочника. Ищем на сервере:
+  // номер лежит в метаданных события, и перебирать их в браузере нельзя —
+  // на странице всего 20 записей из десятков тысяч.
+  const [search, setSearch] = useState('')
+  // Поиск отправляем с задержкой: иначе запрос уходил бы на каждую букву.
+  const [searchQuery, setSearchQuery] = useState('')
+  // Период: сколько последних часов показывать. 0 — без ограничения.
+  const [periodHours, setPeriodHours] = useState(24)
+  // Камера: пусто — все камеры.
+  const [cameraId, setCameraId] = useState('')
+  const [cameras, setCameras] = useState<{ id: string; name: string }[]>([])
+
+  // Список камер нужен для фильтра: без него оператор ищет нужную камеру
+  // в общем списке событий и угадывает её имя.
+  useEffect(() => {
+    camerasAPI.list()
+      .then((res) => setCameras((res.data || []).map((c: any) => ({ id: c.id, name: c.name }))))
+      .catch(() => setCameras([]))
+  }, [])
+
+  // Задержка перед поиском: человек печатает номер целиком, и запрос на
+  // каждую букву был бы лишней работой и для сервера, и для глаз.
+  useEffect(() => {
+    const timer = setTimeout(() => { setSearchQuery(search.trim()); setPage(1) }, 400)
+    return () => clearTimeout(timer)
+  }, [search])
+
+  const from = periodHours > 0
+    ? new Date(Date.now() - periodHours * 3600 * 1000).toISOString()
+    : undefined
 
   const { data, loading, refetch } = useAsync<any>(
-    () => eventsAPI.list({ page, page_size: 20, object_class: objectClass || undefined }),
-    [page, objectClass],
+    () => eventsAPI.list({
+      page,
+      page_size: 20,
+      object_class: objectClass || undefined,
+      camera_id: cameraId || undefined,
+      from,
+      search: searchQuery || undefined,
+    }),
+    [page, objectClass, cameraId, periodHours, searchQuery],
   )
 
   const allEvents: DetectionEvent[] = data?.events || []
@@ -125,6 +162,44 @@ export default function EventsPage() {
             ))}
           </select>
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('eventsPage.cameraLabel')}</label>
+          <select
+            className="input"
+            style={{ width: 200 }}
+            value={cameraId}
+            onChange={(e) => { setCameraId(e.target.value); setPage(1) }}
+          >
+            <option value="">{t('eventsPage.allCameras')}</option>
+            {cameras.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('eventsPage.periodLabel')}</label>
+          <select
+            className="input"
+            style={{ width: 150 }}
+            value={periodHours}
+            onChange={(e) => { setPeriodHours(Number(e.target.value)); setPage(1) }}
+          >
+            <option value={1}>{t('eventsPage.periodHour')}</option>
+            <option value={8}>{t('eventsPage.periodShift')}</option>
+            <option value={24}>{t('eventsPage.periodDay')}</option>
+            <option value={24 * 7}>{t('eventsPage.periodWeek')}</option>
+            <option value={0}>{t('eventsPage.periodAll')}</option>
+          </select>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '1 1 220px' }}>
+          <input
+            className="input"
+            style={{ width: '100%' }}
+            placeholder={t('eventsPage.searchPlaceholder')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
         {onlySnapshots && (
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
             {t('eventsPage.foundOf', { found: events.length, total: allEvents.length })}
@@ -165,6 +240,40 @@ export default function EventsPage() {
                           {ev.track_id && (
                             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                               ID:{ev.track_id}
+                            </span>
+                          )}
+                          {/* Пересечение линии: без пометки такое событие
+                              выглядит в списке обычной детекцией объекта,
+                              и понять, что сработала линия, невозможно. */}
+                          {/* Распознанный номер показываем рядом с классом:
+                              искать по нему можно, а увидеть его было негде. */}
+                          {ev.metadata?.plate_text && (
+                            <span style={{
+                              fontFamily: 'monospace', fontWeight: 700,
+                              fontSize: 12, padding: '1px 6px', borderRadius: 4,
+                              background: 'rgba(10,132,255,0.15)',
+                              color: '#0a84ff', whiteSpace: 'nowrap',
+                            }}>
+                              {String(ev.metadata.plate_text)}
+                            </span>
+                          )}
+                          {ev.matched_name && (
+                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                              {ev.matched_name}
+                            </span>
+                          )}
+                          {/* Пересечение линии: без пометки такое событие
+                              выглядит в списке обычной детекцией объекта,
+                              и понять, что сработала линия, невозможно. */}
+                          {ev.metadata?.crossing && (
+                            <span style={{
+                              fontSize: 11, padding: '1px 6px', borderRadius: 4,
+                              background: 'rgba(120,140,255,0.15)',
+                              color: 'var(--accent)', whiteSpace: 'nowrap',
+                            }}>
+                              {ev.metadata.crossing === 'backward'
+                                ? t('eventsPage.crossingBackward')
+                                : t('eventsPage.crossingForward')}
                             </span>
                           )}
                         </span>

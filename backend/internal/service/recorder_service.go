@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -325,9 +326,15 @@ func (r *RecorderService) PruneBuffer() {
 }
 
 // CollectClip собирает видеофайл за интервал вокруг события.
-// Возвращает путь к готовому клипу или пустую строку, если сегментов нет.
+//
+// Возвращает путь к готовому клипу, время его начала и длительность.
+// Клип склеивается из ЦЕЛЫХ сегментов, поэтому его границы почти всегда шире
+// заказанного интервала: начало — это начало первого подходящего сегмента.
+// Раньше вызывающий код считал, что клип всегда равен pre+post секундам, и
+// записывал в базу неверные границы — шкала времени и наложенные детекции
+// оказывались сдвинутыми относительно видео.
 func (r *RecorderService) CollectClip(cameraID uuid.UUID, eventTime time.Time,
-	preSec, postSec int) (string, error) {
+	preSec, postSec int) (path string, start time.Time, durationSec float64, err error) {
 
 	key := cameraID.String()
 	dir := filepath.Join(r.BufferDir, key)
@@ -346,10 +353,10 @@ func (r *RecorderService) CollectClip(cameraID uuid.UUID, eventTime time.Time,
 	// клип без того, ради чего он записан.
 	oldest, err := r.oldestSegmentTime(dir)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, 0, err
 	}
 	if !oldest.IsZero() && oldest.After(wantFrom) {
-		return "", fmt.Errorf(
+		return "", time.Time{}, 0, fmt.Errorf(
 			"пребуфер не набран: запись идёт с %s, а событие было в %s (нужно %d с)",
 			oldest.Format("15:04:05"), eventTime.Format("15:04:05"), preSec)
 	}
@@ -362,17 +369,37 @@ func (r *RecorderService) CollectClip(cameraID uuid.UUID, eventTime time.Time,
 
 	segments, err := r.segmentsInRange(dir, wantFrom, to)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, 0, err
 	}
 	if len(segments) == 0 {
-		return "", nil
+		return "", time.Time{}, 0, nil
 	}
 
 	out := filepath.Join(dir, fmt.Sprintf("clip_%s.mp4", eventTime.UTC().Format("20060102_150405")))
 	if err := concatSegments(segments, out); err != nil {
-		return "", err
+		return "", time.Time{}, 0, err
 	}
-	return out, nil
+
+	// Начало клипа — это начало первого склеенного сегмента, а не wantFrom:
+	// обрезать внутри сегмента нельзя без перекодирования, а перекодировать
+	// 4K на каждое событие слишком дорого. Длительность берём измеренную,
+	// иначе границы записи разойдутся с видео.
+	start = segmentStart(segments[0])
+	_, _, durationSec = ProbeVideo(out)
+	if durationSec <= 0 {
+		// ffprobe недоступен: складываем номинальные длины сегментов, чтобы
+		// границы записи остались правдоподобными.
+		durationSec = float64(len(segments)) * r.segmentSpan(dir).Seconds()
+	}
+	return out, start, durationSec, nil
+}
+
+// segmentStart возвращает время начала сегмента по пути к его файлу.
+func segmentStart(path string) time.Time {
+	if ts, ok := segmentTime(filepath.Base(path)); ok {
+		return ts
+	}
+	return time.Time{}
 }
 
 // SegmentCoverage сообщает, какой интервал времени покрыт сегментами записи.
@@ -439,14 +466,18 @@ func (r *RecorderService) segmentsInRange(dir string, from, to time.Time) ([]str
 		return nil, err
 	}
 
+	// Длину сегмента берём фактическую, а не номинальную: иначе границы
+	// отбора сдвигаются и клип выходит не тем, что заказан.
+	span := r.segmentSpan(dir)
+
 	var picked []string
 	for _, e := range entries {
 		ts, ok := segmentTime(e.Name())
 		if !ok {
 			continue
 		}
-		// Сегмент покрывает [ts, ts+SegmentSec]: берём пересекающиеся с интервалом
-		segEnd := ts.Add(time.Duration(r.SegmentSec) * time.Second)
+		// Сегмент покрывает [ts, ts+span]: берём пересекающиеся с интервалом
+		segEnd := ts.Add(span)
 		if !segEnd.After(from) || !ts.Before(to) {
 			continue
 		}
@@ -610,23 +641,81 @@ func videoParams(path string) (codec, pixFmt string) {
 	return "", ""
 }
 
-// ProbeVideo определяет разрешение и кодек файла.
-// Возвращает пустые строки, если ffprobe недоступен — это не критично,
+// ProbeVideo определяет разрешение, кодек и длительность файла.
+// Возвращает пустые значения, если ffprobe недоступен — это не критично,
 // поля в БД просто останутся незаполненными.
-func ProbeVideo(path string) (resolution, codec string) {
+//
+// Длительность нужна не «для справки»: клип собирается склейкой целых
+// сегментов, поэтому она почти никогда не равна номинальным pre+post
+// секундам. Пока в базу писался номинал, границы записи на шкале времени
+// расходились с видео, и рамки детекций в архиве вставали не на тот кадр.
+func ProbeVideo(path string) (resolution, codec string, durationSec float64) {
 	out, err := exec.Command("ffprobe", "-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=codec_name,width,height",
+		"-show_entries", "format=duration",
 		"-of", "csv=p=0", path).Output()
 	if err != nil {
-		return "", ""
+		return "", "", 0
 	}
-	// Формат вывода: "h264,1920,1080"
-	parts := strings.Split(strings.TrimSpace(string(out)), ",")
-	if len(parts) >= 3 {
-		return parts[1] + "x" + parts[2], parts[0]
+	// Формат вывода: строка "h264,1920,1080", затем строка с длительностью.
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, ",")
+		if len(parts) >= 3 {
+			resolution, codec = parts[1]+"x"+parts[2], parts[0]
+			continue
+		}
+		if d, err := strconv.ParseFloat(line, 64); err == nil && d > 0 {
+			durationSec = d
+		}
 	}
-	return "", ""
+	return resolution, codec, durationSec
+}
+
+// segmentSpan оценивает фактическую длину одного сегмента записи.
+//
+// Номинала в настройках недостаточно: ffmpeg пишет сегменты копированием
+// потока (-c copy), поэтому резать чаще, чем идут ключевые кадры, он не может.
+// При настроенных 2 секундах на диске лежали сегменты по 10 секунд — таков
+// интервал между ключевыми кадрами камеры. Отбор «по номиналу» считал такой
+// сегмент покрывающим 2 секунды, брал лишние сегменты и терял нужные, из-за
+// чего клип не совпадал с интервалом вокруг события.
+//
+// Длину берём из самих имён сегментов: медиана разниц между соседними
+// временами устойчива к пропускам и не требует запускать ffprobe на каждый
+// клип.
+func (r *RecorderService) segmentSpan(dir string) time.Duration {
+	fallback := time.Duration(r.SegmentSec) * time.Second
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fallback
+	}
+	times := make([]time.Time, 0, len(entries))
+	for _, e := range entries {
+		if ts, ok := segmentTime(e.Name()); ok {
+			times = append(times, ts)
+		}
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+
+	diffs := make([]time.Duration, 0, len(times))
+	for i := 1; i < len(times); i++ {
+		// Разрыв больше минуты — это не длина сегмента, а пропуск записи
+		// (перезапуск или сбой): по такому значению отбор сломается.
+		if d := times[i].Sub(times[i-1]); d > 0 && d < time.Minute {
+			diffs = append(diffs, d)
+		}
+	}
+	if len(diffs) == 0 {
+		return fallback
+	}
+	sort.Slice(diffs, func(i, j int) bool { return diffs[i] < diffs[j] })
+	return diffs[len(diffs)/2]
 }
 
 // SaveRecording отправляет готовый клип в хранилище и возвращает путь и размер.

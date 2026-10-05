@@ -249,14 +249,19 @@ func main() {
 	}
 
 	recordingMgr.OnSaved(func(clip service.SavedClip) {
-		half := time.Duration(clip.DurationSec) * time.Second / 2
+		// Границы записи берём из SavedClip, а не из «событие ± половина»:
+		// клип склеен из целых сегментов, и его реальное начало почти всегда
+		// не совпадает с событием минус пребуфер. На этих границах стоит вся
+		// шкала времени архива и наложение детекций — ошибка тут сдвигает их
+		// относительно видео целиком.
+		clipEnd := clip.StartTime.Add(time.Duration(clip.DurationSec) * time.Second)
 		recordingID := uuid.New()
 		if _, err := db.Exec(context.Background(), `
 			INSERT INTO recordings (id, camera_id, start_time, end_time, file_path, file_size,
 			                        resolution, codec, event_triggered, trigger_type, trigger_detail)
 			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), true, $9, $10)`,
 			recordingID, clip.CameraID,
-			clip.EventTime.Add(-half), clip.EventTime.Add(half),
+			clip.StartTime, clipEnd,
 			clip.Path, clip.Size, clip.Resolution, clip.Codec,
 			triggerTypeOrDefault(clip.TriggerType), clip.TriggerDetail); err != nil {
 			log.Error().Err(err).Str("camera_id", clip.CameraID.String()[:8]).

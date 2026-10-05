@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"strconv"
 	"time"
 
@@ -252,8 +253,96 @@ func (h *RecordingHandler) DayTimeline(w http.ResponseWriter, r *http.Request) {
 		log.Error().Err(err).Msg("ошибка чтения записей дня")
 	}
 
+	// Отметки детекций на шкале.
+	//
+	// Считаем их здесь же, а не отдельным запросом из интерфейса: шкала без
+	// них бессмысленна (не видно, где искать событие), а второй запрос
+	// пришлось бы согласовывать по времени с первым.
+	//
+	// События группируем по корзинам времени: за сутки их тысячи, и отдавать
+	// каждое отдельной отметкой нельзя — браузер не отрисует столько
+	// элементов. Корзина в минуту даёт на шкале отметку шириной 1/1440 суток,
+	// которая видна при увеличении.
+	marks := make([]map[string]any, 0, 128)
+	bucketSeconds := 60.0
+	// Фильтр по типам: оператору часто нужны только номера или только лица,
+	// и подсветка по всем событиям сразу мешает.
+	var classFilter []string
+	if raw := r.URL.Query().Get("detection_class"); raw != "" {
+		for _, c := range strings.Split(raw, ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				classFilter = append(classFilter, c)
+			}
+		}
+	}
+
+	// Тип события считаем здесь, а не отдаём класс объекта.
+	//
+	// В detection_events лежит КЛАСС обнаруженного (car, person, cat), а тип
+	// детекции (номера, лица, пересечение линии) выводится из него и из
+	// метаданных. Интерфейсу нужен именно тип: по классу «только пересечения»
+	// не отфильтровать — у пересечения класс остаётся классовым, а признак
+	// лежит в metadata.crossing.
+	kindExpr := `
+		CASE
+			WHEN object_class = 'plate' THEN 'plate'
+			WHEN object_class = 'face' THEN 'face'
+			WHEN metadata ? 'crossing' THEN 'line'
+			ELSE 'object'
+		END`
+
+	markQuery := `
+		SELECT camera_id, kind,
+		       floor(extract(epoch FROM (timestamp - $1)) / $3)::int AS bucket,
+		       count(*)
+		FROM (
+			SELECT camera_id, ` + kindExpr + ` AS kind, timestamp
+			FROM detection_events
+			WHERE timestamp >= $1 AND timestamp < $2
+		) AS day_events
+		WHERE TRUE`
+	markArgs := []any{startLocal.UTC(), endLocal.UTC(), bucketSeconds}
+	if len(classFilter) > 0 {
+		markQuery += ` AND kind = ANY($4)`
+		markArgs = append(markArgs, classFilter)
+	}
+	markQuery += ` GROUP BY 1, 2, 3 ORDER BY 3 LIMIT 4000`
+
+	markRows, markErr := h.db.Query(r.Context(), markQuery, markArgs...)
+	if markErr != nil {
+		// Ошибка отметок не должна ломать шкалу записей: без подсветки
+		// архив всё равно остаётся рабочим.
+		log.Error().Err(markErr).Msg("не удалось получить отметки детекций")
+	} else {
+		defer markRows.Close()
+		for markRows.Next() {
+			var (
+				cameraID, class string
+				bucketIndex     int
+				count           int
+			)
+			if scanErr := markRows.Scan(&cameraID, &class, &bucketIndex, &count); scanErr != nil {
+				log.Warn().Err(scanErr).Msg("не удалось прочитать отметку детекции")
+				continue
+			}
+			startRatio := float64(bucketIndex) * bucketSeconds / daySeconds
+			endRatio := startRatio + bucketSeconds/daySeconds
+			if endRatio > 1 {
+				endRatio = 1
+			}
+			marks = append(marks, map[string]any{
+				"camera_id": cameraID,
+				"kind":      class,
+				"count":        count,
+				"start_ratio":  startRatio,
+				"end_ratio":    endRatio,
+			})
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"date":  dateStr,
-		"items": items,
+		"date":       dateStr,
+		"items":      items,
+		"detections": marks,
 	})
 }

@@ -337,7 +337,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/cameras/{id}/detection", detH.GetSettings)
 			r.Patch("/cameras/{id}/detection", detH.UpdateSettings)
 
-			// Глобальные настройки сервера (хранилище записей и снимков)
+				// Счётчик пересечений линии: сколько объектов прошло через неё
+				// за период, отдельно по направлениям. Нужен, чтобы работу
+				// линии было видно сразу, а не только в списке событий.
+				r.Get("/cameras/{id}/crossings", eventH.CrossingStats)
 			r.Get("/settings", detH.GetServerSettings)
 			r.Patch("/settings", detH.UpdateServerSettings)
 			// Предпросмотр автоочистки: что удалится при текущей глубине хранения

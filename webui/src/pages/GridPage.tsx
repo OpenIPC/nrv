@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { camerasAPI, type Camera, type StreamInfo } from '../api/client'
 import LivePlayer from '../components/LivePlayer'
+import DetectionOverlay from '../components/DetectionOverlay'
 import { useToast } from '../context/ToastContext'
 import { LayoutGrid, X, Maximize2, Minimize2, Check, Loader2 } from 'lucide-react'
 
@@ -76,8 +77,16 @@ interface GridCell {
   cameraId: string | null
 }
 
-export default function GridPage() {
-  const toast = useToast()
+/**
+ * На сколько секунд задержать показ рамок при просмотре по HLS.
+ *
+ * HLS отдаёт картинку с задержкой в несколько секунд, и без поправки рамка
+ * оказалась бы впереди объекта. Четыре секунды — обычная задержка HLS без
+ * режима низкой задержки; значение плавает, поэтому это поправка «примерно».
+ */
+const HLS_OVERLAY_LAG_SECONDS = 4
+
+export default function GridPage() {  const toast = useToast()
   const { t } = useTranslation()
 
   const [cameras, setCameras] = useState<Camera[]>([])
@@ -86,6 +95,10 @@ export default function GridPage() {
   const [selected, setSelected] = useState<string[]>(loadSavedCameras)
   // Какая ячейка развёрнута. null означает, что разворота нет.
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Транспорт развёрнутого просмотра. От него зависит, можно ли рисовать
+  // наложение детекций: у HLS картинка отстаёт на несколько секунд, и рамка
+  // «по последнему событию» оказалась бы впереди объекта.
+  const [expandedTransport, setExpandedTransport] = useState<'webrtc' | 'hls' | null>(null)
   const [streams, setStreams] = useState<Record<string, StreamInfo>>({})
   // Сколько плееров уже можно запускать: растёт по мере наполнения сетки.
   const [readyCount, setReadyCount] = useState(0)
@@ -311,7 +324,16 @@ export default function GridPage() {
                 audioUrl={`/api/v1/cameras/${expandedCamera.id}/hls/audio/index.m3u8`}
                 muted={false}
                 showControls
-              />
+                onTransport={setExpandedTransport}
+              >
+                {/* Наложение показываем и на HLS: там оно идёт с поправкой
+                    на задержку потока (см. DetectionOverlay). */}
+                <DetectionOverlay
+                  cameraId={expandedCamera.id}
+                  enabled
+                  lagSeconds={expandedTransport === 'webrtc' ? 0 : HLS_OVERLAY_LAG_SECONDS}
+                />
+              </LivePlayer>
               <div style={{
                 position: 'absolute', top: 8, left: 8, display: 'flex',
                 alignItems: 'center', gap: 8, zIndex: 10,

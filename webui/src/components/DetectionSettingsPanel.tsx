@@ -49,6 +49,15 @@ interface Props {
   cameraId: string
   /** URL снапшота для отрисовки линии (обычно /api/v1/cameras/{id}/snapshot?jwt=...) */
   snapshotUrl?: string
+  /**
+   * Кадр дополнительного потока для зоны номеров.
+   *
+   * Зона применяется к субпотоку (детектор читает номера именно с него), а
+   * обычный снимок камеры — это основной поток. Пропорции у них разные
+   * (например 16:9 и 1.22), и зона, нарисованная по основному кадру,
+   * смещается относительно того, что видит детектор.
+   */
+  zoneSnapshotUrl?: string
 }
 
 /** Разворачивает настройки с сервера в локальное состояние формы. */
@@ -82,7 +91,7 @@ function toForm(s: DetectionSettings) {
   }
 }
 
-export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props) {
+export default function DetectionSettingsPanel({ cameraId, snapshotUrl, zoneSnapshotUrl }: Props) {
   const { success, error } = useToast()
   const { t } = useTranslation()
   const [loading, setLoading] = useState(true)
@@ -99,7 +108,23 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
   const [retryToken, setRetryToken] = useState(0)
   // Какая точка линии ставится следующей: 0 — первая, 1 — вторая
   const [nextPoint, setNextPoint] = useState<0 | 1>(0)
-  const imgRef = useRef<HTMLImageElement>(null)
+  // Ссылки на кадры РАЗДЕЛЬНЫЕ, и это принципиально.
+  //
+  // На панели два кадра: один для линии, второй для зоны поиска номеров.
+  // Раньше оба использовали одну ссылку, а React оставляет в такой ссылке
+  // последний смонтированный элемент — то есть кадр зоны, который ниже по
+  // странице. Клик по кадру линии измерялся по нему, координата по вертикали
+  // выходила отрицательной, и проверка границ молча выбрасывала клик. Линию
+  // нельзя было нарисовать вообще ни на одной камере, где включены номера:
+  // внешне это выглядело как «точки не ставятся», без единой ошибки.
+  const lineImgRef = useRef<HTMLImageElement>(null)
+  const zoneImgRef = useRef<HTMLImageElement>(null)
+  // Счётчик пересечений линии за сутки. Нужен, чтобы работу линии было видно
+  // сразу: без него пересечение отличается от обычной детекции только
+  // содержимым метаданных события.
+  const [crossings, setCrossings] = useState<
+    { hours: number; forward: number; backward: number; total: number } | null
+  >(null)
 
   useEffect(() => {
     let cancelled = false
@@ -123,6 +148,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
         }
       })
       .finally(() => { if (!cancelled) setLoading(false) })
+    loadCrossings()
     return () => { cancelled = true }
     // error НЕ ставим в зависимости намеренно. Функция из useToast
     // создаётся заново при каждом рендере, поэтому зависимость от неё
@@ -132,6 +158,26 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraId, retryToken])
 
+  /**
+   * Обновляет счётчик пересечений линии.
+   *
+   * Объявлена ДО раннего возврата ниже и именно поэтому: ранний возврат
+   * пропускает остаток тела компонента, а этот счётчик вызывает эффект,
+   * который выполняется сразу после первого рендера. Когда объявление
+   * стояло ниже возврата, переменная оставалась неинициализированной, и
+   * открытие вкладки «Детекция» падало с «Cannot access ... before
+   * initialization» — панель не отрисовывалась вообще.
+   *
+   * Ошибку здесь не показываем: счётчик — подсказка, и его отсутствие не
+   * должно выглядеть как ошибка настроек. Не удалось — счётчика просто
+   * нет, панель работает дальше.
+   */
+  const loadCrossings = () => {
+    detectionAPI.crossings(cameraId)
+      .then((res) => setCrossings(res.data))
+      .catch(() => setCrossings(null))
+  }
+
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 20, color: 'var(--text-secondary)' }}>
@@ -140,7 +186,6 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       </div>
     )
   }
-
   // Ошибку показываем вместо формы, с понятным текстом и кнопкой повтора.
   // Раньше здесь оставалась вечная «Загрузка», и отличить сбой от
   // медленной сети было невозможно.
@@ -171,22 +216,37 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
   const toggleArrayItem = <T,>(arr: T[], item: T): T[] =>
     arr.includes(item) ? arr.filter((x) => x !== item) : [...arr, item]
 
-  /** Клик по кадру — ставит точку линии в нормализованных координатах. */
-  const handleImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const img = imgRef.current
-    if (!img) return
+  /**
+   * Клик по кадру → точка в нормализованных координатах (0..1).
+   *
+   * Ссылка на элемент передаётся аргументом, а не берётся из общего поля:
+   * так видно, что каждый кадр считается по СВОЕМУ элементу (см. выше про
+   * подменённую ссылку).
+   */
+  const pointFromClick = (
+    e: React.MouseEvent<HTMLDivElement>,
+    img: HTMLImageElement | null,
+  ): Point | null => {
+    if (!img) return null
     const rect = img.getBoundingClientRect()
     const x = (e.clientX - rect.left) / rect.width
     const y = (e.clientY - rect.top) / rect.height
-    if (x < 0 || x > 1 || y < 0 || y > 1) return
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null
+    return { x, y }
+  }
+
+  /** Клик по кадру — ставит точку линии в нормализованных координатах. */
+  const handleImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const p = pointFromClick(e, lineImgRef.current)
+    if (!p) return
 
     const pts = [...form.line]
     if (nextPoint === 0 || pts.length === 0) {
-      pts[0] = { x, y }
+      pts[0] = p
       pts.length = 1
       setNextPoint(1)
     } else {
-      pts[1] = { x, y }
+      pts[1] = p
       pts.length = 2
       setNextPoint(0)
     }
@@ -204,12 +264,9 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
    * обводить номер по контуру, а для поиска номера прямоугольника достаточно.
    */
   const handleZoneClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const img = imgRef.current
-    if (!img) return
-    const rect = img.getBoundingClientRect()
-    const x = (e.clientX - rect.left) / rect.width
-    const y = (e.clientY - rect.top) / rect.height
-    if (x < 0 || x > 1 || y < 0 || y > 1) return
+    const p = pointFromClick(e, zoneImgRef.current)
+    if (!p) return
+    const { x, y } = p
 
     const pts = [...form.plate_zone]
     if (pts.length === 0 || pts.length >= 2) {
@@ -227,6 +284,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
     }
   }
 
+
   const save = async () => {
     setSaving(true)
     try {
@@ -234,6 +292,9 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
       setForm(toForm(res.data))
       setDirty(false)
       success(t('detectionPanel.detectionSaved'))
+      // Пересчитываем счётчик после сохранения: человек только что
+      // поправил линию и ждёт, что цифры относятся к ней.
+      loadCrossings()
     } catch (e: any) {
       error(e.response?.data?.error || t('detectionPanel.saveFailed'))
     } finally {
@@ -339,7 +400,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
               onClick={handleImageClick}
               style={{ position: 'relative', marginBottom: 10, borderRadius: 8, overflow: 'hidden', cursor: 'crosshair', border: '1px solid var(--border)', lineHeight: 0 }}
             >
-              <img ref={imgRef} src={snapshotUrl} alt={t('detectionPanel.frameAlt')} style={{ width: '100%', display: 'block', userSelect: 'none' }} draggable={false} />
+              <img ref={lineImgRef} src={snapshotUrl} alt={t('detectionPanel.frameAlt')} style={{ width: '100%', display: 'block', userSelect: 'none' }} draggable={false} />
               <svg
                 viewBox="0 0 100 100"
                 preserveAspectRatio="none"
@@ -390,6 +451,19 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
               </button>
             )}
           </div>
+
+          {/* Счётчик пересечений: показывает, что линия действительно
+              считает, а не просто нарисована. Ноль — тоже ответ: значит,
+              через линию ещё никто не проходил. */}
+          {form.line.length === 2 && crossings && (
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 18px' }}>
+              {t('detectionPanel.crossingsCount', {
+                hours: crossings.hours,
+                forward: crossings.forward,
+                backward: crossings.backward,
+              })}
+            </p>
+          )}
         </>
       )}
 
@@ -408,7 +482,7 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl }: Props)
               onClick={handleZoneClick}
               style={{ position: 'relative', marginBottom: 10, borderRadius: 8, overflow: 'hidden', cursor: 'crosshair', border: '1px solid var(--border)', lineHeight: 0 }}
             >
-              <img ref={imgRef} src={snapshotUrl} alt={t('detectionPanel.frameAlt')} style={{ width: '100%', display: 'block', userSelect: 'none' }} draggable={false} />
+              <img ref={zoneImgRef} src={zoneSnapshotUrl || snapshotUrl} alt={t('detectionPanel.frameAlt')} style={{ width: '100%', display: 'block', userSelect: 'none' }} draggable={false} />
               <svg
                 viewBox="0 0 100 100"
                 preserveAspectRatio="none"
