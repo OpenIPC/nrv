@@ -1,6 +1,6 @@
 """AI Detector — YOLOv8 + NATS. Subscribes cameras.*.frame, publishes cameras.*.detection."""
 
-import os, json, time, asyncio, signal, sys, logging, threading, base64
+import os, json, time, uuid, asyncio, signal, sys, logging, threading, base64
 import urllib.request
 
 # Телеметрия ultralytics выключается ДО импорта библиотеки: признак ONLINE она
@@ -23,7 +23,7 @@ from nats.aio.errors import ErrTimeout
 from detection_config import DetectionConfigStore, LineCrossingTracker, bbox_center
 from recognition import FaceRecognizer, PlateRecognizer
 from plate_format import PlateFormat
-from plate_zone import has_plate_zone
+from plate_zone import has_plate_zone, zone_box
 from audio_pipeline import AudioPipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -320,8 +320,12 @@ async def main():
     # Детекция звука (YAMNet). Модель небольшая, но требует ai-edge-litert;
     # при его отсутствии конвейер сам отключится с предупреждением.
     enable_audio = os.getenv("ENABLE_AUDIO_DETECTION", "true").strip().lower() not in ("0", "false", "no", "off")
-    # Адрес MediaMTX для приёма звука. В docker-сети сервис зовётся `mediamtx`.
-    mediamtx_host = os.getenv("MEDIAMTX_RTSP", "mediamtx:8554")
+    # Адрес медиасервера для приёма звука. go2rtc работает в host-сети,
+    # поэтому из bridge-контейнера он виден только по адресу хоста; пароль
+    # в адресе нужен потому, что go2rtc не требует его только с localhost.
+    # Переменная окружения называется GO2RTC_RTSP; имя прежнего параметра
+    # (MEDIAMTX_RTSP) больше не читается.
+    go2rtc_host = os.getenv("GO2RTC_RTSP", "viewer:viewer@host.docker.internal:8554")
 
     detector = AIDetector(model_path=model_path, device=device, conf=conf, track=track)
 
@@ -351,6 +355,13 @@ async def main():
     crossings = LineCrossingTracker()
     # Время последнего предупреждения «линия не считается» по камерам
     line_warn_at: dict[str, float] = {}
+    # Последний кадр основного потока по камере.
+    #
+    # Нужен для снимков событий: распознавание номеров идёт по вырезанной
+    # зоне, и снимок из неё — обрезок, по которому не видно ни машины, ни
+    # обстановки. Полный кадр идёт с частотой в секунду, поэтому берём
+    # последний доступный.
+    last_frame: dict[str, np.ndarray] = {}
 
     nc = NATS()
     await nc.connect(nats_url)
@@ -358,6 +369,62 @@ async def main():
 
     sub = await nc.subscribe("cameras.*.frame")
     logger.info("Subscribed to cameras.*.frame")
+
+    # Снимки событий из основного потока «по запросу».
+    #
+    # Кадры детекции идут из субпотока (704×576) — так дешевле, но снимок
+    # из такого кадра мыльный. Поэтому на время события кадр основного
+    # потока запрашивается у публикатора: он берёт один кадр 1920 px и
+    # присылает его в теме cameras.<id>.snapshot. Постоянной нагрузки нет —
+    # кадр берётся только тогда, когда событие уже случилось.
+    snapshot_waiters: dict[str, asyncio.Future] = {}
+    snapshot_from_publisher = os.getenv("SNAPSHOT_FROM_PUBLISHER", "1").strip().lower() \
+        not in ("0", "false", "no", "off")
+    snapshot_timeout = float(os.getenv("SNAPSHOT_TIMEOUT", "6"))
+
+    async def handle_snapshot(msg):
+        """Отдаёт ожидающему адресату полученный снимок."""
+        try:
+            data = json.loads(msg.data.decode("utf-8"))
+        except Exception:
+            return
+        req_id = str(data.get("req_id") or "")
+        fut = snapshot_waiters.get(req_id)
+        if fut is not None and not fut.done():
+            # jpeg == None означает, что кадр получить не удалось: это не
+            # ошибка, а повод взять кадр детекции — он уже есть под рукой.
+            fut.set_result(data.get("jpeg") or None)
+
+    snapshot_sub = await nc.subscribe("cameras.*.snapshot", cb=handle_snapshot)
+    logger.info("Subscribed to cameras.*.snapshot")
+
+    # Сколько событий одновременно ждут снимок. Публикатор отдаёт не больше
+    # нескольких снимков сразу, поэтому ждущие задачи ограничиваем: иначе
+    # всплеск событий наплодил бы сотни задач, каждая со своим таймаутом.
+    snapshot_jobs = asyncio.Semaphore(int(os.getenv("SNAPSHOT_JOBS", "8")))
+
+    async def request_snapshot(camera_id: str, timeout: float | None = None) -> str | None:
+        """Просит у публикатора снимок основного потока (base64 JPEG).
+
+        None — публикатор недоступен, ответ не пришёл вовремя или кадр не
+        снялся. Вызывающий код в этом случае берёт кадр своей детекции:
+        событие должно сохраниться даже без качественного снимка.
+        """
+        if not snapshot_from_publisher:
+            return None
+        req_id = uuid.uuid4().hex
+        fut = asyncio.get_running_loop().create_future()
+        snapshot_waiters[req_id] = fut
+        try:
+            await nc.publish(
+                f"cameras.{camera_id}.snapshot_req",
+                json.dumps({"camera_id": camera_id, "req_id": req_id}).encode(),
+            )
+            return await asyncio.wait_for(fut, timeout or snapshot_timeout)
+        except Exception:
+            return None
+        finally:
+            snapshot_waiters.pop(req_id, None)
 
     async def publish_recognition(nc, camera_id, kind, probes, snapshot_b64, frame=None):
         """Публикует события распознавания лиц или номеров.
@@ -452,6 +519,12 @@ async def main():
         # детекции — это ресайз (FRAME_WIDTH, по умолчанию 960), а не поток
         # камеры. Из-за этого рамки нельзя было нарисовать поверх видео.
         frame_size = (img.shape[1], img.shape[0]) if img is not None else None
+
+        # Запоминаем последний кадр основного потока: из него делаются
+        # снимки событий. События по номерам считаются по вырезанной зоне,
+        # и снимок только из неё — обрезок без машины и обстановки.
+        if img is not None:
+            last_frame[camera_id] = img
 
         # Применяем настройки камеры: классы, порог, зона, форма рамки,
         # неподвижность и пауза между событиями.
@@ -574,41 +647,64 @@ async def main():
                 except Exception as e:
                     logger.debug(f"[{camera_id[:8]}] сбой распознавания номеров: {e}")
 
-        # Кадр кодируем один раз: он понадобится и для событий, и для
-        # снимков распознавания.
-        snapshot_b64 = None
-        need_snapshot = events or face_probes or plate_probes
-        if need_snapshot and send_snapshot and img is not None and (cfg is None or cfg.save_snapshots):
-            jpeg = detector.encode_jpeg(img)
-            if jpeg:
-                snapshot_b64 = base64.b64encode(jpeg).decode("ascii")
+        # Снимок события и публикация вынесены в отдельную функцию, потому
+        # что снимок полного кадра приходит от публикатора через доли
+        # секунды. В общем цикле кадров ожидание остановило бы разбор
+        # кадров ВСЕХ камер: цикл последовательный.
+        need_snapshot = bool(events or face_probes or plate_probes)
+        want_snapshot = need_snapshot and send_snapshot and (cfg is None or cfg.save_snapshots)
 
-        if events:
-            for ev in events:
-                if snapshot_b64:
-                    ev["snapshot_jpeg"] = snapshot_b64
-                if frame_size is not None:
-                    # Размер кадра добавляем к уже собранным метаданным, не
-                    # заменяя их: там может лежать признак пересечения линии.
-                    meta = dict(ev.get("metadata") or {})
-                    meta["frame_w"], meta["frame_h"] = frame_size
-                    ev["metadata"] = meta
-                await nc.publish(f"cameras.{camera_id}.detection", json.dumps(ev).encode())
+        async def emit(with_snapshot: bool):
+            snapshot_b64 = None
+            if with_snapshot:
+                # Сначала просим полный кадр основного потока: кадр детекции
+                # приходит из субпотока, а его 704×576 для снимка события
+                # мало. Не дождались — берём кадр детекции: событие важнее
+                # качества снимка.
+                async with snapshot_jobs:
+                    snapshot_b64 = await request_snapshot(camera_id)
+                if snapshot_b64 is None and img is not None:
+                    jpeg = detector.encode_jpeg(img)
+                    if jpeg:
+                        snapshot_b64 = base64.b64encode(jpeg).decode("ascii")
 
-            classes = [e["object_class"] for e in events]
-            # Разбивку по этапам печатаем только когда распознавание реально
-            # шло: иначе строка журнала обрастает нулями на каждом кадре.
-            cost = ""
-            if face_ms:
-                cost += f", лица {face_ms:.0f} мс"
-            if plate_ms:
-                cost += f", номера {plate_ms:.0f} мс"
-            logger.info(f"[{camera_id[:8]}] {len(events)} объектов {classes} за {dt_ms:.0f} мс{cost}")
+            if events:
+                for ev in events:
+                    if snapshot_b64:
+                        ev["snapshot_jpeg"] = snapshot_b64
+                    if frame_size is not None:
+                        # Размер кадра добавляем к уже собранным метаданным,
+                        # не заменяя их: там может лежать признак пересечения
+                        # линии.
+                        meta = dict(ev.get("metadata") or {})
+                        meta["frame_w"], meta["frame_h"] = frame_size
+                        ev["metadata"] = meta
+                    await nc.publish(f"cameras.{camera_id}.detection",
+                                     json.dumps(ev).encode())
 
-        # Лица и номера отправляются отдельными событиями: они не привязаны
-        # к объектам YOLO и живут по своим правилам (порог, справочник).
-        await publish_recognition(nc, camera_id, "face", face_probes, snapshot_b64, frame_size)
-        await publish_recognition(nc, camera_id, "plate", plate_probes, snapshot_b64, frame_size)
+                classes = [e["object_class"] for e in events]
+                # Разбивку по этапам печатаем только когда распознавание
+                # реально шло: иначе строка журнала обрастает нулями на
+                # каждом кадре.
+                cost = ""
+                if face_ms:
+                    cost += f", лица {face_ms:.0f} мс"
+                if plate_ms:
+                    cost += f", номера {plate_ms:.0f} мс"
+                logger.info(f"[{camera_id[:8]}] {len(events)} объектов {classes} "
+                            f"за {dt_ms:.0f} мс{cost}")
+
+            # Лица и номера отправляются отдельными событиями: они не привязаны
+            # к объектам YOLO и живут по своим правилам (порог, справочник).
+            await publish_recognition(nc, camera_id, "face", face_probes,
+                                      snapshot_b64, frame_size)
+            await publish_recognition(nc, camera_id, "plate", plate_probes,
+                                      snapshot_b64, frame_size)
+
+        if want_snapshot:
+            asyncio.create_task(emit(True))
+        else:
+            await emit(False)
 
     async def worker():
         while True:
@@ -706,7 +802,42 @@ async def main():
 
         snapshot_b64 = None
         if send_snapshot and cfg.save_snapshots:
-            jpeg = detector.encode_jpeg(img)
+            # Снимок делаем с ПОЛНОГО кадра основного потока, а не с кадра
+            # зоны: зона — это вырезка, по ней не видно ни машины целиком,
+            # ни обстановки. Свежий кадр зоны вставляем в сохранённый
+            # полный кадр — так на снимке и весь кадр, и номер на месте.
+            #
+            # Полный кадр приходит по запросу к публикатору: кадр детекции
+            # берётся из субпотока и для снимка мелок. Если запрос не
+            # удался, берём последний кадр детекции — номер в событии
+            # важнее качества снимка.
+            full = None
+            # Ждём снимок под общим ограничением и с коротким таймаутом:
+            # пока задача ждёт, она занимает место разбора кадра зоны, а
+            # кадры зоны идут 2,5 раза в секунду и не должны копиться.
+            async with snapshot_jobs:
+                full_b64 = await request_snapshot(camera_id, 3.0)
+            if full_b64:
+                try:
+                    raw = base64.b64decode(full_b64)
+                    full = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8),
+                                        cv2.IMREAD_COLOR)
+                except Exception:
+                    full = None
+            if full is None:
+                full = last_frame.get(camera_id)
+            snapshot_frame = full if full is not None else img
+            if full is not None:
+                box = zone_box(cfg.plate_zone or [])
+                if box:
+                    fh, fw = full.shape[:2]
+                    x1, y1 = max(0, int(box[0] * fw)), max(0, int(box[1] * fh))
+                    x2, y2 = min(fw, int(box[2] * fw)), min(fh, int(box[3] * fh))
+                    if x2 > x1 and y2 > y1:
+                        patch = cv2.resize(img, (x2 - x1, y2 - y1))
+                        snapshot_frame = full.copy()
+                        snapshot_frame[y1:y2, x1:x2] = patch
+            jpeg = detector.encode_jpeg(snapshot_frame)
             if jpeg:
                 snapshot_b64 = base64.b64encode(jpeg).decode("ascii")
         await publish_recognition(nc, camera_id, "plate", probes, snapshot_b64)
@@ -780,7 +911,7 @@ async def main():
         pipeline = AudioPipeline(
             nats_client=nc,
             config_store=config_store,
-            mediamtx_host=mediamtx_host,
+            go2rtc_host=go2rtc_host,
             model_path=os.getenv("AUDIO_MODEL_PATH", ""),
         )
         audio_task = asyncio.create_task(pipeline.run())

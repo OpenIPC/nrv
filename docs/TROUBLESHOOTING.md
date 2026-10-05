@@ -9,13 +9,16 @@
 **Симптом:** в интерфейсе все камеры серые, хотя они работают.
 
 **Причина:** поле `status` в базе обновляется фоновым сервисом
-`CameraStatusMonitor`. Он опрашивает медиасервер раз в 15 секунд.
+`CameraStatusMonitor`. Раз в 15 секунд он проверяет TCP-порт `554` самой
+камеры: go2rtc — ленивый медиасервер и подключается к камере только
+тогда, когда её смотрят, поэтому готовности потока он не сообщает
+(см. `plans/go2rtc-migration.md`).
 
 **Проверка:**
 
 ```bash
-# 1. Что видит медиасервер
-curl -s http://localhost:9997/v3/paths/list | jq '.items[] | {name, ready}'
+# 1. Что зарегистрировано в медиасервере (сам поток, а не живость камеры)
+curl -s http://localhost:1984/api/streams | jq -r 'keys[]' | sort | head
 
 # 2. Что записано в базе
 docker compose exec postgres psql -U nvr -d nvr -c \
@@ -25,21 +28,26 @@ docker compose exec postgres psql -U nvr -d nvr -c \
 docker compose logs backend | grep -i "status changed" | tail
 ```
 
-Если в медиасервере `ready=true`, а в базе `offline` — монитор не работает:
+Если камера отвечает по сети (`nc -z <ip> 554`), а в базе `offline` —
+монитор не работает:
 
 ```bash
 docker compose logs backend | grep -i "camera status monitor"
 ```
 
-**Частая причина:** имя пути в медиасервере не совпадает с `id` камеры.
+**Частая причина:** имя потока в медиасервере не совпадает с `id` камеры.
 Проверьте:
 
 ```bash
-curl -s http://localhost:9997/v3/paths/list | jq -r '.items[].name' | sort
+curl -s http://localhost:1984/api/streams | jq -r 'keys[]' | sort
 docker compose exec -T postgres psql -U nvr -d nvr -tAc "SELECT id FROM cameras;" | sort
 ```
 
-Списки должны совпадать.
+Списки должны совпадать. Проверка того же изнутри сервера:
+
+```bash
+python3 scripts/check_go2rtc_streams.py
+```
 
 ---
 
@@ -124,31 +132,22 @@ ERR [HLS] [muxer ...] muxer instance crashed:
 WAR [path ...] [RTSP source] 16 RTP packets lost
 ```
 
-**Причина:** поток высокого разрешения (4K) идёт по UDP, пакеты теряются,
-муксер не может собрать кадр.
+**Причина:** поток высокого разрешения (4K) шёл по UDP, пакеты терялись,
+и декодер не мог собрать кадр. Строка про `i/o timeout`, наоборот, обычно
+безобидна: так go2rtc прощается с камерой, когда зритель закрыл плеер.
 
-**Решение:** принудительный TCP-транспорт. Проверьте настройку пути:
+**Решение:** go2rtc читает RTSP-источники по TCP сам, отдельной настройки
+в потоке не нужно. Убедиться, что UDP-сессий к камерам нет:
 
 ```bash
-curl -s http://localhost:9997/v3/config/paths/get/<uuid> | jq .rtspTransport
-# Должно быть "tcp"
+ss -un | grep ':554'                      # пусто — значит идёт TCP
+ss -tn state established | grep ':554'
 ```
 
-Применить ко всем путям:
+**Счётчик ошибок потока:**
 
 ```bash
-for name in $(curl -s http://localhost:9997/v3/config/paths/list | jq -r '.items[].name'); do
-  curl -s -X PATCH "http://localhost:9997/v3/config/paths/patch/$name" \
-    -H 'Content-Type: application/json' -d '{"rtspTransport":"tcp"}' -o /dev/null
-done
-```
-
-Для новых камер это применяется автоматически.
-
-**Счётчик падений:**
-
-```bash
-docker compose logs mediamtx --since 5m | grep -c "muxer instance crashed"
+docker compose logs go2rtc --since 5m | grep -c "error="
 ```
 
 ---
@@ -210,10 +209,12 @@ curl -s "http://localhost:8080/api/v1/cameras/$CID/hls/sub/index.m3u8?token=$TOK
 docker compose exec -T postgres psql -U nvr -d nvr -c \
   "SELECT name, main_stream, sub_stream FROM cameras WHERE id='$CID';"
 
-curl -s "http://localhost:9997/v3/paths/get/${CID}_sub" | jq '.ready'
+# есть ли поток субпотока в медиасервере (готовности go2rtc не сообщает)
+curl -s "http://localhost:1984/api/streams?src=${CID}_sub" | jq 'keys'
 ```
 
-Если `ready=false` — камера не отдаёт дополнительный поток. Проверьте:
+Если поток субпотока пуст — камера не отдаёт дополнительный поток.
+Проверьте:
 
 ```bash
 ffprobe -v error -rtsp_transport tcp -timeout 5000000 \
@@ -291,14 +292,15 @@ docker compose exec backend ssh ... root@IP "ls /etc/init.d/ | grep -i maj"
 Неверные учётные данные. Проверьте переменные окружения:
 
 ```bash
-docker compose config | grep -A2 MTX_EXTERNAL
+docker compose config | grep -A2 EXTERNAL_RTSP
 ```
 
-Значения должны совпадать у `mediamtx` и `backend`. После правки
+Значения должны совпадать у `go2rtc` (там они называются
+`RTSP_EXTERNAL_USER` / `RTSP_EXTERNAL_PASS`) и `backend`. После правки
 перезапустите оба:
 
 ```bash
-docker compose up -d mediamtx backend
+docker compose up -d go2rtc backend
 ```
 
 Проверить, что учётные данные приняты:
@@ -316,11 +318,11 @@ ffprobe -rtsp_transport tcp \
 «камера не в сети». Номер канала сверяйте по таблице на той же странице —
 помните про смещение на минус один: канал 1 → `cameras/0`.
 
-Проверить, что путь существует в MediaMTX:
+Проверить, что внешние потоки зарегистрированы в медиасервере:
 
 ```bash
-curl -s http://localhost:9997/v3/config/paths/list | \
-  python3 -c "import json,sys; [print(p['name']) for p in json.load(sys.stdin)['items'] if p['name'].startswith('cameras/')]"
+curl -s http://localhost:1984/api/streams | \
+  python3 -c "import json,sys; [print(k) for k in json.load(sys.stdin) if k.startswith('cameras/')]"
 ```
 
 Если путей нет — публикация не выполнена. Смотрите логи бэкенда:
@@ -441,14 +443,10 @@ MINIO_PUBLIC_ENDPOINT=192.168.1.111:9000
 
 Перезапустите бэкенд. Подпись ссылок зависит от хоста, поэтому это важно.
 
-**Если записей нет вообще:** видеозапись не включена. Включите её в
-конфигурации пути медиасервера:
-
-```bash
-curl -X PATCH "http://localhost:9997/v3/config/paths/patch/<uuid>" \
-  -H 'Content-Type: application/json' \
-  -d '{"record":true,"recordFormat":"fmp4","recordSegmentDuration":"1h"}'
-```
+**Если записей нет вообще:** видеозапись выключена у самой камеры. Архив
+пишет бэкенд (`recorder_service.go`): он запускает ffmpeg на поток камеры
+и складывает готовые отрезки в MinIO. Включите запись в карточке камеры
+в интерфейсе.
 
 ---
 
@@ -518,13 +516,10 @@ docker compose up -d --force-recreate
 
 # Логи конкретного сервиса
 docker compose logs -f backend
-docker compose logs --since 5m mediamtx | grep -i error
+docker compose logs --since 5m go2rtc | grep -i error
 
-# Пути медиасервера
-curl -s http://localhost:9997/v3/paths/list | jq '.items[] | {name, ready, tracks}'
-
-# Активные HLS-муксеры
-curl -s http://localhost:9997/v3/hlsmuxers/list | jq '.items[] | {path, bytesSent}'
+# Потоки медиасервера: источник и число потребителей
+python3 scripts/check_go2rtc_streams.py
 
 # Сводка по API
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/stats | jq

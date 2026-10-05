@@ -320,7 +320,7 @@ export default {
     toList: '← 返回摄像头列表',
 
     noSignal: '无信号',
-    hlsUnavailable: 'HLS 视频流不可用',
+    streamUnavailable: '视频流不可用',
     streamLabel: '视频流：',
 
     tabLive: 'Live',
@@ -1427,9 +1427,9 @@ export default {
     transcodingNow: '进行中（G.711 → AAC）',
     transcodingStopped: '已停止',
     transcodingNotNeeded: '不需要',
-    rowHls: 'HLS 中的声音',
-    hlsPlaying: '可以播放',
-    hlsUnavailable: '不可用',
+    rowAudio: '摄像头声音',
+    audioPlaying: '可用',
+    audioUnavailable: '不可用',
 
     micHasSound: '麦克风有声音',
     micHasSoundHint: '如果摄像机没有麦克风，请取消勾选——这样就不会启动声音采集',
@@ -1634,8 +1634,8 @@ export default {
   },
 
   livePlayer: {
-    transportWebrtc: 'WebRTC —— 延迟不到一秒',
-    transportHls: 'HLS —— WebRTC 失败，延迟更大',
+    transportWebrtc: 'WebRTC —— 延迟最低',
+    transportMse: 'MSE —— 延迟与 WebRTC 相同，但无需 UDP',
     overlayWrongStream: '检测框：当前播放的不是分析用的辅码流',
     overlayLagged: '检测框已按下述延迟补偿（{{seconds}} 秒）',
     soundOn: '关闭声音',
@@ -1679,7 +1679,7 @@ export default {
 
     missedCameras: '失联的摄像机',
     offlineMinutes: '多久算失联，分钟',
-    offlineHint: '短时间的连接中断，摄像机和 MediaMTX 自己能缓过来。填 0 表示「立即通知」。',
+    offlineHint: '短时间的连接中断，摄像机和 go2rtc 自己能缓过来。填 0 表示「立即通知」。',
     whichCameras: '监视哪些摄像机',
     allCamerasHint: '一个都不选——则监视全部摄像机。',
 

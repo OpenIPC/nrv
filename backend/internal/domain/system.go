@@ -94,7 +94,7 @@ type SystemThresholds struct {
 	GPUOffline bool `json:"gpu_offline"`
 	// CameraOfflineMinutes — сколько минут камера должна быть недоступна,
 	// прежде чем сообщить. Отсекает кратковременные обрывы связи, которые
-	// камера и MediaMTX переживают сами.
+	// камера и go2rtc переживают сами.
 	CameraOfflineMinutes int `json:"camera_offline_minutes"`
 	// RepeatMinutes — пауза между повторными сообщениями об одной и той же
 	// неустранённой проблеме. Без неё неисправный диск слал бы уведомление

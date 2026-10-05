@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os/exec"
 	"strings"
 	"sync"
@@ -21,38 +22,42 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
-// upstreamTimeout — сколько ждём ответа от MediaMTX.
-// Если камера не отдаёт кадры, HLS-муксер не становится готовым,
-// и MediaMTX держит соединение открытым неограниченно долго.
+// upstreamTimeout — сколько ждём ответа от медиасервера.
+// Если камера не отдаёт кадры, HLS-сессия не наполняется сегментами,
+// и медиасервер держит соединение открытым неограниченно долго.
 const upstreamTimeout = 8 * time.Second
 
 type StreamHandler struct {
-	cameraSvc    *service.CameraService
-	mediamtxHost string // "localhost:8888" или "mediamtx:8888" в Docker
-	// Адрес, по которому MediaMTX доступен браузеру оператора. Нужен для
-	// ссылок на WebRTC: внутренний адрес из docker-сети в браузере не
-	// работает. Пустое значение означает «использовать mediamtxHost».
+	cameraSvc *service.CameraService
+	// apiBase — адрес API go2rtc вместе со схемой:
+	// "http://host.docker.internal:1984". Через него проксируется HLS.
+	apiBase string
+	// publicHost — адрес медиасервера для браузера оператора. Нужен там,
+	// где ссылка собирается абсолютной: внутренний адрес docker-сети в
+	// браузере не работает. Пустое значение означает «взять из apiBase».
 	publicHost string
 	tokenAuth  *jwtauth.JWTAuth
 	httpClient *http.Client            // для простых запросов без cookie
 	jarClients map[string]*http.Client // по одному на camera path (cookiejar)
 	jarMu      sync.Mutex
-	baseURL    string // "http://localhost:8888"
 	ffmpegOnce sync.Once
 	ffmpegOK   bool // доступен ли ffmpeg (для снапшота из HLS)
 }
 
-func NewStreamHandler(cameraSvc *service.CameraService, mediamtxHost, publicHost string, tokenAuth *jwtauth.JWTAuth) *StreamHandler {
-	if mediamtxHost == "" {
-		mediamtxHost = "localhost:8888"
+func NewStreamHandler(cameraSvc *service.CameraService, apiBase, publicHost string, tokenAuth *jwtauth.JWTAuth) *StreamHandler {
+	if apiBase == "" {
+		apiBase = "http://localhost:1984"
+	}
+	// Схему допускаем и без неё: в конфиге удобнее писать host:port.
+	if !strings.HasPrefix(apiBase, "http://") && !strings.HasPrefix(apiBase, "https://") {
+		apiBase = "http://" + apiBase
 	}
 	return &StreamHandler{
-		cameraSvc:    cameraSvc,
-		mediamtxHost: mediamtxHost,
-		publicHost:   publicHost,
-		tokenAuth:    tokenAuth,
-		baseURL:      "http://" + mediamtxHost,
-		jarClients:   make(map[string]*http.Client),
+		cameraSvc:  cameraSvc,
+		apiBase:    strings.TrimSuffix(apiBase, "/"),
+		publicHost: publicHost,
+		tokenAuth:  tokenAuth,
+		jarClients: make(map[string]*http.Client),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -60,7 +65,7 @@ func NewStreamHandler(cameraSvc *service.CameraService, mediamtxHost, publicHost
 }
 
 // getJarClient возвращает http.Client с cookiejar для конкретного camera path.
-// Один jar на все запросы к одному пути — так MediaMTX не будет генерировать
+// Один jar на все запросы к одному пути — так go2rtc не будет генерировать
 // новую hlsSession на каждый сегмент.
 func (h *StreamHandler) getJarClient(pathName string) *http.Client {
 	h.jarMu.Lock()
@@ -85,9 +90,15 @@ func (h *StreamHandler) getJarClient(pathName string) *http.Client {
 }
 
 type StreamInfo struct {
-	RTSP     string `json:"rtsp_url"`
+	RTSP string `json:"rtsp_url"`
+	// MSE — транспорт браузера: задержка как у WebRTC, но соединение
+	// идёт по WebSocket поверх TCP, без UDP.
+	MSE    string `json:"mse_url"`
+	WebRTC string `json:"webrtc_url"`
+	// HLS — транспорт НАТИВНЫХ клиентов (мобильное приложение на
+	// ExoPlayer, сторонние плееры): MSE там недоступен. Браузер его
+	// не использует.
 	HLS      string `json:"hls_url"`
-	WebRTC   string `json:"webrtc_url"`
 	Status   string `json:"status"`
 	MainHLS  string `json:"main_hls_url"`
 	SubHLS   string `json:"sub_hls_url"`
@@ -96,10 +107,11 @@ type StreamInfo struct {
 	// SubWebRTC — WebRTC для дополнительного потока.
 	//
 	// Нужен для наложения детекций: детектор разбирает именно доп. поток,
-	// и рамки совпадают с картинкой только на нём. К тому же наложение
-	// требует малой задержки, которую даёт только WebRTC.
+	// и рамки совпадают с картинкой только на нём.
 	SubWebRTC string `json:"sub_webrtc_url"`
-	Snapshot  string `json:"snapshot_url"`
+	// SubMSE — MSE дополнительного потока: в сетке камер играет он.
+	SubMSE   string `json:"sub_mse_url"`
+	Snapshot string `json:"snapshot_url"`
 }
 
 // GetStream возвращает URL стримов для камеры
@@ -116,7 +128,7 @@ func (h *StreamHandler) GetStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ID камеры используется как имя пути в MediaMTX для основного потока
+	// ID камеры используется как имя пути в go2rtc для основного потока
 	streamPath := cam.ID.String()
 
 	// Основной поток (main_stream)
@@ -134,33 +146,40 @@ func (h *StreamHandler) GetStream(w http.ResponseWriter, r *http.Request) {
 
 	info := StreamInfo{
 		RTSP: fmt.Sprintf("rtsp://%s/%s", h.rtspHost(), streamPath),
-		HLS:  fmt.Sprintf("/api/v1/cameras/%s/hls/index.m3u8", streamPath),
-		// WebRTC-ссылка ведёт через тот же origin, что и интерфейс.
+		// MSE и WebRTC — через тот же origin, что и интерфейс.
 		//
-		// Прямое обращение к порту 8889 из браузера ломается по двум
-		// причинам: со страницы по HTTPS браузер блокирует незашифрованный
-		// запрос, а при открытии интерфейса с другого компьютера localhost
-		// указывает на машину оператора, а не на сервер. Прокси решает обе:
-		// запрос уходит на тот же домен и тот же порт, что и страница.
-		//
-		// Путь /whep — эндпоинт MediaMTX для обмена SDP-описаниями.
-		WebRTC:   fmt.Sprintf("/webrtc/%s/whep", streamPath),
-		Status:   cam.Status,
-		MainHLS:  fmt.Sprintf("/api/v1/cameras/%s/hls/index.m3u8", streamPath),
-		SubHLS:   fmt.Sprintf("/api/v1/cameras/%s/hls/sub/index.m3u8", streamPath),
-		MainRTSP: mainRTSP,
-		SubRTSP:  subRTSP,
-		// Доп. поток публикуется MediaMTX под именем <id>_sub.
+		// Прямое обращение к порту медиасервера из браузера ломается по
+		// двум причинам: со страницы по HTTPS браузер блокирует
+		// незашифрованный запрос, а при открытии интерфейса с другого
+		// компьютера localhost указывает на машину оператора, а не на сервер.
+		// Прокси решает обе: запрос уходит на тот же домен и порт, что и страница.
+		MSE:    fmt.Sprintf("/mse/?src=%s", streamPath),
+		WebRTC: fmt.Sprintf("/webrtc/%s/whep", streamPath),
+		HLS:    fmt.Sprintf("/api/v1/cameras/%s/hls/index.m3u8", streamPath),
+		Status: cam.Status,
+		// HLS-адреса оставлены для мобильного приложения и сторонних
+		// плееров; браузер их не использует (у него MSE).
+		MainHLS: fmt.Sprintf("/api/v1/cameras/%s/hls/index.m3u8", streamPath),
+		SubHLS:  fmt.Sprintf("/api/v1/cameras/%s/hls/sub/index.m3u8", streamPath),
+		// Доп. поток регистрируется в go2rtc под именем <id>_sub.
+		SubMSE:    fmt.Sprintf("/mse/?src=%s_sub", streamPath),
 		SubWebRTC: fmt.Sprintf("/webrtc/%s_sub/whep", streamPath),
+		MainRTSP:  mainRTSP,
+		SubRTSP:   subRTSP,
 		Snapshot:  snapshot,
 	}
 
 	writeJSON(w, http.StatusOK, info)
 }
 
-// ProxyHLS проксирует HLS-поток через бэкенд, обходя cookie-редирект MediaMTX.
+// ProxyHLS проксирует HLS-поток через бэкенд.
+//
+// Нужен НАТИВНЫМ клиентам — мобильному приложению (ExoPlayer) и сторонним
+// плеерам: MSE там недоступен, а WebRTC требует отдельной библиотеки.
+// Браузер HLS не использует: у него MSE и WebRTC.
+//
 // Поддерживает ?stream=sub для выбора субпотока.
-// Авторизация: ?token=JWT (т.к. hls.js в браузере не может слать Authorization-заголовок).
+// Авторизация: ?token=JWT (нативные плееры не могут слать заголовок Authorization).
 func (h *StreamHandler) ProxyHLS(w http.ResponseWriter, r *http.Request) {
 	// Валидация токена из query-параметра
 	tokenStr := r.URL.Query().Get("token")
@@ -186,7 +205,7 @@ func (h *StreamHandler) ProxyHLS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Имя пути в MediaMTX.
+	// Имя пути в go2rtc.
 	//
 	// Признак субпотока кодируем в ПУТИ (/hls/sub/...), а не в query-параметре:
 	// hls.js разрешает относительные ссылки из плейлиста сам и не переносит
@@ -230,9 +249,29 @@ func (h *StreamHandler) ProxyHLS(w http.ResponseWriter, r *http.Request) {
 	upQuery := r.URL.Query()
 	upQuery.Del("token")
 	upQuery.Del("stream")
-	upstream := fmt.Sprintf("%s/%s/%s", h.baseURL, pathName, filePath)
-	if len(upQuery) > 0 {
-		upstream += "?" + upQuery.Encode()
+	// Адрес запроса к go2rtc отличается от go2rtc: плейлиста два уровня.
+	//
+	//   index.m3u8           → /api/stream.m3u8?src=<имя потока> (главный)
+	//   hls/playlist.m3u8    → /api/hls/playlist.m3u8?id=<сессия>
+	//   hls/segment.ts       → /api/hls/segment.ts?id=<сессия>&n=<номер>
+	//
+	// Имя потока подставляется только в главный плейлист: сегменты go2rtc
+	// отдаёт по идентификатору сессии, и src в них не нужен.
+	var upstream string
+	if filePath == "index.m3u8" {
+		q := url.Values{}
+		q.Set("src", pathName)
+		for k, vs := range upQuery {
+			for _, v := range vs {
+				q.Add(k, v)
+			}
+		}
+		upstream = fmt.Sprintf("%s/api/stream.m3u8?%s", h.apiBase, q.Encode())
+	} else {
+		upstream = fmt.Sprintf("%s/api/%s", h.apiBase, filePath)
+		if len(upQuery) > 0 {
+			upstream += "?" + upQuery.Encode()
+		}
 	}
 
 	req, err := http.NewRequestWithContext(r.Context(), "GET", upstream, nil)
@@ -246,7 +285,7 @@ func (h *StreamHandler) ProxyHLS(w http.ResponseWriter, r *http.Request) {
 	client := h.getJarClient(pathName)
 
 	// Ограничиваем ожидание upstream: если камера не отдаёт кадры,
-	// MediaMTX держит запрос открытым бесконечно (HLS-муксер не готов).
+	// go2rtc держит запрос открытым бесконечно (HLS-муксер не готов).
 	// Без этого клиент тоже висит и запросы накапливаются.
 	ctx, cancel := context.WithTimeout(r.Context(), upstreamTimeout)
 	defer cancel()
@@ -267,7 +306,7 @@ func (h *StreamHandler) ProxyHLS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Cache-Control", "no-cache")
 
-	// MediaMTX сообщает о проблемах потоков своими кодами и текстами
+	// go2rtc сообщает о проблемах потоков своими кодами и текстами
 	// (например 500 {"error":"muxer instance not available"}). Пробрасывать их
 	// клиенту нельзя: hls.js воспринимает 401 как проблему авторизации,
 	// а 500 — как ошибку сервера. Переводим в осмысленные ответы.
@@ -285,7 +324,7 @@ func (h *StreamHandler) ProxyHLS(w http.ResponseWriter, r *http.Request) {
 		case http.StatusNotFound:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "stream or segment not found"})
 		case http.StatusUnauthorized, http.StatusForbidden:
-			// Ошибка авторизации у MediaMTX — обычно значит, что путь
+			// Ошибка авторизации у go2rtc — обычно значит, что путь
 			// не активен (нет сессии/HLS-муксера), а не проблему с нашим JWT.
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"error": "stream is not available, try again later",
@@ -402,9 +441,9 @@ func appendToken(uri, token string) string {
 	return uri + sep + "token=" + token
 }
 
-// rtspHost возвращает хост RTSP-сервера (MediaMTX)
+// rtspHost возвращает хост RTSP-сервера (go2rtc)
 func (h *StreamHandler) rtspHost() string {
-	host := h.mediamtxHost
+	host := strings.TrimPrefix(strings.TrimPrefix(h.apiBase, "http://"), "https://")
 	if idx := strings.LastIndex(host, ":"); idx >= 0 {
 		host = host[:idx]
 	}
@@ -413,7 +452,7 @@ func (h *StreamHandler) rtspHost() string {
 
 // webrtcHost возвращает адрес для подключения браузера к WebRTC.
 //
-// Берётся отдельная настройка MEDIAMTX_PUBLIC_HOST, а не адрес веб-API:
+// Берётся отдельная настройка GO2RTC_PUBLIC_HOST, а не адрес веб-API:
 // веб-API доступен бэкенду внутри docker-сети по localhost, но браузер
 // оператора по этому адресу до сервера не дойдёт — он попадёт на свою
 // же машину. Если публичный адрес не задан, остаётся старое поведение
@@ -421,7 +460,7 @@ func (h *StreamHandler) rtspHost() string {
 func (h *StreamHandler) webrtcHost() string {
 	host := h.publicHost
 	if host == "" {
-		host = h.mediamtxHost
+		host = strings.TrimPrefix(strings.TrimPrefix(h.apiBase, "http://"), "https://")
 	}
 	if idx := strings.LastIndex(host, ":"); idx >= 0 {
 		host = host[:idx]
@@ -602,9 +641,11 @@ func (h *StreamHandler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	// Ни один путь не сработал: камера выключена, креды не подходят
 	// или модель не отдаёт статичные кадры.
 	//
-	// Последний вариант — вытащить кадр из HLS-потока: он уже разобран
-	// MediaMTX, и это работает даже для камер без JPEG-эндпоинта.
-	if h.snapshotFromHLS(r.Context(), cam.ID.String(), w) {
+	// Последний вариант — взять кадр у самого go2rtc: он уже держит поток
+	// камеры и умеет отдавать JPEG одним запросом. Это работает даже для
+	// камер без JPEG-эндпоинта (например, OpenIPC при двух активных
+	// H.264-потоках отвечает 503: все аппаратные скейлеры SoC заняты).
+	if h.snapshotFromStream(r.Context(), cam.ID.String(), w) {
 		return
 	}
 
@@ -614,43 +655,47 @@ func (h *StreamHandler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, lastStatus, map[string]string{"error": "snapshot unavailable"})
 }
 
-// snapshotFromHLS извлекает один кадр из HLS-потока MediaMTX через ffmpeg
-// и записывает его в ответ как JPEG. Возвращает true при успехе.
+// snapshotFromStream просит у go2rtc один JPEG-кадр потока и записывает
+// его в ответ. Возвращает true при успехе.
 //
-// Нужен для камер, которые не отдают JPEG по HTTP: например, OpenIPC
-// при двух активных H.264-потоках отвечает 503 («JPEG encoder is not running»),
-// потому что все аппаратные скейлеры SoC заняты.
-func (h *StreamHandler) snapshotFromHLS(ctx context.Context, pathName string, w http.ResponseWriter) bool {
-	if !h.hasFFmpeg() {
-		return false
-	}
-
-	// HLS-плейлист самого MediaMTX (внутренний адрес, без прокси)
-	playlist := fmt.Sprintf("%s/%s/index.m3u8", h.baseURL, pathName)
+// Раньше кадр вытаскивался из HLS-плейлиста через ffmpeg: это дорого
+// (запуск процесса, ожидание сегмента) и работало только пока HLS-муксер
+// был готов. У go2rtc есть готовый HTTP-эндпоинт кадра, поэтому ffmpeg
+// здесь больше не нужен.
+func (h *StreamHandler) snapshotFromStream(ctx context.Context, pathName string, w http.ResponseWriter) bool {
+	q := url.Values{}
+	q.Set("src", pathName)
 
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 
-	// -frames:v 1 — берём ровно один кадр; -f mjpeg — вывод в JPEG через pipe.
-	cmd := exec.CommandContext(ctx, "ffmpeg",
-		"-loglevel", "error",
-		"-allowed_extensions", "ALL",
-		"-i", playlist,
-		"-frames:v", "1",
-		"-f", "image2", "-c:v", "mjpeg", "-q:v", "5",
-		"pipe:1",
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		h.apiBase+"/api/frame.jpeg?"+q.Encode(), nil)
+	if err != nil {
+		return false
+	}
 
-	out, err := cmd.Output()
-	if err != nil || len(out) < 3 || out[0] != 0xFF || out[1] != 0xD8 {
-		log.Debug().Err(err).Str("path", pathName).Msg("snapshot from HLS failed")
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Debug().Int("status", resp.StatusCode).Str("path", pathName).
+			Msg("snapshot from go2rtc failed")
+		return false
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil || len(data) < 3 || data[0] != 0xFF || data[1] != 0xD8 {
 		return false
 	}
 
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "no-cache, max-age=0")
 	w.WriteHeader(http.StatusOK)
-	w.Write(out)
+	w.Write(data)
 	return true
 }
 

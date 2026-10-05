@@ -633,9 +633,11 @@ type AudioStatus struct {
 	Codec string `json:"codec,omitempty"`
 	// Transcoding — идёт ли сейчас перекодирование.
 	Transcoding bool `json:"transcoding"`
-	// HLSHasAudio — есть ли звук в HLS-потоке для браузера.
-	HLSHasAudio bool `json:"hls_has_audio"`
-	// AudioPath — имя пути MediaMTX с готовым для браузера звуком.
+	// AudioAvailable — есть ли у камеры звук, который можно отдать браузеру.
+	// Название без упоминания транспорта: звук идёт внутри основного потока
+	// (MSE или WebRTC), а не отдельным HLS-потоком, как было раньше.
+	AudioAvailable bool `json:"audio_available"`
+	// AudioPath — имя пути go2rtc с готовым для браузера звуком.
 	AudioPath string `json:"audio_path,omitempty"`
 	// Backchannel — умеет ли камера принимать звук на динамик.
 	// Ложь означает, что двусторонняя связь с этой камерой невозможна

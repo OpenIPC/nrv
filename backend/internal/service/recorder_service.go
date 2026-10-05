@@ -156,7 +156,7 @@ func (r *RecorderService) StartWriting(cameraID uuid.UUID, rtspURL, mode string)
 
 // StreamReadable проверяет, что поток камеры пригоден для записи.
 //
-// Некоторые камеры регистрируют в MediaMTX путь, но не отдают метаданные
+// Некоторые камеры регистрируют в go2rtc путь, но не отдают метаданные
 // кадра (width=0, height=0). ffmpeg в таком случае падает с «dimensions not
 // set», поэтому такие камеры лучше не записывать вовсе — иначе ffmpeg
 // перезапускается по кругу на каждое событие детекции.
@@ -593,6 +593,12 @@ func concatSegments(segments []string, out string) error {
 			"-crf", "23",
 			"-profile:v", "main",
 			"-pix_fmt", "yuv420p", // обязателен для совместимости с браузерами
+			// Число потоков ограничиваем: без этого ffmpeg на многоядерной
+			// машине забирал больше шести ядер на один клип, и сборка клипов
+			// оказывалась главным потребителем процессора. Клип нужен через
+			// секунды после события, а не мгновенно, поэтому лишние потоки
+			// здесь бесполезны.
+			"-threads", strconv.Itoa(clipTranscodeThreads()),
 			"-movflags", "+faststart",
 		)
 	}
@@ -619,6 +625,25 @@ func browserCompatible(codec, pixFmt string) bool {
 		return pixFmt == "yuv420p"
 	}
 	return false
+}
+
+// clipTranscodeThreads возвращает предел потоков ffmpeg при перекодировании
+// клипа.
+//
+// По умолчанию 4: этого хватает, чтобы клип собрался за считанные секунды, и
+// мало, чтобы сборка забрала машину целиком. Значение настраивается: на
+// слабой машине его уменьшают, на мощной — увеличивают.
+func clipTranscodeThreads() int {
+	const def = 4
+	raw := strings.TrimSpace(os.Getenv("CLIP_TRANSCODE_THREADS"))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return def
+	}
+	return n
 }
 
 // videoParams возвращает кодек и пиксельный формат видеопотока файла.

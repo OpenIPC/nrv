@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,15 @@ type RecordingManager struct {
 	writing map[string]bool
 	// Последнее событие по камере — чтобы не собирать клип на каждую детекцию
 	lastEvent map[string]time.Time
+	// clipSem ограничивает число одновременных сборок клипов.
+	//
+	// Сборка клипа с камеры, отдающей HEVC или full-range H.264, требует
+	// перекодирования: браузер такой поток не воспроизводит. Один ffmpeg
+	// при этом забирает больше шести ядер, а совпавшие события десятка
+	// камер поднимали нагрузку настолько, что конвейер переставал
+	// успевать. Клип нужен через секунды после события, поэтому очередь
+	// здесь безвредна, а всплеск нагрузки — нет.
+	clipSem chan struct{}
 }
 
 // OnSaved задаёт обработчик сохранённого клипа (запись в таблицу recordings).
@@ -82,7 +92,27 @@ func NewRecordingManager(settings DetectionSettingsSource, recorder *RecorderSer
 		cameras:   cameras,
 		writing:   make(map[string]bool),
 		lastEvent: make(map[string]time.Time),
+		clipSem:   make(chan struct{}, clipMaxConcurrent()),
 	}
+}
+
+// clipMaxConcurrent возвращает предел одновременных сборок клипов.
+//
+// По умолчанию две: этого достаточно, чтобы событие обрабатывалось без
+// заметной задержки, и мало, чтобы перекодирование не заняло процессор
+// целиком. Значение можно поднять переменной окружения на машине с
+// большим числом ядер.
+func clipMaxConcurrent() int {
+	const def = 2
+	raw := strings.TrimSpace(os.Getenv("CLIP_MAX_CONCURRENT"))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return def
+	}
+	return n
 }
 
 // Sync запускает и останавливает непрерывную запись в соответствии с настройками.
@@ -238,6 +268,10 @@ func (m *RecordingManager) handleEvent(ctx context.Context, cameraID uuid.UUID,
 	saveCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	go func() {
 		defer cancel()
+		// Ограничиваем одновременные сборки: перекодирование клипа дорогое,
+		// а очередь событий разберётся по мере освобождения мест.
+		m.clipSem <- struct{}{}
+		defer func() { <-m.clipSem }()
 		m.collectAndSave(saveCtx, cameraID, eventTime, cfg.PrebufferSec, cfg.PostbufferSec,
 			triggerType, triggerDetail)
 	}()

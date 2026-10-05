@@ -329,7 +329,7 @@ export default {
     toList: '← Back to the camera list',
 
     noSignal: 'No signal',
-    hlsUnavailable: 'The HLS stream is unavailable',
+    streamUnavailable: 'The stream is unavailable',
     streamLabel: 'Stream:',
 
     tabLive: 'Live',
@@ -1481,9 +1481,9 @@ export default {
     transcodingNow: 'running (G.711 → AAC)',
     transcodingStopped: 'stopped',
     transcodingNotNeeded: 'not needed',
-    rowHls: 'Audio in HLS',
-    hlsPlaying: 'playing',
-    hlsUnavailable: 'unavailable',
+    rowAudio: 'Camera audio',
+    audioPlaying: 'available',
+    audioUnavailable: 'unavailable',
 
     micHasSound: 'The microphone picks up sound',
     micHasSoundHint:
@@ -1695,8 +1695,8 @@ export default {
   },
 
   livePlayer: {
-    transportWebrtc: 'WebRTC — delay under a second',
-    transportHls: 'HLS — WebRTC failed, higher delay',
+    transportWebrtc: 'WebRTC — minimal delay',
+    transportMse: 'MSE — same delay as WebRTC, but no UDP',
     overlayWrongStream: 'Detection boxes: wrong stream is playing (the sub stream is analysed)',
     overlayLagged: 'Boxes shifted by stream delay ({{seconds}} s)',
     soundOn: 'Turn the sound off',
@@ -1745,7 +1745,7 @@ export default {
     missedCameras: 'Missing cameras',
     offlineMinutes: 'Consider missing after, minutes',
     offlineHint:
-      'The camera and MediaMTX survive short connection breaks on their own. Zero means «report immediately».',
+      'The camera and go2rtc survive short connection breaks on their own. Zero means «report immediately».',
     whichCameras: 'Which cameras to watch',
     allCamerasHint: 'Nothing selected — every camera is watched.',
 

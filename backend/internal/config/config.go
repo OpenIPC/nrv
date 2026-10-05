@@ -14,12 +14,19 @@ type Config struct {
 	JWTSecret    string
 	LogLevel     string
 	LogFormat    string
-	WGInterface  string
-	NatsURL      string
-	MediamtxHost string
-	// Адрес MediaMTX для браузера оператора (см. envStr ниже)
-	MediamtxPublicHost string
-	MinioEndpoint      string
+	WGInterface string
+	NatsURL     string
+	// Go2rtcAPI — адрес API медиасервера go2rtc (регистрация потоков,
+	// список, статус). Со схемой: запросы идут через net/http.
+	Go2rtcAPI string
+	// Go2rtcRTSP — адрес RTSP go2rtc без схемы и порта приёма: по нему
+	// ffmpeg забирает звук камеры для перекодирования.
+	Go2rtcRTSP string
+	// Go2rtcPublicHost — адрес go2rtc, по которому до него дойдёт браузер
+	// оператора. Внутри Docker это `host.docker.internal:1984`, а клиенту
+	// нужен внешний адрес или адрес в сети камер.
+	Go2rtcPublicHost string
+	MinioEndpoint    string
 	// MinioPublicEndpoint — адрес MinIO, доступный браузеру. Нужен для
 	// presigned-ссылок: внутри Docker это `minio:9000`, а клиенту нужен
 	// внешний адрес. Если пуст, берётся MinioEndpoint.
@@ -66,16 +73,21 @@ func Load() (*Config, error) {
 		JWTSecret:    envStr("JWT_SECRET", "change-me-in-production"),
 		LogLevel:     envStr("LOG_LEVEL", "info"),
 		LogFormat:    envStr("LOG_FORMAT", "console"),
-		WGInterface:  envStr("WG_INTERFACE", ""),
-		NatsURL:      envStr("NATS_URL", "nats://localhost:4222"),
-		MediamtxHost: envStr("MEDIAMTX_HOST", "localhost:8888"),
-		// Адрес MediaMTX, по которому до него дойдёт браузер оператора.
+		WGInterface: envStr("WG_INTERFACE", ""),
+		NatsURL:     envStr("NATS_URL", "nats://localhost:4222"),
+		// Медиасервер: go2rtc вместо go2rtc (см. plans/go2rtc-migration.md).
 		//
-		// Отличается от MediamtxHost: тот используется бэкендом внутри
+		// API и RTSP — два разных порта: по API бэкенд регистрирует потоки,
+		// по RTSP ffmpeg забирает звук камеры.
+		Go2rtcAPI:  envStr("GO2RTC_API", "http://localhost:1984"),
+		Go2rtcRTSP: envStr("GO2RTC_RTSP", "localhost:8554"),
+		// Адрес go2rtc, по которому до него дойдёт браузер оператора.
+		//
+		// Отличается от Go2rtcAPI: тот используется бэкендом внутри
 		// docker-сети (localhost или имя контейнера). Если подставить его
 		// в ссылку для браузера, браузер будет стучаться в свой собственный
 		// localhost и соединение не установится.
-		MediamtxPublicHost:  envStr("MEDIAMTX_PUBLIC_HOST", ""),
+		Go2rtcPublicHost:    envStr("GO2RTC_PUBLIC_HOST", ""),
 		MinioEndpoint:       envStr("MINIO_ENDPOINT", "localhost:9000"),
 		MinioPublicEndpoint: envStr("MINIO_PUBLIC_ENDPOINT", ""),
 		MinioUseSSL:         envBool("MINIO_USE_SSL", false),

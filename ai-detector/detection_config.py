@@ -70,13 +70,13 @@ class DetectionConfig:
 
     # --- Звук ---
     # Анализ звука ведёт отдельный конвейер (см. audio_detection.py):
-    # звук читается из потока MediaMTX и классифицируется YAMNet.
+    # звук читается из потока go2rtc и классифицируется YAMNet.
     # Здесь только настройки, нужные для решения, слушать ли камеру.
     audio_enabled: bool = False
     # Какие звуковые события искать. Пусто — искать все поддерживаемые.
     audio_events: list[str] = field(default_factory=list)
     audio_threshold: float = 0.5
-    # Idle: путь звука в MediaMTX — <cameraID>_audio. Нужен для подключения.
+    # Idle: путь звука в go2rtc — <cameraID>_audio. Нужен для подключения.
 
     @property
     def wants_audio(self) -> bool:

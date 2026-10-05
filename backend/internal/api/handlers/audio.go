@@ -142,7 +142,7 @@ func (h *AudioHandler) Status(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Звук в HLS есть, когда дорожка существует и приведена к AAC.
-	st.HLSHasAudio = st.Available
+st.AudioAvailable = st.Available
 
 	writeJSON(w, http.StatusOK, st)
 }

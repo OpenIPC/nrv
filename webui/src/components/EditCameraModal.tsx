@@ -45,7 +45,7 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
    * Проверяет поток перед сохранением.
    *
    * Отправляем адрес БЕЗ встроенных кредов и логин/пароль отдельно:
-   * бэкенд соберёт ту же строку, что потом получит MediaMTX, поэтому проверка
+   * бэкенд соберёт ту же строку, что потом получит go2rtc, поэтому проверка
    * отражает реальный результат, а не только факт доступности камеры.
    */
   const runProbe = async (kind: 'main' | 'sub') => {
@@ -98,7 +98,7 @@ export default function EditCameraModal({ camera, onClose, onSaved }: Props) {
     setError(null)
 
     // Отправляем только изменённые поля — бэкенд перерегистрирует потоки
-    // в MediaMTX, если поменялись адреса или креды.
+    // в go2rtc, если поменялись адреса или креды.
     // Тип расширен числом: номер канала передаётся как число.
     const payload: Record<string, string | number> = {}
     if (form.name !== camera.name) payload.name = form.name

@@ -80,7 +80,7 @@ func buildRouteList() []APIDoc {
 		{Method: "GET", Path: "/api/v1/cameras/{id}/hls/sub/index.m3u8", Summary: "HLS-плейлист субпотока", Auth: false, Tags: []string{"streams"},
 			QueryParams: []string{"token — JWT (обязателен)"}},
 		{Method: "GET", Path: "/api/v1/cameras/{id}/hls/{file}", Summary: "Сегменты HLS и init-сегмент", Auth: false, Tags: []string{"streams"},
-			QueryParams: []string{"token — JWT (обязателен)", "session — выдаётся MediaMTX"}},
+			QueryParams: []string{"token — JWT (обязателен)", "session — выдаётся go2rtc"}},
 		{Method: "GET", Path: "/api/v1/cameras/{id}/snapshot", Summary: "Текущий кадр в JPEG", Auth: false, Tags: []string{"streams"},
 			QueryParams: []string{"jwt или token — JWT (обязателен, так как используется в теге img)"}},
 

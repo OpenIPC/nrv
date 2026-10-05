@@ -41,32 +41,44 @@ services:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
 
-  mediamtx:
-    image: bluenviron/mediamtx:latest
+  # go2rtc — медиасервер: принимает потоки камер и отдаёт их браузеру
+  # (WebRTC, MSE, HLS), а внешним системам — по RTSP.
+  #
+  # Заменил MediaMTX (см. plans/go2rtc-migration.md). Причины: двусторонний
+  # звук из коробки (backchannel по RTSP), режим MSE, HTTP-кадры и, главное,
+  # ленивость — соединение с камерой открывается только когда её смотрят.
+  # MediaMTX держал все камеры постоянно и занимал под это ~90% процессора.
+  go2rtc:
+    image: alexxit/go2rtc:latest
     restart: unless-stopped
+    # host-сеть нужна по двум причинам: камеры живут в локальной сети
+    # (порт 554), а WebRTC должен предлагать браузеру адрес, доступный
+    # напрямую, без NAT внутри docker.
+    network_mode: host
     volumes:
-      - ./mediamtx.yml:/mediamtx.yml
+      - ./go2rtc:/config
+      - /etc/localtime:/etc/localtime:ro
     environment:
-      # Учётные данные для внешнего RTSP-доступа (порт 9784).
-      # Подставляются в mediamtx.yml при старте.
-      MTX_EXTERNAL_USER: ${MTX_EXTERNAL_USER:-viewer}
-      MTX_EXTERNAL_PASS: ${MTX_EXTERNAL_PASS:-viewer}
-    ports:
-      - "8554:8554"   # RTSP
-      - "8889:8889"   # WebRTC: обмен SDP (WHEP)
-      # UDP-порт, по которому идёт сам медиапоток WebRTC. Без него
-      # соединение не устанавливается: сигнальный обмен по 8889 проходит,
-      # а данные передавать некуда, и сессия закрывается по таймауту
-      # с сообщением «deadline exceeded while waiting connection».
-      - "8189:8189/udp"
-      - "8888:8888"   # HLS
-      - "9997:9997"   # API управления
+      # Пароль RTSP-сервера go2rtc — то, что оператор выдаёт внешним
+      # системам (см. docs/EXTERNAL-RTSP.md).
+      #
+      # Для адресов localhost go2rtc проверку отключает сам: звук
+      # (ffmpeg), бэкенд и внешние alias-источники ходят по 127.0.0.1 и
+      # учётных данных не передают. Внешние системы приходят через
+      # rtsp-proxy — это уже не localhost, и пароль с них спрашивается.
+      # Без этих переменных порт 9784 был бы открыт всем в сети.
+      RTSP_EXTERNAL_USER: ${EXTERNAL_RTSP_USER:-viewer}
+      RTSP_EXTERNAL_PASS: ${EXTERNAL_RTSP_PASS:-viewer}
+    # Учётные данные камер в конфиг не попадают: потоки регистрирует бэкенд
+    # через API go2rtc, читая адреса из базы.
 
   # RTSP-прокси для внешних систем на отдельном порту.
   #
-  # MediaMTX поддерживает только один RTSP-порт, а внешним клиентам
-  # нужен предсказуемый адрес из документации. nginx слушает 9784 и
-  # передаёт поток на RTSP-порт MediaMTX, не разбирая протокол.
+  # У go2rtc один RTSP-порт на всех, а внешним клиентам нужен
+  # предсказуемый адрес из документации. nginx слушает 9784 и передаёт
+  # поток на RTSP-порт go2rtc, не разбирая протокол: заголовок
+  # Authorization от внешнего клиента доходит до go2rtc как есть, и
+  # пароль проверяет сам go2rtc.
   rtsp-proxy:
     image: nginx:alpine
     restart: unless-stopped
@@ -74,8 +86,12 @@ services:
       - ./rtsp-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
       - "9784:9784"
+    # go2rtc работает в host-сети, поэтому из bridge-контейнера он виден
+    # только по адресу хоста.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - mediamtx
+      - go2rtc
 
   nats:
     image: nats:latest
@@ -107,11 +123,15 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_BUCKET: "nvr-recordings"
       NATS_URL: "nats://localhost:4222"
-      MEDIAMTX_HOST: "localhost:8888"
-      # Адрес MediaMTX, по которому до него дойдёт браузер. Используется
-      # в ссылках на WebRTC: внутренний адрес docker-сети в браузере не
-      # работает — он указывал бы на машину самого оператора.
-      MEDIAMTX_PUBLIC_HOST: "${MEDIAMTX_PUBLIC_HOST:-83.243.73.86}"
+      # Медиасервер go2rtc. API — регистрация и проверка потоков, RTSP —
+      # откуда берётся звук камер для перекодирования.
+      GO2RTC_API: "http://localhost:1984"
+      GO2RTC_RTSP: "localhost:8554"
+      # Адрес go2rtc, доступный браузеру оператора (подставляется в ссылки).
+      # Нужен потому, что внутренний адрес docker-сети в браузере не
+      # работает — он указывал бы на машину самого оператора. Пусто —
+      # ссылки строятся по адресу запроса.
+      GO2RTC_PUBLIC_HOST: "${GO2RTC_PUBLIC_HOST:-}"
       # Адрес этого сервера, доступный из сети устройств (камеры, контроллеры СКУД).
       #
       # Без него сервис подставляет localhost, и контроллер Z5R уходит
@@ -122,9 +142,11 @@ services:
       PUBLIC_URL: "${PUBLIC_URL:-}"
       # Учётные данные внешнего RTSP-доступа: страница настроек
       # показывает их оператору для настройки сторонних систем.
-      # Должны совпадать со значениями в mediamtx.yml.
-      MTX_EXTERNAL_USER: ${MTX_EXTERNAL_USER:-viewer}
-      MTX_EXTERNAL_PASS: ${MTX_EXTERNAL_PASS:-viewer}
+      # Имена переменных исторические (MTX_ — от прежнего медиасервера):
+      # их читает external_rtsp_service.go, а менять имена нельзя без
+      # правки окружения у уже установленных систем.
+      EXTERNAL_RTSP_USER: ${EXTERNAL_RTSP_USER:-viewer}
+      EXTERNAL_RTSP_PASS: ${EXTERNAL_RTSP_PASS:-viewer}
       # Приём логов с камер по syslog.
       #
       # Слушаем на всех интерфейсах: камеры стоят в разных подсетях,
@@ -160,7 +182,7 @@ services:
         condition: service_healthy
       nats:
         condition: service_started
-      mediamtx:
+      go2rtc:
         condition: service_started
 
   webui:
@@ -206,6 +228,12 @@ services:
       TRACK: "${AI_TRACK:-true}"
       # Отправлять JPEG кадра вместе с событием (бэкенд сохранит как снимок)
       SEND_SNAPSHOT: "${AI_SEND_SNAPSHOT:-true}"
+      # Брать снимок события из основного потока «по запросу» у публикатора
+      # кадров. Кадры детекции идут из субпотока, поэтому без этого снимки
+      # были бы 704×576. Публикатор отдаёт один кадр 1920 px на событие —
+      # постоянной нагрузки нет.
+      SNAPSHOT_FROM_PUBLISHER: "${AI_SNAPSHOT_FROM_PUBLISHER:-true}"
+      SNAPSHOT_TIMEOUT: "${AI_SNAPSHOT_TIMEOUT:-6}"
       # Распознавание лиц и номеров. Модуль сам отключается, если модель
       # или библиотека недоступна, поэтому значения по умолчанию — true.
       ENABLE_FACE_RECOGNITION: "${AI_FACES:-true}"
@@ -238,9 +266,13 @@ services:
       # Детекция звука (YAMNet): выстрелы, крики, разбитое стекло и т.п.
       # Отключается, если нужен только видеоанализ — экономит CPU.
       ENABLE_AUDIO_DETECTION: "${AI_AUDIO:-true}"
-      # Откуда брать звук: транскодированный AAC лежит в MediaMTX.
-      # Имя сервиса в compose-сети, а не localhost.
-      MEDIAMTX_RTSP: "mediamtx:8554"
+      # Откуда брать звук: перекодированный AAC отдаёт сам go2rtc.
+      # go2rtc работает в host-сети, поэтому из bridge-контейнера он виден
+      # только по адресу хоста (см. extra_hosts ниже).
+      #
+      # Учётные данные здесь обязательны: для адресов кроме localhost
+      # go2rtc требует пароль (тот же, что выдан внешним системам).
+      GO2RTC_RTSP: "${EXTERNAL_RTSP_USER:-viewer}:${EXTERNAL_RTSP_PASS:-viewer}@host.docker.internal:8554"
       # Ограничиваем видимость только первой GPU
       NVIDIA_VISIBLE_DEVICES: "all"
       NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"
@@ -255,6 +287,11 @@ services:
         hard: 65536
     # Проброс GPU через CDI (nvidia-container-toolkit уже настроен на хосте).
     # Работает только при наличии установленного драйвера NVIDIA на хосте.
+    extra_hosts:
+      # go2rtc живёт в host-сети, из этой сети он доступен только по адресу
+      # хоста: имя сервиса не разрешается, потому что у go2rtc нет
+      # собственного адреса в bridge-сети.
+      - "host.docker.internal:host-gateway"
     deploy:
       resources:
         reservations:
@@ -279,7 +316,7 @@ services:
     depends_on:
       nats:
         condition: service_started
-      mediamtx:
+      go2rtc:
         condition: service_started
 
   # Тянет кадры из RTSP-субпотоков камер и публикует их в NATS для ai-detector.
@@ -297,10 +334,27 @@ services:
       NATS_URL: "nats://localhost:4222"
       # Период опроса каждой камеры, сек
       FRAME_INTERVAL: "${FRAME_INTERVAL:-1.0}"
-      # Ширина кадра для детекции (0 — без ресайза)
-      FRAME_WIDTH: "${FRAME_WIDTH:-960}"
+      # Источник кадров для детекции: sub — дополнительный поток
+      # (704×576, декодируется в разы дешевле), main — основной
+      # (1920×1080 и выше). Детекция идёт из субпотока: на 24 камерах
+      # основной поток занимал почти 14 ядер процессора, тогда как
+      # видеокарта простаивала. Качество снимка события при этом не
+      # страдает — кадр основного потока берётся отдельно и только на
+      # время события (SNAPSHOT_*).
+      DETECT_SOURCE_STREAM: "${AI_DETECT_SOURCE:-sub}"
+      # Ширина кадра детекции. 0 — без ресайза: субпоток камер парка и так
+      # 704×576, растягивать его незачем, а исходный размер виден в
+      # метаданных события и нужен для наложения рамок.
+      FRAME_WIDTH: "${FRAME_WIDTH:-0}"
       CAMERA_RELOAD: "60"
       FFMPEG_TIMEOUT: "10"
+      # Снимки событий «по запросу» из основного потока. 1920 — снимок
+      # читаемый (на 4К-камере это ресайз, а не обрезка: пропорции целы).
+      SNAPSHOT_WIDTH: "${AI_SNAPSHOT_WIDTH:-1920}"
+      # Сколько снимков берётся одновременно. Всплеск событий иначе
+      # выбивает процессор: несколько одновременных декодирований 4К.
+      SNAPSHOT_PARALLEL: "${AI_SNAPSHOT_PARALLEL:-3}"
+      SNAPSHOT_TIMEOUT: "${AI_SNAPSHOT_TIMEOUT:-6}"
       # Быстрый поток кадров зоны номера: 2,5 кадра в секунду.
       # Нужен потому, что машина проезжает зону за 2-3 секунды, а обычный
       # поток идёт раз в секунду — поймать её в кадре иначе не удаётся.

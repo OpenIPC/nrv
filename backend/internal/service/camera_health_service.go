@@ -151,7 +151,7 @@ func NewCameraHealthService(repo *postgres.CameraRepo) *CameraHealthService {
 // Start запускает фоновый сбор. Блокируется до отмены ctx.
 func (s *CameraHealthService) Start(ctx context.Context) {
 	// Первый сбор отложен: при старте сервера камеры ещё не подключены
-	// к MediaMTX, и метрики были бы пустыми.
+	// к go2rtc, и метрики были бы пустыми.
 	select {
 	case <-ctx.Done():
 		return

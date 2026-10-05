@@ -797,7 +797,7 @@ func subPathFromMain(mainPath string) string {
 // withRTSPCredentials подставляет логин и пароль в RTSP-адрес.
 //
 // Креды уходят в проверяемый адрес в открытом виде: ffprobe не умеет
-// брать их иначе. Это тот же адрес, что попадёт в MediaMTX, поэтому
+// брать их иначе. Это тот же адрес, что попадёт в go2rtc, поэтому
 // проверка отражает реальную работу камеры.
 func withRTSPCredentials(rawURL, username, password string) string {
 	u, err := url.Parse(rawURL)

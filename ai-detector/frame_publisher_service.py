@@ -17,6 +17,8 @@ Frame Publisher — сервис публикации кадров для AI-д�
 """
 
 import asyncio
+import base64
+import json
 import logging
 import os
 import re
@@ -40,6 +42,9 @@ logger = logging.getLogger("frame-publisher")
 
 # Периодические ошибки одной камеры не должны засорять лог: жалуемся редко
 FAILURE_LOG_EVERY = 30
+# Сколько неудач подряд считать признаком нерабочего субпотока. Кадры идут
+# раз в секунду, поэтому пять — это около пяти секунд ожидания.
+FALLBACK_AFTER = 5
 
 
 def build_rtsp_url(stream_url: str, username: str, password: str) -> str:
@@ -291,13 +296,34 @@ class FramePublisher:
     def __init__(self, db_url: str, nats_url: str, interval: float,
                  width: int, reload_every: float, ffmpeg_timeout: float,
                  plate_interval: float = 0.2, plate_width: int = 640,
-                 plate_main_width: int = 0):
+                 plate_main_width: int = 0, snapshot_width: int = 1920,
+                 snapshot_parallel: int = 3, snapshot_timeout: float = 6.0):
         self.db_url = db_url
         self.nats_url = nats_url
         self.interval = interval
         self.width = width
         self.reload_every = reload_every
         self.ffmpeg_timeout = ffmpeg_timeout
+        # Снимки событий «по запросу»: детектор просит кадр основного
+        # потока, а мы отдаём его отдельным сообщением.
+        #
+        # Так сделано из-за противоречия между качеством снимка и расходом
+        # процессора. Кадры для детекции выгодно брать из субпотока
+        # (704×576 вместо 4К — декодирование дешевле на порядок), но
+        # снимок события из субпотока получается мыльным. Поэтому кадр
+        # основного потока берётся не постоянно для каждой камеры, а
+        # только тогда, когда событие действительно произошло.
+        self.snapshot_width = snapshot_width
+        # Предел одновременных снимков. Событие — редкое явление, но при
+        # всплеске (машина и группа людей сразу) десяток одновременных
+        # декодирований 4К снова загрузил бы процессор: очередь разбирается
+        # по мере освобождения мест, а детектор при ожидании получает
+        # старый кадр своей детекции.
+        self.snapshot_parallel = max(1, snapshot_parallel)
+        self.snapshot_timeout = snapshot_timeout
+        # Семафор создаётся при старте: до первого запуска цикла событий
+        # asyncio.Semaphore() не привязан к loop.
+        self.snapshot_sem: asyncio.Semaphore | None = None
         # Быстрый поток для распознавания номеров: чаще и по зоне.
         self.plate_interval = plate_interval
         self.plate_width = plate_width
@@ -330,6 +356,9 @@ class FramePublisher:
         await self.nc.connect(self.nats_url, max_reconnect_attempts=-1)
         logger.info(f"подключился к NATS: {self.nats_url}")
 
+        self.snapshot_sem = asyncio.Semaphore(self.snapshot_parallel)
+        snapshots = asyncio.create_task(self._snapshot_loop())
+
         await self.refresh_cameras()
 
         reloader = asyncio.create_task(self._reload_loop())
@@ -337,8 +366,77 @@ class FramePublisher:
         try:
             await asyncio.gather(reloader, monitor)
         finally:
+            snapshots.cancel()
             for t in self.tasks.values():
                 t.cancel()
+
+    async def _snapshot_loop(self):
+        """Отдаёт кадр основного потока по запросу детектора.
+
+        Детектор шлёт cameras.<id>.snapshot_req, а получает кадр в теме
+        cameras.<id>.snapshot. Отдельная тема, а не общая cameras.<id>.frame:
+        кадры детекции продолжают идти своим чередом, и событие не может
+        «потерять» свой снимок в общем потоке.
+        """
+        sub = await self.nc.subscribe("cameras.*.snapshot_req")
+        logger.info("Subscribed to cameras.*.snapshot_req")
+        while True:
+            try:
+                msg = await sub.next_msg(timeout=1)
+            except Exception as e:
+                if type(e).__name__ in ("TimeoutError", "ErrTimeout"):
+                    continue
+                logger.error(f"приём запроса снимка: {e}")
+                await asyncio.sleep(1)
+                continue
+            if msg is None:
+                continue
+            asyncio.create_task(self._handle_snapshot_req(msg))
+
+    async def _handle_snapshot_req(self, msg):
+        """Один запрос снимка: взять кадр основного потока и ответить."""
+        try:
+            req = json.loads(msg.data.decode("utf-8"))
+        except Exception:
+            return
+        cam_id = str(req.get("camera_id") or "").strip()
+        req_id = str(req.get("req_id") or "").strip()
+        if not cam_id or not req_id:
+            return
+
+        cam = next((c for c in self.cameras if c["id"] == cam_id), None)
+        if cam is None:
+            await self._publish_snapshot(cam_id, req_id, None)
+            return
+
+        # Основной поток: если его нет в базе, берём основной адрес камеры —
+        # для событий лучше подойдёт любой поток, чем отсутствие снимка.
+        raw = cam.get("main_stream") or cam.get("stream")
+        if not raw:
+            await self._publish_snapshot(cam_id, req_id, None)
+            return
+        url = build_rtsp_url(raw, cam["username"], cam["password"])
+        width = self.snapshot_width if self.snapshot_width else 0
+
+        jpeg = None
+        if self.snapshot_sem is not None:
+            async with self.snapshot_sem:
+                jpeg = await asyncio.to_thread(
+                    grab_frame, url, width, self.snapshot_timeout
+                )
+        await self._publish_snapshot(cam_id, req_id, jpeg)
+
+    async def _publish_snapshot(self, cam_id: str, req_id: str, jpeg: bytes | None):
+        payload = {
+            "req_id": req_id,
+            "camera_id": cam_id,
+            "jpeg": base64.b64encode(jpeg).decode("ascii") if jpeg else None,
+        }
+        try:
+            await self.nc.publish(f"cameras.{cam_id}.snapshot",
+                                  json.dumps(payload).encode())
+        except Exception as e:
+            logger.warning(f"[{cam_id[:8]}] отправка снимка: {e}")
 
     async def refresh_cameras(self):
         """Перечитывает список камер и запускает/останавливает воркеры."""
@@ -464,7 +562,35 @@ class FramePublisher:
     async def _camera_loop(self, cam: dict):
         """Цикл одной камеры: взять кадр → опубликовать → подождать интервал."""
         cam_id = cam["id"]
-        url = build_rtsp_url(cam["stream"], cam["username"], cam["password"])
+        # Кадры для детекции берём из СУБПОТОКА.
+        #
+        # Раньше кадры брались из основного потока, потому что из того же
+        # кадра делался снимок события. Но на 24 камерах это обходилось
+        # слишком дорого: основной поток — 1920×1080, а на части камер и
+        # 4К, и его декодирование занимало почти 14 ядер процессора, тогда
+        # как видеокарта простаивала. Субпоток камер парка — 704×576,
+        # детекция объектов и лиц на нём работает, а декодирование дешевле
+        # на порядок.
+        #
+        # Качество снимка при этом не теряется: кадр основного потока
+        # детектор запрашивает отдельно и только на время события
+        # (см. _snapshot_loop) — постоянной нагрузки «на всякий случай» нет.
+        source = os.getenv("DETECT_SOURCE_STREAM", "sub").strip().lower()
+        if source == "main" and cam.get("main_stream"):
+            url = build_rtsp_url(cam["main_stream"], cam["username"], cam["password"])
+        else:
+            url = build_rtsp_url(cam["stream"], cam["username"], cam["password"])
+        # Адрес основного потока — запасной вариант.
+        #
+        # Второго потока может не быть вовсе: камера .81 на запрос
+        # субпотока отвечает «Stream not found», и кадров от неё нет
+        # совсем. Одна такая камера стоит нескольких ядер процессора, но
+        # камера без детекции хуже, поэтому при устойчивых отказах
+        # возвращаемся к основному потоку.
+        if source != "main" and cam.get("main_stream"):
+            main_url = build_rtsp_url(cam["main_stream"], cam["username"], cam["password"])
+        else:
+            main_url = ""
         # Не логируем URL целиком — в нём пароль
         safe_url = re.sub(r"//[^@/]+@", "//***@", url)
 
@@ -491,6 +617,16 @@ class FramePublisher:
                     logger.warning(
                         f"[{cam_id[:8]}] {cam['name']}: кадр не получен "
                         f"({n} раз подряд) {safe_url}"
+                    )
+                # Пять неудач подряд (около пяти секунд) — субпоток считаем
+                # нерабочим и переходим на основной.
+                if n >= FALLBACK_AFTER and main_url and url != main_url:
+                    url = main_url
+                    safe_url = re.sub(r"//[^@/]+@", "//***@", url)
+                    self.failures[cam_id] = 0
+                    logger.warning(
+                        f"[{cam_id[:8]}] {cam['name']}: субпоток не отдаёт кадры — "
+                        f"детекция переведена на основной поток {safe_url}"
                     )
 
             # Вычитаем потраченное время, чтобы держать стабильный интервал
@@ -529,6 +665,13 @@ async def main():
         # уменьшения. Нужно там, где машины проезжают вдали и номер в
         # субпотоке слишком мелкий для распознавания.
         plate_main_width=int(os.getenv("PLATE_FRAME_WIDTH_MAIN", "0")),
+        # Снимки событий «по запросу» из основного потока. Ширина 0 —
+        # отдавать без уменьшения (4К на камерах, где основной поток 4К).
+        # Три одновременных снимка — предел, при котором всплеск событий
+        # не выбивает процессор: остальные запросы ждут в очереди.
+        snapshot_width=int(os.getenv("SNAPSHOT_WIDTH", "1920")),
+        snapshot_parallel=int(os.getenv("SNAPSHOT_PARALLEL", "3")),
+        snapshot_timeout=float(os.getenv("SNAPSHOT_TIMEOUT", "6")),
     )
 
     loop = asyncio.get_running_loop()

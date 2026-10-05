@@ -93,7 +93,7 @@ func (h *CameraHandler) Update(w http.ResponseWriter, r *http.Request) {
 //
 // Тело: {rtsp_url, username, password}. Если в адресе нет кредов,
 // они подставляются из username/password — так оператор проверяет
-// ровно то, что попадёт в MediaMTX.
+// ровно то, что попадёт в go2rtc.
 func (h *CameraHandler) ProbeStream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RTSPURL  string `json:"rtsp_url"`
@@ -147,7 +147,7 @@ func (h *CameraHandler) RestartStreamer(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, res)
 }
 
-// RecreateStream принудительно пересоздаёт поток камеры в MediaMTX.
+// RecreateStream принудительно пересоздаёт поток камеры в go2rtc.
 //
 // POST /api/v1/cameras/{id}/recreate-stream
 //

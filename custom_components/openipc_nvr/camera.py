@@ -92,8 +92,8 @@ class NvrCamera(NvrEntity, Camera):
         """Адрес потока.
 
         Если внешний прокси не включён в настройках, отдаём внутренний RTSP
-        MediaMTX из ответа сервера. Он тоже рабочий, но зависит от того,
-        что ассистент и MediaMTX видят друг друга напрямую.
+        go2rtc из ответа сервера. Он тоже рабочий, но зависит от того,
+        что ассистент и go2rtc видят друг друга напрямую.
         """
         if self._entry.data.get(CONF_USE_RTSP_PROXY, True):
             channel = self._camera.get("channel_number")

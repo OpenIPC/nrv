@@ -50,10 +50,12 @@ type RouterConfig struct {
 	JWTSecret    string
 	WGManager    *tunnel.WireGuardManager
 	DB           *pgxpool.Pool
-	MediamtxHost string
-	// Адрес MediaMTX для ссылок, отдаваемых браузеру (WebRTC)
-	MediamtxPublicHost string
-	Scanner            *service.CameraScanner
+	// Go2rtcAPI — адрес API медиасервера со схемой: через него бэкенд
+	// проксирует HLS-запросы браузера.
+	Go2rtcAPI string
+	// Адрес медиасервера (go2rtc) для браузера оператора.
+	Go2rtcPublicHost string
+	Scanner          *service.CameraScanner
 	VideoRepo          *miniorepo.VideoRepo
 	StorageSvc         *service.StorageService
 	RetentionSvc       *service.RetentionService
@@ -113,7 +115,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// Handlers
 	authH := handlers.NewAuthHandler(cfg.UserRepo, tokenAuth)
 	cameraH := handlers.NewCameraHandler(cfg.CameraSvc)
-	streamH := handlers.NewStreamHandler(cfg.CameraSvc, cfg.MediamtxHost, cfg.MediamtxPublicHost, tokenAuth)
+	streamH := handlers.NewStreamHandler(cfg.CameraSvc, cfg.Go2rtcAPI, cfg.Go2rtcPublicHost, tokenAuth)
 	scannerH := handlers.NewScannerHandler(cfg.Scanner)
 	camHealthH := handlers.NewCameraHealthHandler(cfg.HealthSvc)
 	camSettingsH := handlers.NewCameraSettingsHandler(cfg.SettingsSvc)
@@ -202,9 +204,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		// JWT и опознаётся по IP отправителя.
 		r.Post("/acs/z5r/webjson", acsH.Z5RWebJSON)
 
-		// HLS-прокси: вне JWT-группы, т.к. hls.js в браузере
-		// не может передавать Authorization-заголовок для сегментов.
+		// HLS-прокси: вне JWT-группы, т.к. hls.js/нативные плееры
+		// не могут передавать Authorization-заголовок для сегментов.
 		// Авторизация проверяется внутри ProxyHLS по ?token= query-параметру.
+		//
+		// HLS нужен нативным клиентам (мобильное приложение, ExoPlayer):
+		// MSE — браузерная технология, там её нет. Браузер же берёт MSE.
 		r.Get("/cameras/{id}/hls/*", streamH.ProxyHLS)
 
 		// Снапшот: тоже вне JWT-группы, но по другой причине.
@@ -287,7 +292,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// Управление камерой (OpenIPC: Majestic + reboot)
 			r.Post("/cameras/{id}/restart-streamer", cameraH.RestartStreamer)
 			// Пересоздание пути в медиасервере: поднимает поток, когда
-			// камера в сети, но путь в MediaMTX остался без источника.
+			// камера в сети, но путь в go2rtc остался без источника.
 			r.Post("/cameras/{id}/recreate-stream", cameraH.RecreateStream)
 			// Время камеры: перевод на наш NTP-сервер и чтение состояния.
 			r.Get("/cameras/{id}/ntp", cameraH.GetNTPTime)

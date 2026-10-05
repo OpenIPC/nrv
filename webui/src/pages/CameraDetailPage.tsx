@@ -50,7 +50,7 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
   // Какой поток показываем в плеере: основной или дополнительный.
   const [activeStream, setActiveStream] = useState<'main' | 'sub'>('main')
   // Транспорт живого потока: от него зависит задержка показа рамок детекций.
-  const [liveTransport, setLiveTransport] = useState<'webrtc' | 'hls' | null>(null)
+  const [liveTransport, setLiveTransport] = useState<'webrtc' | 'mse' | null>(null)
   // Какая команда выполняется сейчас: блокируем все кнопки, пока идёт одна.
   const [busy, setBusy] = useState<'restart' | 'reboot' | 'recreate' | 'ntp' | 'logs' | 'majestic' | null>(null)
 
@@ -262,7 +262,7 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
   }
   // Принудительное пересоздание потока в медиасервере.
   //
-  // Нужно, когда камера уже в сети, а поток не идёт: путь в MediaMTX
+  // Нужно, когда камера уже в сети, а поток не идёт: путь в go2rtc
   // существует, но остался без источника после перезагрузки камеры.
   // Автоматика такой путь считает живым и не восстанавливает, поэтому
   // без этой кнопки камеру приходилось поднимать перезапуском сервера.
@@ -366,17 +366,19 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
         {/* Плеер */}
         <div>
           <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
-            {isOnline && (streamInfo?.main_hls_url || streamInfo?.hls_url) ? (
+            {isOnline ? (
               <LivePlayer
                 key={activeStream}
-                hlsUrl={
+                // MSE — основной транспорт: задержка как у WebRTC, но
+                // соединение идёт по обычному WebSocket, без UDP.
+                mseUrl={
                   activeStream === 'sub'
-                    ? (streamInfo?.sub_hls_url || streamInfo?.hls_url || '')
-                    : (streamInfo?.main_hls_url || streamInfo?.hls_url || '')
+                    ? (streamInfo?.sub_mse_url || streamInfo?.mse_url || '')
+                    : (streamInfo?.mse_url || '')
                 }
-                // WebRTC — основной транспорт живого просмотра: его задержка
-                // в разы меньше, чем у HLS, который ждёт сборки сегментов.
-                // Плеер сам откатывается на HLS, если WebRTC не прошёл.
+                // WebRTC — запасной транспорт с наименьшей задержкой;
+                // плеер сам попробует его первым и откатится на MSE,
+                // если UDP закрыт.
                 //
                 // Адрес берём для выбранного потока: наложение детекций
                 // совпадает с картинкой только на доп. потоке, потому что
@@ -386,9 +388,6 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
                     ? (streamInfo?.webrtc_url || '')
                     : (streamInfo?.sub_webrtc_url || '')
                 }
-                // Звук идёт отдельным потоком: камеры отдают G.711, который
-                // браузер в HLS не играет. Бэкенд перекодирует в AAC.
-                audioUrl={`/api/v1/cameras/${camera.id}/hls/audio/index.m3u8`}
                 muted={true}
                 volume={0.7}
                 onTransport={setLiveTransport}
@@ -397,13 +396,12 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
                     несколько секунд, и рамка, взятая из последнего события,
                     оказалась бы впереди объекта — лучше не показывать её
                     вовсе, чем показывать не на своём месте. */}
-                {/* Рамки детекций. Задержка показа зависит от транспорта:
-                    у HLS картинка отстаёт на несколько секунд, и без поправки
-                    рамка оказалась бы впереди объекта. */}
+                {/* Рамки детекций. И MSE, и WebRTC дают задержку доли
+                    секунды, поэтому поправка на транспорт не нужна. */}
                 <DetectionOverlay
                   cameraId={camera.id}
                   enabled={isOnline}
-                  lagSeconds={liveTransport === 'webrtc' ? 0 : HLS_OVERLAY_LAG_SECONDS}
+                  lagSeconds={0}
                 />
               </LivePlayer>
             ) : (
@@ -412,7 +410,7 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
                   <WifiOff size={48} style={{ color: 'var(--danger)', marginBottom: 12, opacity: 0.5 }} />
                   <p style={{ color: 'var(--text-secondary)' }}>{t('cameraPage.noSignal')}</p>
                   <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
-                    {isOnline ? t('cameraPage.hlsUnavailable') : t('cameraPage.offline')}
+                    {isOnline ? t('cameraPage.streamUnavailable') : t('cameraPage.offline')}
                   </p>
                 </div>
               </div>
@@ -425,19 +423,19 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
                   className={`btn btn-sm ${activeStream === 'main' ? 'btn-primary' : 'btn-outline'}`}
                   style={{ padding: '3px 10px', fontSize: 11 }}
                   onClick={() => setActiveStream('main')}
-                  disabled={!streamInfo?.main_hls_url}
+                  disabled={!streamInfo?.mse_url}
                 >
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: streamInfo?.main_hls_url ? 'var(--success)' : 'var(--text-secondary)' }} />
-                  Main {streamInfo?.main_rtsp_url ? '(HLS + RTSP)' : '(—)'}
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: streamInfo?.mse_url ? 'var(--success)' : 'var(--text-secondary)' }} />
+                  Main {streamInfo?.main_rtsp_url ? '(MSE + RTSP)' : '(—)'}
                 </button>
                 <button
                   className={`btn btn-sm ${activeStream === 'sub' ? 'btn-primary' : 'btn-outline'}`}
                   style={{ padding: '3px 10px', fontSize: 11 }}
                   onClick={() => setActiveStream('sub')}
-                  disabled={!streamInfo?.sub_hls_url}
+                  disabled={!streamInfo?.sub_mse_url}
                 >
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: streamInfo?.sub_hls_url ? 'var(--accent)' : 'var(--text-secondary)' }} />
-                  Sub {streamInfo?.sub_rtsp_url ? '(HLS + RTSP)' : '(—)'}
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: streamInfo?.sub_mse_url ? 'var(--accent)' : 'var(--text-secondary)' }} />
+                  Sub {streamInfo?.sub_rtsp_url ? '(MSE + RTSP)' : '(—)'}
                 </button>
               </div>
             )}
@@ -503,17 +501,17 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
                 <h3 style={{ fontSize: 15, marginBottom: 12 }}>{t('cameraPage.mainStream')}</h3>
                 <div className="info-grid" style={{ marginBottom: 16 }}>
                   <InfoRow label="RTSP" value={streamInfo?.main_rtsp_url || camera.main_stream || camera.rtsp_url || '—'} mono />
-                  <InfoRow label="HLS" value={streamInfo?.main_hls_url || streamInfo?.hls_url || '—'} mono />
+                  <InfoRow label="MSE" value={streamInfo?.mse_url || '—'} mono />
                   <InfoRow label="WebRTC" value={streamInfo?.webrtc_url || '—'} mono />
-                  <InfoRow label={t('cameraPage.lStatus')} value={streamInfo?.main_hls_url ? t('cameraPage.available') : t('cameraPage.unavailable')} />
+                  <InfoRow label={t('cameraPage.lStatus')} value={streamInfo?.mse_url ? t('cameraPage.available') : t('cameraPage.unavailable')} />
                 </div>
 
                 <h3 style={{ fontSize: 15, marginBottom: 12, color: 'var(--accent)' }}>{t('cameraPage.subStream')}</h3>
                 <div className="info-grid" style={{ marginBottom: 16 }}>
                   <InfoRow label="RTSP" value={streamInfo?.sub_rtsp_url || camera.sub_stream || '—'} mono />
-                  <InfoRow label="HLS" value={streamInfo?.sub_hls_url || '—'} mono />
+                  <InfoRow label="MSE" value={streamInfo?.sub_mse_url || '—'} mono />
                   <InfoRow label={t('cameraPage.lPurpose')} value={t('cameraPage.purposeSub')} />
-                  <InfoRow label={t('cameraPage.lStatus')} value={streamInfo?.sub_hls_url ? t('cameraPage.available') : t('cameraPage.unavailable')} />
+                  <InfoRow label={t('cameraPage.lStatus')} value={streamInfo?.sub_mse_url ? t('cameraPage.available') : t('cameraPage.unavailable')} />
                 </div>
 
                 <h3 style={{ fontSize: 15, marginBottom: 12 }}>{t('cameraPage.generalInfo')}</h3>

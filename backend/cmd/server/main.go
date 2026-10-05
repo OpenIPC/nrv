@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -76,9 +75,10 @@ func main() {
 	detectionSettingsRepo := postgres.NewDetectionSettingsRepo(db)
 
 	// Инициализация сервисов
-	// MediaMTX API: если MEDIAMTX_HOST = "localhost:8888", то API = "http://localhost:9997"
-	mediamtxAPI := "http://" + strings.Replace(cfg.MediamtxHost, "8888", "9997", 1)
-	cameraSvc := service.NewCameraService(cameraRepo, mediamtxAPI)
+	// Медиасервер — go2rtc: через его API бэкенд регистрирует потоки камер,
+	// а браузер получает WebRTC/HLS (см. plans/go2rtc-migration.md).
+	go2rtcAPI := cfg.Go2rtcAPI
+	cameraSvc := service.NewCameraService(cameraRepo, go2rtcAPI)
 	eventSvc := service.NewEventService(eventRepo)
 
 	// СКУД-адаптеры
@@ -317,16 +317,16 @@ func main() {
 	}()
 
 	// Звук с камер: камеры отдают G.711, а браузеры его в HLS не воспроизводят.
-	// Сервис перекодирует звук в AAC отдельными процессами ffmpeg.
-	audioSvc := service.NewAudioService(cfg.MediamtxHost, cfg.AudioClipDir).
+	// Перекодирование в AAC поручаем самому go2rtc: он умеет запускать ffmpeg
+	// источником потока (см. audio_service.go) — отдельные процессы и
+	// публикация обратно в медиасервер больше не нужны.
+	audioSvc := service.NewAudioService(cfg.Go2rtcAPI, cfg.Go2rtcRTSP, cfg.AudioClipDir).
 		WithPathRegistrar(cameraSvc.AddPublisherPath)
 	audioRepo := postgres.NewAudioRepo(db)
 	go func() {
-		// Первый проход с задержкой: камеры в MediaMTX регистрируются
+		// Первый проход с задержкой: потоки камер в go2rtc добавляются
 		// не мгновенно, до этого момента звуковой дорожки ещё нет.
 		time.Sleep(20 * time.Second)
-		// Интервал небольшой: путь звука в MediaMTX живёт в памяти и теряется
-		// при перезагрузке его конфигурации. Цикл пересоздаёт и путь, и процесс.
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
@@ -334,14 +334,13 @@ func main() {
 		}
 	}()
 
-	// Восстанавливаем пути камер в MediaMTX: они хранятся в памяти MediaMTX
-	// и теряются при его перезапуске, поэтому перерегистрируем их при старте.
+	// Восстанавливаем потоки камер: go2rtc хранит их в файле конфигурации,
+	// но после смены адреса камеры в базе поток нужно перерегистрировать.
 	cameraSvc.RestoreStreams(context.Background())
 
-	// Монитор доступности камер: опрашивает MediaMTX и обновляет status в БД.
-	// Он же восстанавливает пути, если MediaMTX был перезапущен и потерял
-	// конфигурацию (она хранится в памяти MediaMTX, а не на диске).
-	statusMonitor := service.NewCameraStatusMonitor(cameraRepo, mediamtxAPI).
+	// Монитор доступности камер: обновляет status в БД и восстанавливает
+	// потерянные потоки.
+	statusMonitor := service.NewCameraStatusMonitor(cameraRepo, go2rtcAPI).
 		WithRestore(cameraSvc.RegisterStreams)
 	go statusMonitor.Start(context.Background())
 
@@ -453,12 +452,12 @@ func main() {
 	// /cameras/{N}/streaming/{main|sub}, чтобы сторонние системы брали
 	// поток у нас, а не подключались к камерам напрямую. Камеры слабые
 	// и ограничивают число сессий, поэтому одно подключение на камеру
-	// со стороны MediaMTX — это и есть снятие нагрузки.
+	// со стороны go2rtc — это и есть снятие нагрузки.
 	//
 	// Запускается синхронно и после RestoreStreams: внешние пути читают
 	// внутренние, и создавать их раньше не имеет смысла — источник ещё
 	// не зарегистрирован. Порядок здесь принципиален.
-	externalRTSPSvc := service.NewExternalRTSPService(mediamtxAPI)
+	externalRTSPSvc := service.NewExternalRTSPService(go2rtcAPI)
 	cameraSvc.WithExternalRTSP(externalRTSPSvc)
 	externalRTSPSvc.RestoreAll(context.Background(), cameraRepo)
 
@@ -477,8 +476,8 @@ func main() {
 		JWTSecret:          cfg.JWTSecret,
 		WGManager:          wgManager,
 		DB:                 db,
-		MediamtxHost:       cfg.MediamtxHost,
-		MediamtxPublicHost: cfg.MediamtxPublicHost,
+		Go2rtcAPI:          cfg.Go2rtcAPI,
+		Go2rtcPublicHost:   cfg.Go2rtcPublicHost,
 		Scanner:            scanner,
 		VideoRepo:          videoRepo,
 		StorageSvc:         storageSvc,
@@ -577,14 +576,14 @@ func syncAudio(audioSvc *service.AudioService, repo *postgres.AudioRepo, cameras
 		}
 		if !s.Transcode {
 			// Камера отдаёт Opus или AAC — браузер проиграет звук как есть,
-			// перекодировать не нужно (HLS соберёт MediaMTX сам).
+			// перекодировать не нужно (HLS соберёт go2rtc сам).
 			continue
 		}
 
-		// Проверяем наличие звука в самом пути MediaMTX, а не в камере:
+		// Проверяем наличие звука в самом пути go2rtc, а не в камере:
 		// многие камеры отдают RTSP-аудио только одному клиенту, и
 		// параллельное подключение к камере зависает на десятки секунд,
-		// ломая заодно и видео. В пути MediaMTX дорожка уже есть.
+		// ломая заодно и видео. В пути go2rtc дорожка уже есть.
 		sourcePath := s.CameraID.String()
 		if codec := audioSvc.AudioCodecInPath(sourcePath); codec == "" {
 			log.Debug().Str("camera_id", s.CameraID.String()[:8]).

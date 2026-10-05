@@ -326,7 +326,7 @@ export default {
     toList: '← 카메라 목록으로',
 
     noSignal: '신호 없음',
-    hlsUnavailable: 'HLS 스트림을 사용할 수 없습니다',
+    streamUnavailable: '스트림을 사용할 수 없습니다',
     streamLabel: '스트림:',
 
     tabLive: 'Live',
@@ -1451,9 +1451,9 @@ export default {
     transcodingNow: '진행 중 (G.711 → AAC)',
     transcodingStopped: '멈춤',
     transcodingNotNeeded: '필요 없음',
-    rowHls: 'HLS의 소리',
-    hlsPlaying: '재생됨',
-    hlsUnavailable: '사용할 수 없음',
+    rowAudio: '카메라 소리',
+    audioPlaying: '사용 가능',
+    audioUnavailable: '사용할 수 없음',
 
     micHasSound: '마이크에 소리가 들어옴',
     micHasSoundHint: '카메라에 마이크가 없으면 체크를 해제하십시오 — 그러면 소리를 시작하지 않습니다',
@@ -1658,8 +1658,8 @@ export default {
   },
 
   livePlayer: {
-    transportWebrtc: 'WebRTC — 지연 1초 미만',
-    transportHls: 'HLS — WebRTC 실패, 지연이 더 큽니다',
+    transportWebrtc: 'WebRTC — 최소 지연',
+    transportMse: 'MSE — WebRTC와 같은 지연, UDP 불필요',
     overlayWrongStream: '감지 상자: 다른 스트림이 재생 중입니다(분석은 보조 스트림)',
     overlayLagged: '스트림 지연을 보정한 상자({{seconds}}초)',
     soundOn: '소리 끄기',
@@ -1704,7 +1704,7 @@ export default {
 
     missedCameras: '사라진 카메라',
     offlineMinutes: '얼마나 지나면 없어진 것으로 볼지, 분',
-    offlineHint: '짧은 연결 끊김은 카메라와 MediaMTX가 스스로 견딥니다. 0은 「즉시 알림」입니다.',
+    offlineHint: '짧은 연결 끊김은 카메라와 go2rtc가 스스로 견딥니다. 0은 「즉시 알림」입니다.',
     whichCameras: '어떤 카메라를 감시할지',
     allCamerasHint: '아무것도 고르지 않으면 모든 카메라를 감시합니다.',
 

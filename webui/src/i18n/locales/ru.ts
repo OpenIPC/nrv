@@ -341,7 +341,7 @@ export default {
     toList: '← К списку камер',
 
     noSignal: 'Нет сигнала',
-    hlsUnavailable: 'HLS-поток недоступен',
+    streamUnavailable: 'Поток недоступен',
     streamLabel: 'Поток:',
 
     tabLive: 'Live',
@@ -1501,9 +1501,9 @@ export default {
     transcodingNow: 'идёт (G.711 → AAC)',
     transcodingStopped: 'остановлено',
     transcodingNotNeeded: 'не требуется',
-    rowHls: 'Звук в HLS',
-    hlsPlaying: 'воспроизводится',
-    hlsUnavailable: 'недоступен',
+    rowAudio: 'Звук камеры',
+    audioPlaying: 'доступен',
+    audioUnavailable: 'недоступен',
 
     micHasSound: 'У микрофона есть звук',
     micHasSoundHint:
@@ -1715,8 +1715,8 @@ export default {
   },
 
   livePlayer: {
-    transportWebrtc: 'WebRTC — задержка меньше секунды',
-    transportHls: 'HLS — WebRTC не удалось, задержка больше',
+    transportWebrtc: 'WebRTC — минимальная задержка',
+    transportMse: 'MSE — задержка как у WebRTC, но без UDP',
     // Показывается, когда рамки детекций не рисуются: детектор разбирает
     // доп. поток, а на экране другой, и координаты не переносятся.
     overlayWrongStream: 'Рамки детекций: включён не тот поток (разбирается доп.)',
@@ -1767,7 +1767,7 @@ export default {
     missedCameras: 'Пропавшие камеры',
     offlineMinutes: 'Считать пропавшей после, минут',
     offlineHint:
-      'Короткие обрывы связи камера и MediaMTX переживают сами. Ноль означает «сообщать сразу».',
+      'Короткие обрывы связи камера и go2rtc переживают сами. Ноль означает «сообщать сразу».',
     whichCameras: 'Какие камеры отслеживать',
     allCamerasHint: 'Ничего не отмечено — отслеживаются все камеры.',
 

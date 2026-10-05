@@ -98,7 +98,7 @@ export default function GridPage() {  const toast = useToast()
   // Транспорт развёрнутого просмотра. От него зависит, можно ли рисовать
   // наложение детекций: у HLS картинка отстаёт на несколько секунд, и рамка
   // «по последнему событию» оказалась бы впереди объекта.
-  const [expandedTransport, setExpandedTransport] = useState<'webrtc' | 'hls' | null>(null)
+  const [expandedTransport, setExpandedTransport] = useState<'webrtc' | 'mse' | null>(null)
   const [streams, setStreams] = useState<Record<string, StreamInfo>>({})
   // Сколько плееров уже можно запускать: растёт по мере наполнения сетки.
   const [readyCount, setReadyCount] = useState(0)
@@ -318,20 +318,18 @@ export default function GridPage() {  const toast = useToast()
             }}>
               <LivePlayer
                 key={`exp-${expandedCamera.id}`}
-                hlsUrl={streams[expandedCamera.id]?.main_hls_url
-                  || streams[expandedCamera.id]?.hls_url}
+                mseUrl={streams[expandedCamera.id]?.mse_url}
                 webrtcUrl={streams[expandedCamera.id]?.webrtc_url}
-                audioUrl={`/api/v1/cameras/${expandedCamera.id}/hls/audio/index.m3u8`}
                 muted={false}
                 showControls
                 onTransport={setExpandedTransport}
               >
-                {/* Наложение показываем и на HLS: там оно идёт с поправкой
-                    на задержку потока (см. DetectionOverlay). */}
+                {/* Рамки детекций: и MSE, и WebRTC дают задержку в доли
+                    секунды, поправка на транспорт не нужна. */}
                 <DetectionOverlay
                   cameraId={expandedCamera.id}
                   enabled
-                  lagSeconds={expandedTransport === 'webrtc' ? 0 : HLS_OVERLAY_LAG_SECONDS}
+                  lagSeconds={0}
                 />
               </LivePlayer>
               <div style={{
@@ -425,11 +423,14 @@ export default function GridPage() {  const toast = useToast()
                        */
                       <LivePlayer
                         key={`${camera.id}-sub`}
-                        hlsUrl={streams[camera.id]?.sub_hls_url
-                          || streams[camera.id]?.hls_url}
-                        // WebRTC в сетке выключен: десятки соединений
-                        // перегрузят канал, а в мелкой ячейке разницы не видно.
-                        preferHls
+                        mseUrl={streams[camera.id]?.sub_mse_url}
+                        // WebRTC — запасной путь: если MSE в ячейке не поднялся,
+                        // плеер перейдёт на него (или наоборот — порядок задаёт preferMse).
+                        webrtcUrl={streams[camera.id]?.sub_webrtc_url}
+                        // В сетке WebRTC не первым (preferMse): десятки
+                        // соединений с ICE/DTLS перегрузят канал, а в мелкой
+                        // ячейке разницы в задержке не видно.
+                        preferMse
                         muted
                         showControls={false}
                       />

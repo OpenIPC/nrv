@@ -138,10 +138,10 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
               </span>}
         />
         <StatusRow
-          label={t('audioPanel.rowHls')}
-          value={status?.hls_has_audio
-            ? <span style={{ color: 'var(--success)' }}>{t('audioPanel.hlsPlaying')}</span>
-            : <span style={{ color: 'var(--warning)' }}>{t('audioPanel.hlsUnavailable')}</span>}
+          label={t('audioPanel.rowAudio')}
+          value={status?.audio_available
+            ? <span style={{ color: 'var(--success)' }}>{t('audioPanel.audioPlaying')}</span>
+            : <span style={{ color: 'var(--warning)' }}>{t('audioPanel.audioUnavailable')}</span>}
         />
       </div>
 

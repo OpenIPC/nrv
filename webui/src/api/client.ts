@@ -1116,8 +1116,13 @@ export interface Stats {
 
 export interface StreamInfo {
   rtsp_url: string
-  hls_url: string
+  // MSE — транспорт браузера: задержка как у WebRTC, но соединение
+  // идёт по WebSocket поверх TCP, без UDP.
+  mse_url: string
   webrtc_url: string
+  // HLS — транспорт нативных клиентов (мобильное приложение): приходит
+  // от сервера, в браузере не используется.
+  hls_url: string
   status: string
   main_hls_url: string
   sub_hls_url: string
@@ -1126,6 +1131,8 @@ export interface StreamInfo {
   // WebRTC дополнительного потока. Нужен для наложения детекций: детектор
   // разбирает именно доп. поток, и рамки совпадают с картинкой только на нём.
   sub_webrtc_url: string
+  // MSE дополнительного потока: в сетке камер играет он.
+  sub_mse_url: string
   snapshot_url: string
 }
 
@@ -1166,7 +1173,7 @@ export interface AudioStatus {
   available: boolean
   codec: string
   transcoding: boolean
-  hls_has_audio: boolean
+  audio_available: boolean
   audio_path: string
   // Умеет ли камера принимать звук на динамик.
   // Ложь — двусторонняя связь невозможна аппаратно.

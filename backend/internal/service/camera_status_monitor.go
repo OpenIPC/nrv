@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -13,41 +15,47 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// CameraStatusMonitor периодически опрашивает MediaMTX и синхронизирует
-// поле status камер в БД с реальным состоянием потоков.
+// CameraStatusMonitor периодически проверяет камеры и синхронизирует
+// поле status в БД.
 //
-// MediaMTX считает путь "готовым" (ready=true), когда источник подключён
-// и отдаёт хотя бы один трек. Это и есть критерий online.
+// Признак «онлайн» — доступность самой камеры по сети (порт RTSP).
+// Раньше он брался из медиасервера («путь готов»), но у go2rtc такого
+// признака нет: он подключается к камере только когда её смотрят, а в
+// остальное время о её состоянии ничего не знает. Проверка камеры
+// даёт правду и стоит меньше: одно TCP-соединение вместо открытия
+// видеопотока.
 type CameraStatusMonitor struct {
-	repo        *postgres.CameraRepo
-	mediamtxAPI string // http://host:9997
-	client      *http.Client
-	interval    time.Duration
-	wasOnline   map[string]bool // предыдущее состояние — чтобы логировать переходы
-	pruning     map[string]bool // пути, удаление которых уже не удалось (не повторяем)
-	// onRestore перерегистрирует пути камеры в MediaMTX. Задан функцией,
+	repo *postgres.CameraRepo
+	// mediaAPI — адрес API go2rtc; нужен, чтобы узнать список потоков
+	// (для восстановления потерянных) и удалить висячие.
+	mediaAPI  string
+	client    *http.Client
+	interval  time.Duration
+	wasOnline map[string]bool // предыдущее состояние — чтобы логировать переходы
+	pruning   map[string]bool // потоки, удаление которых уже не удалось (не повторяем)
+	// onRestore перерегистрирует потоки камеры в go2rtc. Задан функцией,
 	// чтобы монитор не зависел от сервиса камер напрямую.
 	onRestore func(cam domain.Camera) error
 }
 
 // WithRestore подключает восстановление пропавших путей камер.
-// Без него рестарт MediaMTX оставит камеры без потока.
+// Без него рестарт go2rtc оставит камеры без потока.
 func (m *CameraStatusMonitor) WithRestore(fn func(cam domain.Camera) error) *CameraStatusMonitor {
 	m.onRestore = fn
 	return m
 }
 
-func NewCameraStatusMonitor(repo *postgres.CameraRepo, mediamtxAPI string) *CameraStatusMonitor {
-	if mediamtxAPI == "" {
-		mediamtxAPI = "http://localhost:9997"
+func NewCameraStatusMonitor(repo *postgres.CameraRepo, mediaAPI string) *CameraStatusMonitor {
+	if mediaAPI == "" {
+		mediaAPI = "http://localhost:1984"
 	}
 	return &CameraStatusMonitor{
-		repo:        repo,
-		mediamtxAPI: mediamtxAPI,
-		client:      &http.Client{Timeout: 5 * time.Second},
-		interval:    15 * time.Second,
-		wasOnline:   make(map[string]bool),
-		pruning:     make(map[string]bool),
+		repo:      repo,
+		mediaAPI:  mediaAPI,
+		client:    &http.Client{Timeout: 5 * time.Second},
+		interval:  15 * time.Second,
+		wasOnline: make(map[string]bool),
+		pruning:   make(map[string]bool),
 	}
 }
 
@@ -69,21 +77,13 @@ func (m *CameraStatusMonitor) Start(ctx context.Context) {
 	}
 }
 
-// syncOnce одна итерация: получаем состояние всех путей MediaMTX,
-// проставляем статусы камерам в БД и убираем висячие пути.
+// syncOnce одна итерация: получаем список потоков go2rtc, проверяем
+// доступность камер и убираем висячие потоки.
 func (m *CameraStatusMonitor) syncOnce(ctx context.Context) {
 	allPaths, err := m.fetchPaths(ctx)
 	if err != nil {
-		log.Warn().Err(err).Msg("camera status monitor: failed to fetch MediaMTX paths")
+		log.Warn().Err(err).Msg("camera status monitor: failed to fetch go2rtc streams")
 		return
-	}
-
-	// ready-состояние по имени пути
-	ready := make(map[string]bool, len(allPaths))
-	for name, r := range allPaths {
-		if r {
-			ready[name] = true
-		}
 	}
 
 	cameras, err := m.repo.ListForStatusCheck(ctx)
@@ -101,7 +101,7 @@ func (m *CameraStatusMonitor) syncOnce(ctx context.Context) {
 		expected[cam.ID.String()+"_sub"] = true
 	}
 
-	// Восстанавливаем пропавшие пути: MediaMTX хранит их в памяти и теряет
+	// Восстанавливаем пропавшие пути: go2rtc хранит их в памяти и теряет
 	// при своём перезапуске. Без восстановления камеры остаются без потока
 	// до ручного вмешательства.
 	m.restoreMissingPaths(ctx, cameras, expected, allPaths)
@@ -109,8 +109,12 @@ func (m *CameraStatusMonitor) syncOnce(ctx context.Context) {
 	m.pruneOrphanPaths(ctx, allPaths, expected)
 
 	for _, cam := range cameras {
-		// Для основной камеры путь в MediaMTX назван её UUID.
-		online := ready[cam.ID.String()]
+		// Поток в go2rtc назван UUID камеры.
+		//
+		// Готовность потока здесь НЕ используется: go2rtc подключается к
+		// камере только когда её смотрят. Доступность определяем проверкой
+		// самой камеры — одно TCP-соединение на порт RTSP.
+		online := m.cameraReachable(cam.IP)
 
 		// Не трогаем статус, выставленный вручную (например "recording").
 		if cam.Status == "recording" {
@@ -142,11 +146,11 @@ func (m *CameraStatusMonitor) syncOnce(ctx context.Context) {
 	}
 }
 
-// restoreMissingPaths перерегистрирует в MediaMTX пути, которых там нет.
+// restoreMissingPaths перерегистрирует в go2rtc пути, которых там нет.
 //
-// MediaMTX хранит конфигурацию путей в памяти и теряет её при перезапуске.
+// go2rtc хранит конфигурацию путей в памяти и теряет её при перезапуске.
 // Раньше пути восстанавливались только один раз — при старте backend,
-// поэтому рестарт MediaMTX оставлял камеры без потока до перезапуска backend.
+// поэтому рестарт go2rtc оставлял камеры без потока до перезапуска backend.
 func (m *CameraStatusMonitor) restoreMissingPaths(ctx context.Context, cameras []domain.Camera, expected map[string]bool, paths map[string]bool) {
 	restored := 0
 	for _, cam := range cameras {
@@ -167,13 +171,13 @@ func (m *CameraStatusMonitor) restoreMissingPaths(ctx context.Context, cameras [
 		}
 	}
 	if restored > 0 {
-		log.Info().Int("paths", restored).Msg("пути камер восстановлены в MediaMTX")
+		log.Info().Int("paths", restored).Msg("пути камер восстановлены в go2rtc")
 	}
 }
 
-// pruneOrphanPaths удаляет пути MediaMTX, для которых нет камеры в БД.
+// pruneOrphanPaths удаляет пути go2rtc, для которых нет камеры в БД.
 // Пути со статусом starting (запрос на удаление уже отправлен) повторно не трогаем —
-// так мы избегаем бесконечных повторов, если MediaMTX не может удалить путь
+// так мы избегаем бесконечных повторов, если go2rtc не может удалить путь
 // (например, он ещё активен как publisher).
 func (m *CameraStatusMonitor) pruneOrphanPaths(ctx context.Context, paths map[string]bool, expected map[string]bool) {
 	for name := range paths {
@@ -194,7 +198,7 @@ func (m *CameraStatusMonitor) pruneOrphanPaths(ctx context.Context, paths map[st
 			continue
 		}
 
-		log.Info().Str("path", name).Msg("removing orphan MediaMTX path")
+		log.Info().Str("path", name).Msg("removing orphan go2rtc path")
 		if err := m.deletePath(ctx, name); err != nil {
 			// Помечаем, чтобы не спамить попытками каждые 15 секунд.
 			m.pruning[name] = true
@@ -205,10 +209,15 @@ func (m *CameraStatusMonitor) pruneOrphanPaths(ctx context.Context, paths map[st
 	}
 }
 
-// deletePath удаляет путь через MediaMTX API.
+// deletePath удаляет поток через API go2rtc.
+//
+// Удаление идемпотентно: на несуществующий поток go2rtc отвечает 200.
 func (m *CameraStatusMonitor) deletePath(ctx context.Context, name string) error {
-	url := fmt.Sprintf("%s/v3/config/paths/delete/%s", m.mediamtxAPI, name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	q := url.Values{}
+	q.Set("src", name)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
+		m.mediaAPI+"/api/streams?"+q.Encode(), nil)
 	if err != nil {
 		return err
 	}
@@ -218,43 +227,32 @@ func (m *CameraStatusMonitor) deletePath(ctx context.Context, name string) error
 	}
 	defer resp.Body.Close()
 
-	// 404 — пути уже нет, это успех.
-	if resp.StatusCode == http.StatusNotFound {
-		return nil
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("mediamtx returned status %d", resp.StatusCode)
+		return fmt.Errorf("go2rtc returned status %d", resp.StatusCode)
 	}
 	return nil
 }
 
-// fetchPaths возвращает карту "имя пути -> ready" для всех путей MediaMTX.
+// cameraReachable проверяет, отвечает ли камера по RTSP-порту.
 //
-// Запрашивает большой размер страницы, чтобы получить всё сразу.
-//
-// Про параметры этого API стоит помнить отдельно, потому что ошибки тут
-// незаметны и дороги. Параметр `itemsPerPage` работает и увеличивает
-// страницу. А вот `page` использовать НЕЛЬЗЯ: с ним MediaMTX возвращает
-// НОЛЬ записей — запрос успешен, ответ корректен по форме, а список пуст.
-// Проверено: `?itemsPerPage=500&page=1` даёт 0 записей, а
-// `?itemsPerPage=500` — все 89. Из-за этого все камеры разом получили
-// статус «офлайн», и ни одного сообщения об ошибке при этом не было.
-//
-// Исходная ошибка была другой: без всяких параметров API отдаёт 100
-// записей, а путей у нас 103 — путь 192.168.1.83 всегда попадал на
-// вторую страницу и камера навсегда оставалась «офлайн». Снаружи это
-// выглядело как пропавшая из системы камера, хотя она работала.
-//
-// Вывод на будущее: при работе с пагинацией проверять, что пришло
-// ненулевое число записей, а не только код ответа.
-func (m *CameraStatusMonitor) fetchPaths(ctx context.Context) (map[string]bool, error) {
-	// Достаточно большой размер страницы, чтобы хватило на любую
-	// разумную установку. Если путей окажется больше, они просто не
-	// попадут в ответ — но это уже видно по сравнению с числом камер.
-	const perPage = 10000
+// Именно камера, а не медиасервер: go2rtc держит соединение только во время
+// просмотра, поэтому его ответ о готовности потока ничего не говорит о том,
+// работает ли камера. Для оператора же важно ровно это.
+func (m *CameraStatusMonitor) cameraReachable(ip string) bool {
+	if ip == "" {
+		return false
+	}
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, "554"), 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
 
-	url := fmt.Sprintf("%s/v3/paths/list?itemsPerPage=%d", m.mediamtxAPI, perPage)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// fetchPaths возвращает карту «имя потока → существует» для go2rtc.
+func (m *CameraStatusMonitor) fetchPaths(ctx context.Context) (map[string]bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.mediaAPI+"/api/streams", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -266,32 +264,23 @@ func (m *CameraStatusMonitor) fetchPaths(ctx context.Context) (map[string]bool, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("mediamtx returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("go2rtc returned status %d", resp.StatusCode)
 	}
 
-	var payload struct {
-		Items []struct {
-			Name  string `json:"name"`
-			Ready bool   `json:"ready"`
-		} `json:"items"`
-		ItemCount int `json:"itemCount"`
+	// Формат ответа go2rtc: { "<имя>": { "producers": [ {"url": ...} ] } }.
+	// Поля кроме имени нам здесь не нужны — важно только, что поток описан.
+	var payload map[string]struct {
+		Producers []struct {
+			URL string `json:"url"`
+		} `json:"producers"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, err
 	}
 
-	// Пустой ответ при ненулевом счётчике означает, что запрос собран
-	// неверно. Молча вернуть пустую карту нельзя: монитор тогда сочтёт
-	// все камеры выключенными. Лучше ошибка — статусы останутся как есть.
-	if len(payload.Items) == 0 && payload.ItemCount > 0 {
-		return nil, fmt.Errorf(
-			"MediaMTX отдал %d путей, но ни одного в ответе — проверьте параметры запроса",
-			payload.ItemCount)
-	}
-
-	paths := make(map[string]bool, len(payload.Items))
-	for _, item := range payload.Items {
-		paths[item.Name] = item.Ready
+	paths := make(map[string]bool, len(payload))
+	for name := range payload {
+		paths[name] = true
 	}
 	return paths, nil
 }

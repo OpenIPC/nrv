@@ -1,11 +1,12 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -24,13 +25,13 @@ import (
 // они слабые и ограничивают число одновременных сессий (на части моделей
 // счётчики показывают отказ 453 при исчерпании лимита памяти).
 //
-// Схема: MediaMTX уже держит по одному подключению к каждой камере и
+// Схема: go2rtc уже держит по одному подключению к каждой камере и
 // раздаёт поток многим потребителям. Мы публикуем под понятными адресами
 // вида /cameras/{N}/streaming/{main|sub}, которые читают внешние системы.
 // Одно подключение к камере вместо цепочки сессий — это и есть снятие
 // нагрузки.
 //
-// Поток не перекодируется: MediaMTX копирует дорожки как есть, поэтому
+// Поток не перекодируется: go2rtc копирует дорожки как есть, поэтому
 // дополнительная нагрузка на процессор минимальна.
 //
 // Адрес канала в URL идёт со смещением на минус один: канал 1 — это
@@ -38,10 +39,10 @@ import (
 // с нуля.
 
 const (
-	// externalRTSPPrefix — префикс внешних адресов в MediaMTX.
+	// externalRTSPPrefix — префикс внешних адресов в go2rtc.
 	externalRTSPPrefix = "cameras"
 	// ExternalRTSPPort — порт, на котором потоки доступны внешним системам.
-	// nginx пробрасывает его на RTSP-порт MediaMTX.
+	// nginx пробрасывает его на RTSP-порт go2rtc.
 	ExternalRTSPPort = 9784
 	// defaultExternalUser — логин по умолчанию, если он не задан в окружении.
 	defaultExternalUser = "viewer"
@@ -57,7 +58,12 @@ const (
 
 // ExternalRTSPService публикует потоки камер под внешними адресами.
 type ExternalRTSPService struct {
-	mediamtxAPI string
+	// mediaAPI — адрес API go2rtc (регистрация и удаление потоков).
+	mediaAPI string
+	// rtspBaseURL — RTSP-адрес go2rtc без имени потока. Внешние адреса
+	// ссылаются именно на него: go2rtc держит одно подключение к камере
+	// и раздаёт поток столько читателям, сколько к нему придёт.
+	rtspBaseURL string
 	// externalUser и externalPass — учётные данные для внешних систем.
 	// Хранятся здесь, чтобы страница настроек могла их показать.
 	externalUser string
@@ -65,7 +71,7 @@ type ExternalRTSPService struct {
 
 	mu sync.Mutex
 	// published — какие пути уже созданы: карта защищает от лишних
-	// обращений к MediaMTX при повторной публикации того же канала.
+	// обращений к go2rtc при повторной публикации того же канала.
 	published map[string]bool
 }
 
@@ -85,11 +91,20 @@ type ExternalChannel struct {
 	SubPath  string `json:"sub_path"`
 }
 
-func NewExternalRTSPService(mediamtxAPI string) *ExternalRTSPService {
+func NewExternalRTSPService(mediaAPI string) *ExternalRTSPService {
+	if mediaAPI == "" {
+		mediaAPI = "http://localhost:1984"
+	}
+	if !strings.HasPrefix(mediaAPI, "http://") && !strings.HasPrefix(mediaAPI, "https://") {
+		mediaAPI = "http://" + mediaAPI
+	}
+	mediaAPI = strings.TrimSuffix(mediaAPI, "/")
 	return &ExternalRTSPService{
-		mediamtxAPI:  mediamtxAPI,
-		externalUser: os.Getenv("MTX_EXTERNAL_USER"),
-		externalPass: os.Getenv("MTX_EXTERNAL_PASS"),
+		mediaAPI: mediaAPI,
+		// Имена без префикса MTX_: он остался от прежнего медиасервера и
+		// путал при настройке. Старые имена больше не читаются.
+		externalUser: os.Getenv("EXTERNAL_RTSP_USER"),
+		externalPass: os.Getenv("EXTERNAL_RTSP_PASS"),
 		published:    make(map[string]bool),
 	}
 }
@@ -102,11 +117,11 @@ func externalPath(channel int, stream string) string {
 	return fmt.Sprintf("%s/%d/streaming/%s", externalRTSPPrefix, channel-1, stream)
 }
 
-// Publish регистрирует внешние адреса камеры в MediaMTX.
+// Publish регистрирует внешние адреса камеры в go2rtc.
 //
 // Вызывается при старте сервера и после изменения номера канала. Пути
-// ссылаются на внутренние пути MediaMTX, поэтому дополнительных
-// подключений к самой камере не появляется: MediaMTX раздаёт уже
+// ссылаются на внутренние пути go2rtc, поэтому дополнительных
+// подключений к самой камере не появляется: go2rtc раздаёт уже
 // полученный поток.
 func (s *ExternalRTSPService) Publish(ctx context.Context, camID uuid.UUID, channel int) error {
 	// Оба потока публикуются под своими адресами: внешняя система
@@ -153,7 +168,7 @@ func (s *ExternalRTSPService) Unpublish(ctx context.Context, channel int) error 
 //
 // Смена номера канала — операция из двух шагов, и порядок здесь важен:
 // сначала освобождаем прежний адрес, потом занимаем новый. Если новый
-// номер совпадает с уже занятым другим каналом, MediaMTX отклонит запрос,
+// номер совпадает с уже занятым другим каналом, go2rtc отклонит запрос,
 // и в ответе будет понятная причина.
 func (s *ExternalRTSPService) Republish(ctx context.Context, camID uuid.UUID, oldChannel, newChannel int) error {
 	if oldChannel > 0 {
@@ -171,9 +186,9 @@ func (s *ExternalRTSPService) PublicationURL(channel int, stream string) string 
 	return "/" + externalPath(channel, stream)
 }
 
-// internalSource собирает адрес внутреннего пути MediaMTX.
+// internalSource собирает адрес внутреннего пути go2rtc.
 //
-// MediaMTX читает поток с самого себя по локальному адресу: так внешний
+// go2rtc читает поток с самого себя по локальному адресу: так внешний
 // путь становится копией уже полученного потока, а не новым подключением
 // к камере.
 func (s *ExternalRTSPService) internalSource(camID uuid.UUID, stream string) string {
@@ -181,106 +196,81 @@ func (s *ExternalRTSPService) internalSource(camID uuid.UUID, stream string) str
 	if stream == "sub" {
 		path += "_sub"
 	}
-	// Адрес RTSP-сервера MediaMTX для чтения собственного потока.
+	// Адрес RTSP-сервера go2rtc для чтения собственного потока.
 	return fmt.Sprintf("%s/%s", s.rtspBase(), path)
 }
 
-// rtspBase — адрес RTSP-сервера MediaMTX для внутреннего чтения.
-// Порт 8554 — стандартный порт MediaMTX в проекте.
+// rtspBase — адрес RTSP-сервера go2rtc для внутреннего чтения.
+// Порт 8554 — стандартный порт RTSP в проекте.
 func (s *ExternalRTSPService) rtspBase() string {
 	return "rtsp://127.0.0.1:8554"
 }
 
-// addAlias создаёт путь-читатель в MediaMTX.
+// addAlias создаёт путь-читатель в go2rtc.
 func (s *ExternalRTSPService) addAlias(ctx context.Context, name, source string) error {
-	// Имя пути содержит слеши (cameras/0/streaming/main), поэтому при
-	// передаче в адрес API их нужно закодировать: иначе MediaMTX примет
-	// часть имени за следующий сегмент адреса и создаст путь с другим именем.
-	encoded := strings.ReplaceAll(name, "/", "%2F")
+	// Параметры передаём в строке запроса: при передаче в теле go2rtc
+	// отвечает «200 OK» и пустым объектом, а поток не создаётся.
+	q := url.Values{}
+	q.Set("name", name)
+	// Источник — уже готовый RTSP-адрес внутреннего потока go2rtc
+	// (его собирает internalSource): так к камере остаётся одно
+	// подключение, сколько бы внешних систем ни читало поток.
+	q.Set("src", source)
 
-	payload := map[string]any{
-		"name": name,
-		// Источник — внутренний путь MediaMTX, а не камера напрямую.
-		"source": source,
-		// Читаем и отдаём непрерывно: внешняя система может подключиться
-		// в любой момент, и поток должен быть уже готов.
-		"sourceOnDemand": false,
-		// Камеры отдают поток по TCP — по UDP часть пакетов теряется.
-		"rtspTransport": "tcp",
-	}
-
-	body, err := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		s.mediaAPI+"/api/streams?"+q.Encode(), nil)
 	if err != nil {
 		return err
 	}
-
-	url := fmt.Sprintf("%s/v3/config/paths/add/%s", s.mediamtxAPI, encoded)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("MediaMTX недоступен: %w", err)
+		return fmt.Errorf("go2rtc недоступен: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Путь мог остаться от прошлого запуска: MediaMTX хранит конфигурацию
-	// в памяти и при перезапуске её теряет, но при повторной публикации
-	// в рамках одной сессии путь уже существует. Это не ошибка — значит
-	// адрес уже настроен верно.
-	if resp.StatusCode == http.StatusBadRequest {
-		var apiErr struct {
-			Error string `json:"error"`
-		}
-		json.NewDecoder(resp.Body).Decode(&apiErr)
-		if strings.Contains(apiErr.Error, "already exists") {
-			return nil
-		}
-		return fmt.Errorf("MediaMTX отклонил путь: %s", apiErr.Error)
-	}
+	// PUT перезаписывает поток целиком, поэтому «уже существует» здесь
+	// не бывает: повторный вызов просто закрепляет адрес за этим источником.
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("MediaMTX вернул %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("go2rtc вернул %d: %s", resp.StatusCode,
+			strings.TrimSpace(string(body)))
 	}
 	return nil
 }
 
-// removePath удаляет путь из MediaMTX.
+// removePath удаляет поток из go2rtc.
 func (s *ExternalRTSPService) removePath(ctx context.Context, name string) error {
-	encoded := strings.ReplaceAll(name, "/", "%2F")
-	url := fmt.Sprintf("%s/v3/config/paths/delete/%s", s.mediamtxAPI, encoded)
+	q := url.Values{}
+	q.Set("src", name)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
+		s.mediaAPI+"/api/streams?"+q.Encode(), nil)
 	if err != nil {
 		return err
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("MediaMTX недоступен: %w", err)
+		return fmt.Errorf("go2rtc недоступен: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// 404 означает, что путь уже удалён — цель достигнута.
-	if resp.StatusCode == http.StatusNotFound {
-		return nil
-	}
+	// Удаление идемпотентно: на несуществующий поток go2rtc отвечает 200.
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("MediaMTX вернул %d", resp.StatusCode)
+		return fmt.Errorf("go2rtc вернул %d", resp.StatusCode)
 	}
 	return nil
 }
 
 // RestoreAll публикует внешние адреса для всех камер с заданным номером
-// канала. Вызывается при старте сервера: MediaMTX держит конфигурацию
+// канала. Вызывается при старте сервера: go2rtc держит конфигурацию
 // путей в памяти и теряет её при перезапуске.
 //
 // Публикация повторяется несколько раз, пока внутренние пути не появятся.
 // Причина: внутренние пути камер создаются асинхронно (registerStreams
 // запускает горутины), а внешний путь читает внутренний. Если создать его
-// раньше, MediaMTX примет запрос, но поток останется пустым.
+// раньше, go2rtc примет запрос, но поток останется пустым.
 func (s *ExternalRTSPService) RestoreAll(ctx context.Context, repo *postgres.CameraRepo) {
 	cameras, err := repo.List(ctx)
 	if err != nil {
@@ -288,7 +278,7 @@ func (s *ExternalRTSPService) RestoreAll(ctx context.Context, repo *postgres.Cam
 		return
 	}
 
-	// Ждём, пока внутренние пути появятся в MediaMTX. Проверяем готовность
+	// Ждём, пока внутренние пути появятся в go2rtc. Проверяем готовность
 	// источника, а не просто выдерживаем паузу: на слабых камерах первый
 	// кадр приходит с задержкой, и фиксированная пауза была бы ненадёжной.
 	ready := s.waitForInternalPaths(ctx, cameras)
@@ -315,7 +305,7 @@ func (s *ExternalRTSPService) RestoreAll(ctx context.Context, repo *postgres.Cam
 		Msg("внешние RTSP-адреса восстановлены")
 }
 
-// waitForInternalPaths ждёт появления внутренних путей камер в MediaMTX.
+// waitForInternalPaths ждёт появления внутренних путей камер в go2rtc.
 //
 // Возвращает карту готовых камер. Ожидание ограничено по времени: если
 // камера недоступна, внешний адрес для неё создавать не нужно — путь
@@ -359,19 +349,13 @@ func (s *ExternalRTSPService) waitForInternalPaths(ctx context.Context, cameras 
 	return ready
 }
 
-// listPathNames возвращает имена всех путей MediaMTX.
+// listPathNames возвращает имена всех потоков go2rtc.
 //
-// Запрашивает большой размер страницы, чтобы получить всё сразу.
-// Параметр `page` использовать НЕЛЬЗЯ: с ним MediaMTX возвращает ноль
-// записей при успешном ответе. Подробнее — в fetchPaths
-// (camera_status_monitor.go). Здесь это особенно опасно: функция
-// применяется при чистке висячих путей, и пустой список означает, что
-// чистка не увидит ни одного пути.
+// Применяется при чистке висячих внешних адресов, поэтому важно, чтобы
+// список приходил целиком. У go2rtc список одним ответом и без страниц —
+// прежняя ловушка go2rtc с параметром page здесь невозможна.
 func (s *ExternalRTSPService) listPathNames(ctx context.Context) ([]string, error) {
-	const perPage = 10000
-
-	url := fmt.Sprintf("%s/v3/config/paths/list?itemsPerPage=%d", s.mediamtxAPI, perPage)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.mediaAPI+"/api/streams", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -383,26 +367,23 @@ func (s *ExternalRTSPService) listPathNames(ctx context.Context) ([]string, erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("MediaMTX вернул %d", resp.StatusCode)
+		return nil, fmt.Errorf("go2rtc вернул %d", resp.StatusCode)
 	}
 
-	var result struct {
-		Items []struct {
-			Name string `json:"name"`
-		} `json:"items"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	// Ответ — объект вида { "<имя потока>": {...} }: имена нужны как ключи.
+	var payload map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, err
 	}
 
-	names := make([]string, 0, len(result.Items))
-	for _, item := range result.Items {
-		names = append(names, item.Name)
+	names := make([]string, 0, len(payload))
+	for name := range payload {
+		names = append(names, name)
 	}
 	return names, nil
 }
 
-// ExternalPathForChannel возвращает имя пути MediaMTX для канала и потока.
+// ExternalPathForChannel возвращает имя пути go2rtc для канала и потока.
 // Нужна обработчикам и монитору, чтобы адреса строились единообразно.
 func ExternalPathForChannel(channel int, stream string) string {
 	return externalPath(channel, stream)

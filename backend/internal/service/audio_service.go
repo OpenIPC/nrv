@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os/exec"
 	"strconv"
@@ -21,23 +22,26 @@ import (
 // Зачем транскодирование: камеры отдают звук в G.711 (PCMU/PCMA) — это
 // телефонный кодек, который браузеры не воспроизводят в HLS. Для HLS нужен
 // AAC, для WebRTC — Opus. Поэтому звук с камеры перекодируется отдельным
-// процессом ffmpeg и публикуется в MediaMTX как отдельный путь.
+// процессом ffmpeg и публикуется в go2rtc как отдельный путь.
 //
 // Схема:
 //
-//	камера (G.711) → MediaMTX (путь <id>) → ffmpeg (G.711→AAC) →
-//	→ MediaMTX (путь <id>_audio) → браузер (HLS)
+//	камера (G.711) → go2rtc (путь <id>) → ffmpeg (G.711→AAC) →
+//	→ go2rtc (путь <id>_audio) → браузер (HLS)
 //
 // Обратное направление (динамик камеры):
 //
 //	браузер (микрофон) → backend (WebSocket) → ffmpeg → RTSP-публикация
-//	в MediaMTX (путь <id>_talk) → камера
+//	в go2rtc (путь <id>_talk) → камера
 type AudioService struct {
-	// Внутренний RTSP-адрес MediaMTX: откуда брать звук и куда публиковать.
+	// mediaAPI — адрес API go2rtc: через него регистрируется поток звука.
+	mediaAPI string
+	// mediaMTXHost — RTSP-хост go2rtc. Из него берётся звук камеры
+	// при перекодировании.
 	mediaMTXHost string
 	// Каталог для временных файлов аудиофрагментов.
 	clipDir string
-	// ensurePath регистрирует путь-приёмник в MediaMTX перед публикацией.
+	// ensurePath регистрирует путь-приёмник в go2rtc перед публикацией.
 	// Задан функцией, чтобы сервис не зависел от сервиса камер.
 	ensurePath func(pathName string) error
 
@@ -49,34 +53,43 @@ type AudioService struct {
 	talks map[string]*TalkSession
 }
 
-// WithPathRegistrar подключает регистратор путей MediaMTX.
-// Без него публикация звука не запустится: MediaMTX отвергнет поток.
+// WithPathRegistrar подключает регистратор путей go2rtc.
+// Без него публикация звука не запустится: go2rtc отвергнет поток.
 func (s *AudioService) WithPathRegistrar(fn func(pathName string) error) *AudioService {
 	s.ensurePath = fn
 	return s
 }
 
-// audioStream — один процесс транскодирования аудио камеры.
+// audioStream — зарегистрированный в go2rtc поток звука камеры.
+//
+// ffmpeg запускает сам медиасервер, поэтому своего процесса здесь нет:
+// структура хранит только признак того, что звук камеры уже зарегистрирован.
 type audioStream struct {
 	cameraID uuid.UUID
-	cmd      *exec.Cmd
-	cancel   context.CancelFunc
 	source   string
+	bitrate  string
 }
 
-func NewAudioService(mediaMTXHost, clipDir string) *AudioService {
+func NewAudioService(mediaAPI, mediaServerHost, clipDir string) *AudioService {
 	if clipDir == "" {
 		clipDir = "/var/lib/nvr/audio"
 	}
+	if mediaAPI == "" {
+		mediaAPI = "http://localhost:1984"
+	}
+	if !strings.HasPrefix(mediaAPI, "http://") && !strings.HasPrefix(mediaAPI, "https://") {
+		mediaAPI = "http://" + mediaAPI
+	}
 	return &AudioService{
-		mediaMTXHost: rtspHost(mediaMTXHost),
+		mediaAPI:     strings.TrimSuffix(mediaAPI, "/"),
+		mediaMTXHost: rtspHost(mediaServerHost),
 		clipDir:      clipDir,
 		streams:      make(map[string]*audioStream),
 		talks:        make(map[string]*TalkSession),
 	}
 }
 
-// rtspHost приводит адрес MediaMTX к виду «хост» без порта и схемы.
+// rtspHost приводит адрес go2rtc к виду «хост» без порта и схемы.
 //
 // В настройках MEDIAMTX_HOST хранится адрес для веб-API, например
 // «localhost:8888». Если подставить его в RTSP-ссылку как есть, получится
@@ -109,7 +122,7 @@ func rtspHost(addr string) string {
 	return h
 }
 
-// AudioStreamName возвращает имя пути MediaMTX с транскодированным звуком.
+// AudioStreamName возвращает имя пути go2rtc с транскодированным звуком.
 // Отдельный путь нужен, потому что в исходном пути звук в G.711 —
 // браузер его не проиграет, а подменять источник нельзя: видео берётся оттуда же.
 func AudioStreamName(cameraID uuid.UUID) string {
@@ -124,7 +137,7 @@ func TalkStreamName(cameraID uuid.UUID) string {
 
 // StartTranscode запускает перекодирование звука камеры в AAC.
 //
-// Исходный звук берётся из уже существующего пути MediaMTX (<cameraID>),
+// Исходный звук берётся из уже существующего пути go2rtc (<cameraID>),
 // результат публикуется в путь <cameraID>_audio. Повторный вызов для той же
 // камеры ничего не делает.
 func (s *AudioService) StartTranscode(cameraID uuid.UUID, sourcePath string, bitrate string) error {
@@ -144,93 +157,46 @@ func (s *AudioService) StartTranscode(cameraID uuid.UUID, sourcePath string, bit
 		bitrate = "64k"
 	}
 
-	// Путь-приёмник нужен ДО запуска ffmpeg: без него MediaMTX отвечает
-	// 400 Bad Request на попытку публикации и процесс сразу завершается.
-	if s.ensurePath != nil {
-		if err := s.ensurePath(AudioStreamName(cameraID)); err != nil {
-			return fmt.Errorf("зарегистрировать путь звука: %w", err)
-		}
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
+	// Перекодирование поручаем самому go2rtc: он умеет запускать ffmpeg
+	// источником потока. Проверено на живом сервере — поток вида
+	//
+	//	ffmpeg:rtsp://localhost:8554/<камера>#audio=aac
+	//
+	// отдаёт дорожку aac, и ffprobe её видит. Это снимает целый слой:
+	// не нужен отдельный процесс и не нужен путь-приёмник (публикация
+	// в неизвестный поток go2rtc отклоняет). Сам go2rtc запускает ffmpeg
+	// только когда звук кто-то слушает, а не постоянно в фоне.
 	src := fmt.Sprintf("rtsp://%s:8554/%s", s.mediaMTXHost, sourcePath)
-	dst := fmt.Sprintf("rtsp://%s:8554/%s", s.mediaMTXHost, AudioStreamName(cameraID))
 
-	// Ключевые параметры:
-	//   -vn                — видео не нужно, только звук;
-	//   -c:a aac           — AAC воспроизводится в HLS любым браузером;
-	//   -ar 48000 -ac 1    — частота и моно: стандарт для веб-аудио,
-	//                        G.711 идёт на 8 кГц, после конвертации
-	//                        такие параметры дают совместимый поток;
-	//   -f rtsp            — публикуем результат обратно в MediaMTX.
-	args := []string{
-		"-rtsp_transport", "tcp",
-		// Таймаут на подключение и на приём данных: камеры с плохим
-		// каналом иначе вешают ffmpeg навсегда, и путь звука остаётся мёртвым.
-		"-timeout", "10000000",
-		"-i", src,
-		"-vn",
-		"-c:a", "aac",
-		"-b:a", bitrate,
-		"-ar", "48000",
-		"-ac", "1",
-		// Ограничиваем размер очереди: при отставании камеры буфер не должен
-		// расти бесконечно — лучше потерять кусок звука, чем всю память.
-		"-max_delay", "500000",
-		"-f", "rtsp",
-		"-rtsp_transport", "tcp",
-		"-loglevel", "error",
-		dst,
+	// Параметры передаём в строке запроса: при передаче в теле go2rtc
+	// отвечает 200 и пустым объектом, поток при этом не создаётся.
+	q := url.Values{}
+	q.Set("name", AudioStreamName(cameraID))
+	q.Set("src", "ffmpeg:"+src+"#audio=aac")
+
+	req, err := http.NewRequest(http.MethodPut, s.mediaAPI+"/api/streams?"+q.Encode(), nil)
+	if err != nil {
+		return fmt.Errorf("зарегистрировать звук: %w", err)
 	}
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	if err := cmd.Start(); err != nil {
-		cancel()
-		return fmt.Errorf("start audio transcode: %w", err)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("зарегистрировать звук: %w", err)
 	}
+	defer resp.Body.Close()
 
-	stream := &audioStream{cameraID: cameraID, cmd: cmd, cancel: cancel, source: sourcePath}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("go2rtc вернул %d: %s", resp.StatusCode,
+			strings.TrimSpace(string(body)))
+	}
 
 	s.mu.Lock()
-	s.streams[key] = stream
+	s.streams[key] = &audioStream{cameraID: cameraID, source: sourcePath, bitrate: bitrate}
 	s.mu.Unlock()
 
 	log.Info().Str("camera_id", key[:8]).Str("source", sourcePath).
-		Msg("транскодирование звука запущено (G.711 → AAC)")
-
-	go s.watch(ctx, stream)
+		Msg("звук камеры зарегистрирован (G.711 → AAC, перекодирует go2rtc)")
 	return nil
-}
-
-// watch ждёт завершения ffmpeg и освобождает ресурсы.
-func (s *AudioService) watch(ctx context.Context, st *audioStream) {
-	started := time.Now()
-	err := st.cmd.Wait()
-	key := st.cameraID.String()
-
-	s.mu.Lock()
-	if cur, ok := s.streams[key]; ok && cur == st {
-		delete(s.streams, key)
-	}
-	s.mu.Unlock()
-
-	// Остановка по нашей инициативе — не ошибка.
-	select {
-	case <-ctx.Done():
-		return
-	default:
-	}
-
-	if err != nil {
-		// Быстрое падение обычно означает, что у камеры нет звуковой дорожки
-		// (или она нечитаема). Пишем предупреждение, но не перезапускаем
-		// в цикле — повторный запуск сделает вызывающий по своему таймеру.
-		elapsed := time.Since(started)
-		log.Warn().Err(err).Str("camera_id", key[:8]).
-			Dur("elapsed", elapsed).
-			Msg("транскодирование звука завершилось с ошибкой")
-	}
 }
 
 // StopTranscode останавливает перекодирование звука камеры.
@@ -238,7 +204,7 @@ func (s *AudioService) StopTranscode(cameraID uuid.UUID) {
 	key := cameraID.String()
 
 	s.mu.Lock()
-	st, ok := s.streams[key]
+	_, ok := s.streams[key]
 	if ok {
 		delete(s.streams, key)
 	}
@@ -247,8 +213,18 @@ func (s *AudioService) StopTranscode(cameraID uuid.UUID) {
 	if !ok {
 		return
 	}
-	st.cancel()
-	log.Info().Str("camera_id", key[:8]).Msg("транскодирование звука остановлено")
+
+	// Поток удаляется из go2rtc вместе с запущенным им ffmpeg.
+	q := url.Values{}
+	q.Set("src", AudioStreamName(cameraID))
+	req, err := http.NewRequest(http.MethodDelete, s.mediaAPI+"/api/streams?"+q.Encode(), nil)
+	if err == nil {
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	log.Info().Str("camera_id", key[:8]).Msg("звук камеры остановлен")
 }
 
 // IsTranscoding сообщает, идёт ли перекодирование звука камеры.
@@ -320,9 +296,9 @@ func SupportsBackchannel(rtspURL string) bool {
 // StartTalk начинает передачу звука оператора на камеру.
 //
 // Схема: ffmpeg читает «сырой» PCM со stdin и публикует его в путь
-// MediaMTX `<cameraID>_talk`, а MediaMTX передаёт поток дальше на камеру
+// go2rtc `<cameraID>_talk`, а go2rtc передаёт поток дальше на камеру
 // через ONVIF/RTSP backchannel. Такой маршрут выбран потому, что
-// MediaMTX уже умеет держать соединение с камерой и восстанавливать его
+// go2rtc уже умеет держать соединение с камерой и восстанавливать его
 // при обрыве — свой RTSP-клиент пришлось бы писать с нуля.
 //
 // Пока сессия активна, оператор пишет в stdin через WriteTalkChunk.
@@ -344,7 +320,7 @@ func (s *AudioService) StartTalk(cameraID uuid.UUID, sampleRate int, codec strin
 		codec = "g711"
 	}
 
-	// Путь-приёмник регистрируем заранее: без него MediaMTX отклонит публикацию.
+	// Путь-приёмник регистрируем заранее: без него go2rtc отклонит публикацию.
 	if s.ensurePath != nil {
 		if err := s.ensurePath(TalkStreamName(cameraID)); err != nil {
 			return nil, fmt.Errorf("зарегистрировать путь динамика: %w", err)
@@ -508,7 +484,8 @@ func (s *AudioService) StopAll() {
 	s.mu.Unlock()
 
 	for _, st := range streams {
-		st.cancel()
+		// Поток удаляется из go2rtc вместе с запущенным им ffmpeg.
+		s.StopTranscode(st.cameraID)
 	}
 	for _, t := range talks {
 		_ = t.stdin.Close()
@@ -516,9 +493,9 @@ func (s *AudioService) StopAll() {
 	}
 }
 
-// AudioCodecInPath определяет аудиокодек в уже работающем пути MediaMTX.
+// AudioCodecInPath определяет аудиокодек в уже работающем пути go2rtc.
 //
-// Важно: опрашивать нужно именно путь MediaMTX, а не камеру напрямую.
+// Важно: опрашивать нужно именно путь go2rtc, а не камеру напрямую.
 // Некоторые камеры отдают RTSP-аудио только одному клиенту за раз, и
 // параллельный запрос к камере зависает, ломая и видео, и звук.
 func (s *AudioService) AudioCodecInPath(sourcePath string) string {

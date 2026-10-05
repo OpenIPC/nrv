@@ -1,35 +1,38 @@
 #!/usr/bin/env python3
 """
-Перерегистрирует пути MediaMTX по данным из базы.
+Перерегистрирует потоки go2rtc по данным из базы.
 
-Зачем: путь в MediaMTX хранит RTSP-адрес, полученный при создании. Если
+Зачем: поток в go2rtc хранит RTSP-адрес, полученный при создании. Если
 адрес или учётные данные камеры изменили в базе (или восстановили после
-сбоя), сам путь не обновится: MediaMTX считает его существующим и отвечает
-400 «path already exists» на повторное добавление. Тогда камера остаётся
-нерабочей, хотя в интерфейсе всё заполнено верно.
+сбоя), то при выключенном бэкенде поток останется со старым адресом, и
+камера будет недоступна, хотя в интерфейсе всё заполнено верно.
 
-Скрипт читает актуальные адреса из БД и для каждого пути делает ADD,
-а при конфликте — PATCH с новым источником.
+Скрипт читает актуальные адреса из БД и делает `PUT /api/streams` — go2rtc
+перезаписывает источник, отдельного «обновления» у него нет.
 
-Запуск (на сервере, где поднят бэкенд):
-    python3 scripts/sync_mediamtx_paths.py
+ВАЖНО: в обычной работе потоки регистрирует бэкенд
+(`RestoreStreams` + монитор). Скрипт нужен только для диагностики, когда
+бэкенд не запущен.
+
+Запуск (на сервере, где поднят go2rtc):
+    python3 scripts/sync_go2rtc_streams.py
 
 Переменные окружения:
     DATABASE_URL  — строка подключения к PostgreSQL
                     (по умолчанию postgres://nvr:nvr_secret@127.0.0.1:5434/nvr)
-    MEDIAMTX_API  — адрес API медиасервера (по умолчанию http://127.0.0.1:9997)
+    GO2RTC_API    — адрес API медиасервера (по умолчанию http://127.0.0.1:1984)
 """
 
-import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgres://nvr:nvr_secret@127.0.0.1:5434/nvr"
 )
-MEDIAMTX_API = os.getenv("MEDIAMTX_API", "http://127.0.0.1:9997")
+GO2RTC_API = os.getenv("GO2RTC_API", "http://127.0.0.1:1984").rstrip("/")
 
 
 def load_cameras() -> list[dict]:
@@ -81,49 +84,22 @@ def embed_credentials(rtsp_url: str, username: str, password: str) -> str:
     return prefix + creds + "@" + rtsp_url[len(prefix):]
 
 
-def request(method: str, path: str, payload: dict | None = None) -> tuple[int, str]:
-    """Выполняет запрос к API MediaMTX."""
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(
-        MEDIAMTX_API + path,
-        data=data,
-        method=method,
-        headers={"Content-Type": "application/json"} if data else {},
-    )
+def set_stream(name: str, source: str) -> str:
+    """
+    Регистрирует поток в go2rtc.
+
+    Параметры передаём ТОЛЬКО в строке запроса: если отправить их в теле,
+    go2rtc ответит `200` и пустым объектом, а поток не создастся — ошибка
+    будет выглядеть как успех (проверено на живом).
+    """
+    query = urllib.parse.urlencode({"name": name, "src": source})
+    req = urllib.request.Request(f"{GO2RTC_API}/api/streams?{query}", method="PUT")
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
-            return r.status, r.read().decode()
+            body = r.read().decode()
+            return "зарегистрирован" if r.status < 300 else f"ОШИБКА {r.status}: {body[:120]}"
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()
-
-
-def configure(name: str, source: str) -> str:
-    """Создаёт путь или обновляет у него источник, если путь уже есть."""
-    payload = {
-        "name": name,
-        "source": source,
-        "sourceOnDemand": False,
-        # TCP исключает потери RTP-пакетов: для 4K-потоков UDP не справляется,
-        # и HLS-муксер падает на переупорядоченных кадрах.
-        "rtspTransport": "tcp",
-    }
-
-    status, body = request("POST", f"/v3/config/paths/add/{name}", payload)
-    if 200 <= status < 300:
-        return "добавлен"
-
-    # Путь уже есть — обновляем источник. Именно здесь раньше терялись новые
-    # учётные данные: при повторном добавлении MediaMTX ничего не менял.
-    if "already exists" in body:
-        status, body = request(
-            "PATCH",
-            f"/v3/config/paths/patch/{name}",
-            {"source": source, "rtspTransport": "tcp"},
-        )
-        if 200 <= status < 300:
-            return "обновлён"
-
-    return f"ОШИБКА {status}: {body[:120]}"
+        return f"ОШИБКА {e.code}: {e.read().decode()[:120]}"
 
 
 def main() -> None:
@@ -146,14 +122,14 @@ def main() -> None:
             if not url:
                 continue
             source = embed_credentials(url, username, password)
-            result = configure(name, source)
+            result = set_stream(name, source)
             if result.startswith("ОШИБКА"):
                 failed += 1
             else:
                 ok += 1
             print(f"{name[:42]:44s} {result}")
 
-    print(f"\nГотово: настроено {ok}, ошибок {failed}")
+    print(f"\nГотово: зарегистрировано {ok}, ошибок {failed}")
 
 
 if __name__ == "__main__":

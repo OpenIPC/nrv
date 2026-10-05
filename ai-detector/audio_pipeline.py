@@ -9,13 +9,13 @@
 Как это работает:
 1. Периодически (по умолчанию раз в 10 с) читает настройки из БД.
 2. Для камер с включённой детекцией звука запускает захват звука из
-   MediaMTX (путь `<cameraID>_audio`).
+   go2rtc (путь `<cameraID>_audio`).
 3. Каждые 1.5 с забирает накопленный звук, классифицирует его YAMNet
    и публикует найденные события в NATS.
 
-Почему звук берём из MediaMTX, а не с камеры: исходный G.711 многие камеры
+Почему звук берём из go2rtc, а не с камеры: исходный G.711 многие камеры
 отдают только одному клиенту за раз, и параллельное чтение ломало бы видео.
-В MediaMTX лежит уже транскодированный AAC, который читается свободно.
+В go2rtc лежит уже транскодированный AAC, который читается свободно.
 """
 
 import asyncio
@@ -54,14 +54,15 @@ class AudioPipeline:
         self,
         nats_client,
         config_store: DetectionConfigStore,
-        mediamtx_host: str = "localhost:8554",
+        go2rtc_host: str = "localhost:8554",
         model_path: str = "",
         cache_dir: str = "/app/models",
     ):
         self.nc = nats_client
         self.config_store = config_store
-        # Адрес RTSP MediaMTX: оттуда берём транскодированный звук.
-        self.mediamtx_host = mediamtx_host
+        # Адрес RTSP go2rtc: оттуда берём перекодированный в AAC звук
+        # (поток `<id>_audio`) — отдельного аудиоконвейера в бэкенде нет.
+        self.go2rtc_host = go2rtc_host
         self.classifier = YamNetClassifier(model_path=model_path, cache_dir=cache_dir)
         self._captures: dict[str, AudioCapture] = {}
         self._last_event: dict[tuple[str, str], float] = {}
@@ -120,8 +121,8 @@ class AudioPipeline:
             wanted.add(camera_id)
 
             if camera_id not in self._captures:
-                # Подключаемся к транскодированному пути MediaMTX.
-                url = f"rtsp://{self.mediamtx_host}/{camera_id}_audio"
+                # Подключаемся к перекодированному go2rtc пути `<id>_audio`.
+                url = f"rtsp://{self.go2rtc_host}/{camera_id}_audio"
                 capture = AudioCapture(url)
                 capture.start()
                 self._captures[camera_id] = capture

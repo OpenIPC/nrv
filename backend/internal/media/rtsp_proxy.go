@@ -1,6 +1,6 @@
 package media
 
-// RTSPProxy — проксирование RTSP-потоков через MediaMTX API.
+// RTSPProxy — проксирование RTSP-потоков через go2rtc API.
 // Имплементация будет добавлена на следующих спринтах.
 type RTSPProxy struct {
 	// mediamtxAPI string // http://mediamtx:9997

@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"sort"
 	"strings"
@@ -23,9 +23,11 @@ import (
 )
 
 type CameraService struct {
-	repo        *postgres.CameraRepo
-	mediamtxAPI string // MediaMTX API base URL, например "http://localhost:9997"
-	client      *http.Client
+	repo *postgres.CameraRepo
+	// mediaAPI — адрес API медиасервера go2rtc со схемой,
+	// например "http://host.docker.internal:1984".
+	mediaAPI string
+	client   *http.Client
 	ssh         *CameraSSH
 	ptz         *PTZServiceClient
 	// externalRTSP публикует потоки под внешними адресами для сторонних
@@ -40,16 +42,20 @@ type CameraService struct {
 	}
 }
 
-func NewCameraService(repo *postgres.CameraRepo, mediamtxAPI string) *CameraService {
-	if mediamtxAPI == "" {
-		mediamtxAPI = "http://localhost:9997"
+func NewCameraService(repo *postgres.CameraRepo, mediaAPI string) *CameraService {
+	// Схему допускаем и без неё: в конфиге удобнее писать host:port.
+	if mediaAPI == "" {
+		mediaAPI = "http://localhost:1984"
+	}
+	if !strings.HasPrefix(mediaAPI, "http://") && !strings.HasPrefix(mediaAPI, "https://") {
+		mediaAPI = "http://" + mediaAPI
 	}
 	svc := &CameraService{
-		repo:        repo,
-		mediamtxAPI: mediamtxAPI,
-		client:      &http.Client{Timeout: 5 * time.Second},
-		ssh:         NewCameraSSH(),
-		ptz:         NewPTZServiceClient(),
+		repo:     repo,
+		mediaAPI: strings.TrimSuffix(mediaAPI, "/"),
+		client:   &http.Client{Timeout: 5 * time.Second},
+		ssh:      NewCameraSSH(),
+		ptz:      NewPTZServiceClient(),
 	}
 	svc.warnedNoCreds.seen = make(map[string]bool)
 	return svc
@@ -165,7 +171,7 @@ func clampInt(v, min, max int) int {
 }
 
 // RestartStreamer перезапускает стример камеры (Majestic), после чего
-// пересоздаёт путь в MediaMTX, чтобы поток поднялся без ожидания.
+// пересоздаёт путь в go2rtc, чтобы поток поднялся без ожидания.
 func (s *CameraService) RestartStreamer(ctx context.Context, id uuid.UUID) (*CommandResult, error) {
 	cam, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -178,7 +184,7 @@ func (s *CameraService) RestartStreamer(ctx context.Context, id uuid.UUID) (*Com
 		return res, err
 	}
 
-	// Пересоздаём путь: MediaMTX сам переподключится к перезапущенному RTSP.
+	// Пересоздаём путь: go2rtc сам переподключится к перезапущенному RTSP.
 	go func() {
 		time.Sleep(2 * time.Second)
 		s.reconnectStream(cam)
@@ -210,29 +216,29 @@ func (s *CameraService) RebootCamera(ctx context.Context, id uuid.UUID) (*Comman
 	return res, nil
 }
 
-// reconnectStream пересоздаёт пути камеры в MediaMTX.
+// reconnectStream пересоздаёт потоки камеры в go2rtc.
 func (s *CameraService) reconnectStream(cam *domain.Camera) {
-	_ = s.removeMediaMTXPath(cam.ID.String())
-	_ = s.removeMediaMTXPath(cam.ID.String() + "_sub")
-	// Путь звука тоже удаляем: он создаётся нашим сервисом, и при
-	// перезагрузке конфигурации MediaMTX теряется. Пересоздаст его
+	_ = s.removeStreamPath(cam.ID.String())
+	_ = s.removeStreamPath(cam.ID.String() + "_sub")
+	// Поток звука тоже удаляем: его создаёт наш сервис, и при перезагрузке
+	// конфигурации медиасервера он теряется. Пересоздаст его
 	// фоновый цикл синхронизации звука.
-	_ = s.removeMediaMTXPath(AudioStreamName(cam.ID))
+	_ = s.removeStreamPath(AudioStreamName(cam.ID))
 	time.Sleep(500 * time.Millisecond)
 	s.registerStreams(cam, "", "")
 	log.Info().Str("camera", cam.Name).Str("ip", cam.IP).Msg("stream path recreated")
 }
 
-// RecreateStream принудительно пересоздаёт пути камеры в MediaMTX
+// RecreateStream принудительно пересоздаёт пути камеры в go2rtc
 // и возвращает состояние потока после попытки.
 //
 // Нужен потому, что автоматическое восстановление бессильно в самом частом
-// случае: путь в MediaMTX ЕСТЬ, но источника за ним нет (ready=false).
+// случае: путь в go2rtc ЕСТЬ, но источника за ним нет (ready=false).
 // Автоматика считает такой путь живым и ничего не делает, а камера остаётся
-// без потока навсегда. Здесь мы удаляем путь и создаём заново — MediaMTX
+// без потока навсегда. Здесь мы удаляем путь и создаём заново — go2rtc
 // подключается к камере с нуля, без старых сессий и таймеров переподключения.
 //
-// Пауза между созданием путей и проверкой нужна, чтобы MediaMTX успел
+// Пауза между созданием путей и проверкой нужна, чтобы go2rtc успел
 // подключиться к RTSP камеры: соединение и обмен DESCRIBE/SETUP занимают
 // до нескольких секунд, особенно на слабых камерах.
 func (s *CameraService) RecreateStream(ctx context.Context, id uuid.UUID) (*StreamRecreateResult, error) {
@@ -241,17 +247,16 @@ func (s *CameraService) RecreateStream(ctx context.Context, id uuid.UUID) (*Stre
 		return nil, err
 	}
 
-	// Сбрасываем старые пути целиком: пересоздание источника через PATCH
-	// не работает (проверено: MediaMTX отвечает OK, но источник не меняет),
-	// а при 453 на камере остаётся висеть незакрытая RTSP-сессия, которая
-	// мешает новому подключению.
-	_ = s.removeMediaMTXPath(cam.ID.String())
-	_ = s.removeMediaMTXPath(cam.ID.String() + "_sub")
+	// Сбрасываем старые потоки целиком: пересоздание источника простым
+	// обновлением ненадёжно, а при 453 на камере остаётся висеть
+	// незакрытая RTSP-сессия, которая мешает новому подключению.
+	_ = s.removeStreamPath(cam.ID.String())
+	_ = s.removeStreamPath(cam.ID.String() + "_sub")
 	time.Sleep(500 * time.Millisecond)
 
 	s.registerStreams(cam, "", "")
 
-	// Даём MediaMTX время подключиться, прежде чем сообщать результат.
+	// Даём go2rtc время подключиться, прежде чем сообщать результат.
 	result := &StreamRecreateResult{CameraName: cam.Name, IP: cam.IP}
 	for attempt := 0; attempt < 6; attempt++ {
 		select {
@@ -297,7 +302,7 @@ type StreamRecreateResult struct {
 // Нужна, чтобы отличить две разные причины отсутствия потока: камера
 // недоступна по сети (тогда перезапускать на ней нечего — сначала связь)
 // или камера на связи, но отвергла подключение (тогда поможет перезапуск
-// стримера на самой камере). Сам MediaMTX этого не различает: у него
+// стримера на самой камере). Сам go2rtc этого не различает: у него
 // online=true даже для выключенной камеры.
 func (s *CameraService) cameraReachable(ctx context.Context, ip string) bool {
 	if ip == "" {
@@ -314,11 +319,18 @@ func (s *CameraService) cameraReachable(ctx context.Context, ip string) bool {
 	return true
 }
 
-// streamState спрашивает у MediaMTX состояние пути и, если источника нет,
-// возвращает его словами — по ним оператор понимает, что делать дальше.
+// streamState спрашивает у медиасервера состояние потока.
+//
+// У go2rtc нет отдельного «состояния пути»: он подключается к камере только
+// когда её смотрят. Поэтому вызываем probe (GET /api/streams?src=<имя>): он
+// реально пытается открыть поток и по своему ответу показывает, жива ли
+// камера и что она отдаёт.
 func (s *CameraService) streamState(ctx context.Context, pathName string) (bool, string) {
-	url := fmt.Sprintf("%s/v3/paths/get/%s", s.mediamtxAPI, pathName)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	q := url.Values{}
+	q.Set("src", pathName)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		s.mediaAPI+"/api/streams?"+q.Encode(), nil)
 	if err != nil {
 		return false, "не удалось обратиться к медиасерверу"
 	}
@@ -329,39 +341,38 @@ func (s *CameraService) streamState(ctx context.Context, pathName string) (bool,
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return false, "медиасервер не создал путь"
-	}
+	// go2rtc отвечает 404, если потока нет в конфигурации, и 500 текстом
+	// при невозможности открыть источник — например «streams: codecs not
+	// matched». Оба случая означают, что видео сейчас нет.
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Sprintf("медиасервер ответил кодом %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = fmt.Sprintf("медиасервер ответил кодом %d", resp.StatusCode)
+		}
+		return false, msg
 	}
 
-	// Структура ответа MediaMTX проверена на живом сервере:
-	//   tracks — массив СТРОК с кодеками (["H264","Generic"]), а не объектов;
-	//   source — объект с полем type;
-	//   online — true всегда, когда путь описан в конфиге, даже если
-	//   камера выключена, поэтому для вывода о связи его использовать нельзя.
+	// Успешный probe присылает описание источника: адрес, протокол и SDP.
+	// Наличие SDP означает, что соединение с камерой установилось.
 	var payload struct {
-		Ready  bool `json:"ready"`
-		Source struct {
-			Type string `json:"type"`
-		} `json:"source"`
-		Tracks        []string `json:"tracks"`
-		BytesReceived int64    `json:"bytesReceived"`
+		Producers []struct {
+			URL string `json:"url"`
+			SDP string `json:"sdp"`
+		} `json:"producers"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return false, "не удалось разобрать ответ медиасервера"
 	}
-
-	if payload.Ready {
-		return true, "поток идёт"
+	for _, p := range payload.Producers {
+		if strings.TrimSpace(p.SDP) != "" {
+			return true, "поток идёт"
+		}
 	}
 
 	// Поток не идёт. Отличить «камера недоступна» от «камера отвергла
-	// подключение» по ответу MediaMTX невозможно (у выключенной камеры
-	// ready=false, tracks=[], но online=true), поэтому перечисляем обе
-	// частые причины и порядок проверки. Точный ответ даёт проверка связи
-	// в cameraReachable, и её результат вызывающий подставляет сам.
+	// подключение» по ответу медиасервера невозможно, поэтому перечисляем
+	// частые причины и порядок проверки.
 	return false, "камера не отдаёт поток. Проверьте по порядку: " +
 		"1) камера доступна по сети (ping); " +
 		"2) в карточке нажата кнопка «Перезапустить стример» — после перезагрузки " +
@@ -490,7 +501,7 @@ func (s *CameraService) Create(ctx context.Context, req domain.CreateCameraReque
 		return nil, err
 	}
 
-	// Регистрируем RTSP-источники в MediaMTX
+	// Регистрируем RTSP-источники в go2rtc
 	s.registerStreams(cam, req.Username, req.Password)
 
 	// Публикуем потоки под внешним адресом, если каналу задан номер.
@@ -506,9 +517,9 @@ func (s *CameraService) Create(ctx context.Context, req domain.CreateCameraReque
 	return cam, nil
 }
 
-// RegisterStreams повторно регистрирует потоки камеры в MediaMTX.
+// RegisterStreams повторно регистрирует потоки камеры в go2rtc.
 //
-// Нужно при восстановлении после перезапуска MediaMTX: он хранит пути
+// Нужно при восстановлении после перезапуска go2rtc: он хранит пути
 // в памяти и теряет их, поэтому монитор статуса вызывает этот метод,
 // когда обнаруживает пропавший путь.
 func (s *CameraService) RegisterStreams(cam domain.Camera) error {
@@ -516,7 +527,7 @@ func (s *CameraService) RegisterStreams(cam domain.Camera) error {
 	return nil
 }
 
-// registerStreams регистрирует основной и дополнительный потоки камеры в MediaMTX.
+// registerStreams регистрирует основной и дополнительный потоки камеры в go2rtc.
 // Креды берутся из settings, если не переданы явно.
 func (s *CameraService) registerStreams(cam *domain.Camera, username, password string) {
 	if username == "" && password == "" && cam.Settings != nil {
@@ -548,16 +559,16 @@ func (s *CameraService) registerStreams(cam *domain.Camera, username, password s
 			}
 			s.warnedNoCreds.Unlock()
 		}
-		go s.addMediaMTXPath(cam.ID.String(), embedded)
+		go s.addStreamPath(cam.ID.String(), embedded)
 	}
 	if cam.SubStream != "" {
-		go s.addMediaMTXPath(cam.ID.String()+"_sub", EmbedCredentials(cam.SubStream, username, password))
+		go s.addStreamPath(cam.ID.String()+"_sub", EmbedCredentials(cam.SubStream, username, password))
 	}
 }
 
-// RestoreStreams перерегистрирует пути всех камер в MediaMTX.
-// Нужно после старта сервера, если MediaMTX был перезапущен и потерял конфигурацию
-// (пути хранятся в памяти MediaMTX и не сохраняются между перезапусками).
+// RestoreStreams перерегистрирует пути всех камер в go2rtc.
+// Нужно после старта сервера, если go2rtc был перезапущен и потерял конфигурацию
+// (пути хранятся в памяти go2rtc и не сохраняются между перезапусками).
 func (s *CameraService) RestoreStreams(ctx context.Context) {
 	cameras, err := s.repo.List(ctx)
 	if err != nil {
@@ -584,12 +595,12 @@ func (s *CameraService) RestoreStreams(ctx context.Context) {
 		s.registerStreams(&cam, "", "")
 		restored++
 	}
-	log.Info().Int("cameras", restored).Msg("MediaMTX streams restore requested")
+	log.Info().Int("cameras", restored).Msg("go2rtc streams restore requested")
 }
 
 // EmbedCredentials вставляет логин и пароль в RTSP-ссылку.
 // Экспортируется, потому что нужна и хендлеру проверки потока:
-// оператор проверяет тот же адрес, который потом попадёт в MediaMTX.
+// оператор проверяет тот же адрес, который потом попадёт в go2rtc.
 func EmbedCredentials(rtspURL, username, password string) string {
 	if rtspURL == "" || (username == "" && password == "") {
 		return rtspURL
@@ -610,191 +621,87 @@ func EmbedCredentials(rtspURL, username, password string) string {
 	return rtspURL
 }
 
-// AddPublisherPath регистрирует в MediaMTX путь-приёмник.
+// AddPublisherPath оставлен для совместимости с сервисом звука.
 //
-// Нужен для звука: транскодированный AAC публикуется обратно в MediaMTX,
-// и для этого путь должен быть настроен как publisher, а не как читатель
-// RTSP-источника. Без такой регистрации MediaMTX отвечает 400 на публикацию.
+// В go2rtc отдельный путь-приёмник не нужен: публикация в неизвестный
+// поток отклоняется («Broken pipe» у ffmpeg), а звук перекодирует сам
+// go2rtc — источником потока с параметром #audio=aac (см. audio_service.go).
+// Метод ничего не делает и всегда успешен, чтобы вызывающий код не
+// обрабатывал отсутствие пути как сбой.
 func (s *CameraService) AddPublisherPath(pathName string) error {
-	url := fmt.Sprintf("%s/v3/config/paths/add/%s", s.mediamtxAPI, pathName)
-	// alwaysAvailable НЕ используем: в MediaMTX 1.20 этот параметр требует
-	// явного списка дорожек (alwaysAvailableTracks), иначе API отвечает
-	// 400 «'alwaysAvailableTracks' must contain at least one track».
-	// Для приёма публикации он не нужен — ffmpeg сам открывает поток.
-	payload := map[string]interface{}{
-		"name":   pathName,
-		"source": "publisher",
-		// Позволяем перезапуск публикации без остановки сервиса: ffmpeg
-		// переподключается при обрыве, и путь не должен оставаться занятым.
-		"overridePublisher": true,
-		// КЛЮЧЕВОЙ параметр: по умолчанию MediaMTX закрывает путь, если к нему
-		// 10 секунд никто не подключён. Для звука это неверно: оператор
-		// слушает камеру не постоянно, а публикация ffmpeg идёт непрерывно.
-		// Без этого значения поток обрывался через 10 секунд после старта.
-		//
-		// Значение "0s" НЕ работает: MediaMTX превращает его в пустое и
-		// возвращается к дефолтным 10 секундам. Поэтому задаём большой срок.
-		"sourceOnDemandCloseAfter": "8760h",
-	}
-	body, _ := json.Marshal(payload)
-
-	resp, err := s.client.Post(url, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("add publisher path %q: %w", pathName, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
-	}
-
-	// Читаем тело: по нему отличаем «уже существует» от прочих ошибок.
-	// MediaMTX отвечает 400 на повторное добавление (а не 409),
-	// поэтому проверяем текст, иначе повторный запуск звука всегда падал бы.
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	msg := strings.TrimSpace(string(respBody))
-
-	if strings.Contains(msg, "already exists") {
-		return nil // путь уже настроен — цель достигнута
-	}
-	return fmt.Errorf("add publisher path %q: status %d: %s", pathName, resp.StatusCode, msg)
+	log.Debug().Str("path", pathName).
+		Msg("go2rtc не требует пути-приёмника: звук перекодирует сам медиасервер")
+	return nil
 }
 
-// addMediaMTXPath регистрирует RTSP-источник в MediaMTX.
+// addStreamPath регистрирует поток в go2rtc.
 //
-// Если путь уже есть, источник не перезаписывается автоматически: MediaMTX
-// отвечает 400 «path already exists». Это опасно тем, что после правки
-// логина/пароля камеры в БД путь остаётся со СТАРЫМ адресом и камера навсегда
-// отваливается. Поэтому при конфликте делаем PATCH, обновляя source.
-func (s *CameraService) addMediaMTXPath(pathName, rtspSource string) {
-	payload := map[string]interface{}{
-		"name":           pathName,
-		"source":         rtspSource,
-		"sourceOnDemand": false,
-		// TCP исключает потери RTP-пакетов: для 4K-потоков (3840x2160) UDP
-		// не справляется, и HLS-муксер MediaMTX падает с
-		// "unable to extract DTS: too many reordered frames".
-		"rtspTransport": "tcp",
-	}
-	body, _ := json.Marshal(payload)
+// PUT /api/streams перезаписывает поток целиком: повторный запрос с другим
+// адресом заменяет старый. Это проверено на живом сервере и снимает нужду
+// в отдельном обновлении — после правки адреса или пароля камеры достаточно
+// вызвать метод снова, и поток перестанет ходить на старый URL.
+func (s *CameraService) addStreamPath(pathName, rtspSource string) {
+	// Параметры передаём В СТРОКЕ ЗАПРОСА, а не в теле.
+	//
+	// Это ловушка go2rtc: при передаче name/src в теле приходит «200 OK»
+	// и пустой объект, а поток не создаётся. Ошибка выглядит как успех,
+	// и потом камера молча остаётся без потока.
+	q := url.Values{}
+	q.Set("name", pathName)
+	q.Set("src", rtspSource)
 
-	url := fmt.Sprintf("%s/v3/config/paths/add/%s", s.mediamtxAPI, pathName)
-	resp, err := s.client.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPut, s.mediaAPI+"/api/streams?"+q.Encode(), nil)
 	if err != nil {
-		log.Warn().Err(err).Str("path", pathName).Str("source", rtspSource).Msg("failed to add MediaMTX path")
+		log.Warn().Err(err).Str("path", pathName).Msg("failed to build go2rtc stream request")
 		return
 	}
-	// Тело ответа читаем всегда: по нему отличаем «уже существует» от прочих
-	// ошибок (MediaMTX отвечает 400, а не 409).
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	resp.Body.Close()
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		log.Info().Str("path", pathName).Str("source", rtspSource).Msg("MediaMTX path added")
-		return
-	}
-
-	// Путь уже есть — обновляем источник, иначе камера останется с прежним URL.
-	if strings.Contains(string(respBody), "already exists") {
-		s.patchMediaMTXPath(pathName, rspsSource{Source: rtspSource})
-		return
-	}
-
-	log.Warn().Str("path", pathName).Int("status", resp.StatusCode).
-		Str("body", strings.TrimSpace(string(respBody))).
-		Msg("MediaMTX returned non-OK status")
-}
-
-// rspsSource — параметры патча пути. Вынесены в тип, чтобы вызов был читаемым.
-type rspsSource struct {
-	Source        string `json:"source"`
-	RTSPTransport string `json:"rtspTransport"`
-}
-
-// patchMediaMTXPath меняет источник уже существующего пути MediaMTX.
-// Нужен при смене адреса или учётных данных камеры: без него MediaMTX
-// продолжает подключаться по старому URL и путь остаётся нерабочим.
-//
-// ВАЖНО: MediaMTX принимает PATCH на существующий путь, отвечает
-// {"status":"ok"}, но источник при этом НЕ меняется — проверено на живом
-// сервере. Поэтому путь удаляется и создаётся заново: только так новый
-// адрес вступает в силу.
-func (s *CameraService) patchMediaMTXPath(pathName string, patch rspsSource) {
-	if patch.RTSPTransport == "" {
-		patch.RTSPTransport = "tcp"
-	}
-
-	// Удаляем старый путь. Ошибку не считаем фатальной: если пути нет,
-	// следующее создание просто его добавит.
-	delURL := fmt.Sprintf("%s/v3/config/paths/delete/%s", s.mediamtxAPI, pathName)
-	if req, err := http.NewRequest(http.MethodDelete, delURL, nil); err == nil {
-		if resp, err := s.client.Do(req); err == nil {
-			resp.Body.Close()
-		}
-	}
-
-	// Создаём путь с новым источником.
-	payload := map[string]interface{}{
-		"source":         patch.Source,
-		"sourceOnDemand": false,
-		"rtspTransport":  patch.RTSPTransport,
-	}
-	body, _ := json.Marshal(payload)
-
-	addURL := fmt.Sprintf("%s/v3/config/paths/add/%s", s.mediamtxAPI, pathName)
-	req, err := http.NewRequest(http.MethodPost, addURL, bytes.NewReader(body))
-	if err != nil {
-		log.Warn().Err(err).Str("path", pathName).Msg("failed to build MediaMTX add request")
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		log.Warn().Err(err).Str("path", pathName).Msg("failed to recreate MediaMTX path")
+		log.Warn().Err(err).Str("path", pathName).Str("source", rtspSource).
+			Msg("failed to register stream in go2rtc")
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		log.Info().Str("path", pathName).Str("source", patch.Source).
-			Msg("MediaMTX path source updated")
+		log.Info().Str("path", pathName).Str("source", rtspSource).Msg("go2rtc stream registered")
 		return
 	}
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	log.Warn().Str("path", pathName).Int("status", resp.StatusCode).
 		Str("body", strings.TrimSpace(string(respBody))).
-		Msg("MediaMTX не принял обновлённый путь")
+		Msg("go2rtc rejected stream")
 }
 
-// (POST .../remove/{name} не существует и возвращает 404.)
-func (s *CameraService) removeMediaMTXPath(pathName string) error {
-	url := fmt.Sprintf("%s/v3/config/paths/delete/%s", s.mediamtxAPI, pathName)
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
+// removeStreamPath удаляет поток из go2rtc.
+//
+// Удаление идемпотентно: на несуществующий поток go2rtc отвечает 200
+// (проверено на живом), поэтому повторный вызов ошибкой не считается.
+func (s *CameraService) removeStreamPath(pathName string) error {
+	q := url.Values{}
+	q.Set("src", pathName)
+
+	req, err := http.NewRequest(http.MethodDelete, s.mediaAPI+"/api/streams?"+q.Encode(), nil)
 	if err != nil {
 		return err
 	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		log.Warn().Err(err).Str("path", pathName).Msg("failed to remove MediaMTX path")
+		log.Warn().Err(err).Str("path", pathName).Msg("failed to remove go2rtc stream")
 		return err
 	}
 	defer resp.Body.Close()
 
-	// 404 означает, что пути и так нет — для нас это успех (идемпотентность).
-	if resp.StatusCode == http.StatusNotFound {
-		log.Debug().Str("path", pathName).Msg("MediaMTX path already absent")
-		return nil
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err := fmt.Errorf("mediamtx returned status %d", resp.StatusCode)
-		log.Warn().Err(err).Str("path", pathName).Msg("failed to remove MediaMTX path")
+		err := fmt.Errorf("go2rtc returned status %d", resp.StatusCode)
+		log.Warn().Err(err).Str("path", pathName).Msg("failed to remove go2rtc stream")
 		return err
 	}
 
-	log.Info().Str("path", pathName).Msg("MediaMTX path removed")
+	log.Info().Str("path", pathName).Msg("go2rtc stream removed")
 	return nil
 }
 
@@ -906,14 +813,12 @@ func (s *CameraService) Update(ctx context.Context, id uuid.UUID, req domain.Upd
 		}
 	}
 
-	// Если изменились потоки или креды — перерегистрируем в MediaMTX.
-	// Удаляем синхронно, чтобы не было гонки: add после remove внутри MediaMTX.
+	// Если изменились потоки или креды — перерегистрируем в go2rtc.
+	// Удаляем синхронно, чтобы не было гонки: add после remove.
 	if changed {
-		_ = s.removeMediaMTXPath(cam.ID.String())
-		_ = s.removeMediaMTXPath(cam.ID.String() + "_sub")
-		// Звук публикуется в отдельный путь — его тоже нужно пересоздать,
-		// иначе после перезагрузки конфигурации звук пропадёт.
-		_ = s.removeMediaMTXPath(AudioStreamName(cam.ID))
+		_ = s.removeStreamPath(cam.ID.String())
+		_ = s.removeStreamPath(cam.ID.String() + "_sub")
+		_ = s.removeStreamPath(AudioStreamName(cam.ID))
 
 		username := ""
 		password := ""
@@ -931,11 +836,11 @@ func (s *CameraService) Update(ctx context.Context, id uuid.UUID, req domain.Upd
 		}
 		mainRTSP = EmbedCredentials(mainRTSP, username, password)
 		if mainRTSP != "" {
-			go s.addMediaMTXPath(cam.ID.String(), mainRTSP)
+			go s.addStreamPath(cam.ID.String(), mainRTSP)
 		}
 		if cam.SubStream != "" {
 			subRTSP := EmbedCredentials(cam.SubStream, username, password)
-			go s.addMediaMTXPath(cam.ID.String()+"_sub", subRTSP)
+			go s.addStreamPath(cam.ID.String()+"_sub", subRTSP)
 		}
 	}
 
@@ -1044,16 +949,16 @@ func (s *CameraService) Delete(ctx context.Context, id uuid.UUID) error {
 		}
 	}
 
-	// Пути удаляем синхронно и до удаления записи из БД: так мы гарантируем,
-	// что не останется висячих путей, даже если запрос прервётся.
-	// Ошибки логируются внутри removeMediaMTXPath и не блокируют удаление.
-	_ = s.removeMediaMTXPath(id.String())
-	_ = s.removeMediaMTXPath(id.String() + "_sub")
-	// Пути звука тоже принадлежат камере: без их удаления в MediaMTX
-	// накапливаются висячие пути, а имя камеры (UUID) после удаления
+	// Потоки удаляем синхронно и до удаления записи из БД: так мы гарантируем,
+	// что не останется висячих потоков, даже если запрос прервётся.
+	// Ошибки логируются внутри removeStreamPath и не блокируют удаление.
+	_ = s.removeStreamPath(id.String())
+	_ = s.removeStreamPath(id.String() + "_sub")
+	// Потоки звука тоже принадлежат камере: без их удаления в медиасервере
+	// накапливаются висячие потоки, а имя камеры (UUID) после удаления
 	// может быть переиспользовано новой камерой — и звук утечёт к ней.
-	_ = s.removeMediaMTXPath(AudioStreamName(id))
-	_ = s.removeMediaMTXPath(TalkStreamName(id))
+	_ = s.removeStreamPath(AudioStreamName(id))
+	_ = s.removeStreamPath(TalkStreamName(id))
 	return s.repo.Delete(ctx, id)
 }
 

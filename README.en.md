@@ -8,14 +8,11 @@ ONVIF) with neural-network detection of objects and sounds, face and licence pla
 recognition, access control integration and a web interface.
 
 ```
-┌──────────────┐  RTSP   ┌────────────┐  HLS/WebRTC  ┌──────────────┐
-│   Cameras    │────────▶│ MediaMTX   │─────────────▶│  Web UI      │
+┌──────────────┐  RTSP   ┌────────────┐  MSE/WebRTC  ┌──────────────┐
+│   Cameras    │────────▶│  go2rtc    │─────────────▶│  Web UI      │
 │ OpenIPC/ONVIF│         │(media server)│             │  React SPA   │
 └──────────────┘         └─────┬──────┘              └──────┬───────┘
                                │                            │ REST
-                    ┌──────────┴──────────┐                 │
-                    │  camera audio (AAC) │                 │
-                    └──────────┬──────────┘                 │
 ┌──────────────┐   NATS  ┌─────▼────────────────────────────▼───────┐
 │ AI Detector  │────────▶│        Go Backend (API + logic)          │
 │ YOLOv8 +     │         └────┬──────────┬───────────┬──────────────┘
@@ -99,9 +96,9 @@ a new one — [docs/TRANSLATIONS.md](docs/TRANSLATIONS.md).
 | Area | What is implemented |
 |---|---|
 | **Cameras** | Adding and editing through the web interface (data in PostgreSQL, no hand-written configs), subnet scanner (ONVIF, mDNS, HTTP probing, credential brute-force), **stream check before saving** showing codec, resolution and presence of sound |
-| **Streams** | RTSP ingest through MediaMTX, HLS for the browser, WebRTC, main and sub stream, proxying through the backend with JWT authorisation |
+| **Streams** | RTSP ingest through go2rtc, MSE and WebRTC for the browser, WebRTC, main and sub stream, proxying through the backend with JWT authorisation |
 | **External RTSP access** | Publishing streams to third-party systems (video walls, recorders, analytics) at `/cameras/{N}/streaming/{main\|sub}` on a separate port 9784. Channel numbers are assigned automatically, the **External access** page shows ready-made links. Streams are served without transcoding — the load on the cameras does not grow |
-| **Camera audio** | Listening in the player, automatic transcoding of G.711 → AAC (browsers do not play G.711 in HLS), a separate audio track synchronised with the video |
+| **Camera audio** | Listening in the player: sound travels inside the main stream, go2rtc transcodes G.711 to Opus only for whoever listens. Two-way audio (browser microphone → camera speaker) on ONVIF Profile T cameras |
 | **Object detection** | YOLOv8 with tracking. Accuracy filters: confidence threshold, minimum and maximum object size, bounding box aspect ratio, suppression of motionless objects. Configured per camera — [docs/DETECTION-QUALITY.md](docs/DETECTION-QUALITY.md) |
 | **Face recognition** | InsightFace (ArcFace): embeddings, a directory of known faces, marks "known" / "unknown" / "banned" |
 | **Licence plate recognition** | Plate area detection, OCR, a configurable search zone (so as not to capture the camera's OSD menu), region-aware format validation |
@@ -120,7 +117,7 @@ a new one — [docs/TRANSLATIONS.md](docs/TRANSLATIONS.md).
 | **Server settings** | A single page: storage paths for recordings and snapshots, local disk or S3, recognition parameters |
 | **Monitoring** | Automatic detection of camera status (online/offline), restoring paths after a media server restart, cleanup of "dangling" paths |
 | **Notifications** | Telegram and MAX: detection events with a snapshot or a clip, choice of cameras and event types, confidence threshold, quiet hours, delivery log. Separately — server watching: cameras going away, CPU load, memory, disk, overheating and the graphics card |
-| **Snapshots** | A frame from the camera along vendor-specific paths, fallback extraction from HLS, event snapshots in the feed |
+| **Snapshots** | A frame from the camera along vendor-specific paths, fallback frame from go2rtc, event snapshots in the feed |
 | **Mobile app** | Android for phones: server selection, viewing cameras and the archive. A separate build for **Android TV**: grids from 1 to 25 cameras, layouts, sound. Details — [below](#mobile-apps) |
 
 ---
@@ -148,8 +145,9 @@ database.
 
 ### Audio
 
-The camera delivers sound in G.711, which browsers do not play in HLS, so the
-system transcodes it to AAC and serves it as a separate track. The panel shows
+The camera delivers sound in G.711, which browsers do not play directly.
+go2rtc transcodes it to Opus on the fly — only for whoever listens, and inside
+the main stream, so no separate audio track is needed. The panel shows
 the camera codec, whether transcoding is running and whether sound events are
 being recognised.
 
@@ -323,7 +321,7 @@ cameras and working with the archive.
 | **Servers** | A list of saved servers, adding, checking the connection before saving, switching, deletion |
 | **Login** | Login and password; the token is stored separately for each server, so switching between them does not require logging in again |
 | **Cameras** | Tiles with preview frames (refreshed every 10 seconds), online/offline status, pull-to-refresh |
-| **Viewing** | Live video over HLS, switching the main and sub stream, pause, sound |
+| **Viewing** | Live video over MSE/WebRTC, switching the main and sub stream, pause, sound |
 | **Archive** | A list of recordings with a filter by camera, a built-in player with seeking, loading more on scroll. The reason for the recording is visible at once: plate, face, object |
 
 | Servers | Cameras | Archive: plates | Archive: objects |
@@ -358,10 +356,11 @@ merges into noise, while the operator needs one specific camera.
 > such a tile gets about a hundred pixels, and a name would cover half the
 > picture. A status dot remains in the corner.
 
-Sound goes as a separate track: MediaMTX serves video without sound, and the
-server publishes audio as its own stream. In the grid the sub stream is played
-instead of the main one — four 4K main streams would need more than 60 Mbit/s,
-which neither the television's Wi-Fi nor its decoder would survive.
+Sound travels inside the main stream: go2rtc transcodes G.711 to Opus for
+whoever listens, so no separate audio stream is needed. In the grid the sub
+stream is played instead of the main one — four 4K main streams would need
+more than 60 Mbit/s, which neither the television's Wi-Fi nor its decoder
+would survive.
 
 | Screen | What it does |
 |---|---|
@@ -400,8 +399,8 @@ adb shell getprop ro.product.cpu.abi
 > decides what React Native's own C++ is compiled for.
 
 **Technologies:** React Native 0.75, `react-native-video` (ExoPlayer/Media3),
-TypeScript. Video goes over HLS through the server API, the archive as ready MP4
-files.
+TypeScript. Video goes over HLS through the server API (ExoPlayer does not
+support MSE), the archive as ready MP4 files.
 
 ### Connecting
 
@@ -577,8 +576,8 @@ An interactive list of endpoints is available on a running server:
 | Component | Technology | Purpose |
 |---|---|---|
 | Backend | Go 1.22, chi, pgx | REST API, business logic, camera control |
-| Web interface | React 18, TypeScript, Vite | SPA with an HLS player, a PTZ pad and settings |
-| Media server | MediaMTX | RTSP ingest, HLS/WebRTC delivery, recording |
+| Web interface | React 18, TypeScript, Vite | SPA with an MSE/WebRTC player, a PTZ pad and settings |
+| Media server | go2rtc | RTSP ingest, MSE/WebRTC delivery, recording |
 | Mobile app | React Native, ExoPlayer | Viewing cameras and the archive from an Android phone and TV |
 | Notifications | Telegram Bot API, MAX Bot API | Messages about detection events and server state |
 | AI detector | Python, YOLOv8, YAMNet, InsightFace | Objects, sounds, faces, plates (GPU CUDA) |
@@ -632,7 +631,7 @@ go test ./...           # tests
 Running locally requires PostgreSQL on `localhost:5434`:
 
 ```bash
-docker compose up -d postgres minio mediamtx nats
+docker compose up -d postgres minio go2rtc nats
 go run ./cmd/server
 ```
 
@@ -664,10 +663,10 @@ Before exposing the server to the internet:
 
 - [ ] Change `JWT_SECRET` (`openssl rand -hex 32`) and `DB_PASSWORD`
 - [ ] Change the administrator password in the web interface
-- [ ] Change the external RTSP access password (`MTX_EXTERNAL_PASS`) — the default is `viewer`
+- [ ] Change the external RTSP access password (`EXTERNAL_RTSP_PASS`) — the default is `viewer`
 - [ ] Close the PostgreSQL (5434), MinIO (9000/9001) and NATS (4222) ports to the outside network
 - [ ] Set up TLS termination (nginx/Caddy) in front of the web interface
-- [ ] Restrict access to the MediaMTX API (9997)
+- [ ] Restrict access to the go2rtc API (1984)
 - [ ] Do not use the default camera credentials
 
 More — in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
@@ -1077,7 +1076,7 @@ simultaneous RTSP sessions.
 **Camera audio**
 - Listening to sound in the player: a separate audio track synchronised with the video
 - Transcoding G.711 → AAC: browsers do not play G.711 in HLS
-- Routing the sound into a separate MediaMTX stream, the video is left untouched
+- Routing the sound into a separate go2rtc stream, the video is left untouched
 
 **Sound detection**
 - YAMNet (521 AudioSet classes): gunshot, scream, shriek, broken glass, explosion, barking, siren, car alarm, speech, music
@@ -1111,5 +1110,5 @@ simultaneous RTSP sessions.
 ## Licence
 
 The project is distributed "as is" for video surveillance tasks.
-Third-party components keep their own licences (MediaMTX — MIT,
+Third-party components keep their own licences (go2rtc — MIT,
 YOLOv8 — AGPL-3.0, MinIO — AGPL-3.0, PostgreSQL — PostgreSQL License).

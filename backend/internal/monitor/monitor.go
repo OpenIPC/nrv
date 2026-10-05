@@ -171,7 +171,7 @@ func NewMonitor(cameras CameraSource, settings SettingsSource, system SystemRead
 // Start запускает цикл проверок. Блокируется до отмены ctx.
 func (m *Monitor) Start(ctx context.Context) {
 	// Первая проверка с задержкой: сразу после старта камеры ещё не
-	// подключились к MediaMTX, и все они выглядели бы пропавшими.
+	// подключились к go2rtc, и все они выглядели бы пропавшими.
 	select {
 	case <-ctx.Done():
 		return
