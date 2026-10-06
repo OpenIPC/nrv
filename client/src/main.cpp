@@ -4,7 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QStandardPaths>
+#include <QLibraryInfo>
 #include <QDateTime>
 #include <QDebug>
 
@@ -118,6 +118,29 @@ void explainMissingGStreamer(const QString &element)
 } // namespace
 
 /**
+ * Путь к журналу клиента.
+ *
+ * Считаем его без QCoreApplication: журнал нужен и тогда, когда приложение
+ * падает при создании самого объекта приложения — до этого момента
+ * причина была бы потеряна. Поэтому каталог данных берём из окружения.
+ */
+QString logFilePath()
+{
+#if defined(Q_OS_WIN)
+    const QByteArray base = qgetenv("LOCALAPPDATA");
+    const QString root = base.isEmpty()
+        ? QDir::homePath() + QStringLiteral("/AppData/Local")
+        : QString::fromLocal8Bit(base);
+#else
+    const QByteArray base = qgetenv("XDG_DATA_HOME");
+    const QString root = base.isEmpty()
+        ? QDir::homePath() + QStringLiteral("/.local/share")
+        : QString::fromLocal8Bit(base);
+#endif
+    return root + QStringLiteral("/NVR/client.log");
+}
+
+/**
  * Пишет вывод приложения в файл рядом с настройками.
  *
  * Зачем: на дежурной машине нет ни консоли, ни разработчика. Когда окно
@@ -127,13 +150,12 @@ void explainMissingGStreamer(const QString &element)
  */
 void initLogging()
 {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-    QDir().mkpath(dir);
-    const QString path = dir + QStringLiteral("/client.log");
+    const QString path = logFilePath();
+    QDir().mkpath(QFileInfo(path).absolutePath());
 
-    // Указатель на файл живёт всё время работы приложения: обработчик
-    // вызывается из разных потоков, и повреждённый вывод хуже отсутствия
-    // вывода, поэтому открываем один раз в режиме добавления.
+    // Обработчик один на всё время работы: он вызывается из разных потоков,
+    // и повреждённый вывод хуже отсутствия вывода, поэтому файл открываем
+    // один раз в режиме добавления.
     static QFile logFile(path);
     if (!logFile.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
         return;
@@ -159,15 +181,26 @@ void initLogging()
         }
         fputs(line.constData(), stderr);
     });
-
-    qInfo().noquote() << QStringLiteral("Запуск клиента, каталог %1").arg(QCoreApplication::applicationDirPath());
 }
 
 int main(int argc, char *argv[])
 {
+    // Журнал подключаем первой строкой: если приложение падает при
+    // создании окна или при загрузке интерфейса, причина должна остаться
+    // в файле, а не исчезнуть вместе с процессом.
+    initLogging();
+    qInfo("--- запуск клиента ---");
+
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("NVR Wall"));
     app.setOrganizationName(QStringLiteral("NVR"));
+
+    qInfo().noquote() << QStringLiteral("Qt %1, каталог приложения %2")
+                             .arg(QString::fromLatin1(qVersion()),
+                                  QCoreApplication::applicationDirPath());
+    qInfo().noquote() << QStringLiteral("Плагины Qt: %1")
+                             .arg(QLibraryInfo::path(QLibraryInfo::PluginsPath));
+    qInfo().noquote() << QStringLiteral("Журнал: %1").arg(logFilePath());
 
     // Стиль задаётся в QML (`import QtQuick.Controls.Basic`), а не отсюда:
     // так на Astra и Debian интерфейс выглядит одинаково и не зависит от
@@ -177,12 +210,11 @@ int main(int argc, char *argv[])
     setupGStreamerPaths(QCoreApplication::applicationDirPath());
 #endif
 
-    initLogging();
-
     // GStreamer инициализируем до окон: без этого первый конвейер
     // собирается медленно, и первая камера открывалась бы заметно дольше
     // остальных — оператор решил бы, что она недоступна.
     gst_init(&argc, &argv);
+    qInfo().noquote() << QStringLiteral("GStreamer %1").arg(QString::fromLatin1(gst_version_string()));
 
     // Проверяем готовность сразу: иначе оператор увидел бы пустые ячейки и
     // решил, что сломаны камеры. Диалог объясняет причину и место, откуда
@@ -223,10 +255,16 @@ int main(int argc, char *argv[])
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
                      []() { QCoreApplication::exit(1); }, Qt::QueuedConnection);
 
+    qInfo().noquote() << QStringLiteral("Загружаю интерфейс из %1").arg(qmlDir);
     engine.load(QUrl::fromLocalFile(qmlDir + QStringLiteral("/main.qml")));
     if (engine.rootObjects().isEmpty()) {
+        // Причину сюда не пишем: сообщения QML уже прошли через журнал
+        // выше, и дублировать их не нужно — важно, что интерфейс не создан.
+        qCritical("Интерфейс не создан: проверьте сообщения QML выше. Каталог: %s",
+                  qPrintable(qmlDir));
         return 1;
     }
 
+    qInfo("Интерфейс загружен, окно открыто");
     return app.exec();
 }
