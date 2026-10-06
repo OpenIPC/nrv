@@ -50,15 +50,33 @@ Copy-Item $QmlDir (Join-Path $OutDir "qml") -Recurse -Force
 & windeployqt --release --qmldir $QmlDir --no-translations (Join-Path $OutDir "nvr-wall.exe")
 if ($LASTEXITCODE -ne 0) { throw "windeployqt завершился с ошибкой" }
 
-# 3. GStreamer: библиотеки кладём всегда — без них исполняемый файл
-#    вообще не запустится (Windows не найдёт зависимости), и никакого
-#    понятного окна с требованием не будет. Плагины — только в полной
-#    поставке: они и занимают основной объём.
+# 3. GStreamer: библиотеки кладём РЯДОМ С ФАЙЛОМ — в корень поставки.
+#
+# Это место выбрано не для удобства: Windows ищет зависимости исполняемого
+# файла сначала в его собственном каталоге, и только потом в системных
+# путях. Библиотеки в подпапке `bin` при загрузке не находятся, и
+# приложение завершается мгновенно — до того, как успеет показать хотя бы
+# окно или объяснить причину. Пути в PATH мы выставляем уже в коде, но на
+# момент загрузки зависимостей это поздно.
 $gstBin = Join-Path $GStreamerRoot "bin"
 $gstPlugins = Join-Path $GStreamerRoot "lib\gstreamer-1.0"
 
-New-Item -ItemType Directory -Force -Path (Join-Path $OutDir "bin") | Out-Null
-Copy-Item (Join-Path $gstBin "*.dll") (Join-Path $OutDir "bin") -Force
+Copy-Item (Join-Path $gstBin "*.dll") $OutDir -Force
+
+# 4. Средства выполнения Visual C++.
+#
+# Без них приложение работает только на машинах, где установлен пакет
+# распространяемых компонентов (на сборочной машине он есть, поэтому CI
+# ничего не замечал). На дежурном компьютере его может не быть — кладём
+# рядом и больше об этом не думаем.
+foreach ($runtime in @("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "concrt140.dll")) {
+    $source = Join-Path $env:SystemRoot "System32\$runtime"
+    if (Test-Path $source) {
+        Copy-Item $source $OutDir -Force
+    } else {
+        Write-Warning "Не найден $runtime — проверьте, что на машине сборки есть Visual C++ 2015–2022"
+    }
+}
 
 if ($WithPlugins) {
     if (-not (Test-Path $gstPlugins)) {
@@ -87,6 +105,16 @@ if ($WithPlugins) {
 else {
     Write-Host "Плагины GStreamer не включены (режим тонкой поставки)."
     Write-Host "Клиент возьмёт их из системной установки GStreamer, а если её нет — покажет окно со ссылкой."
+}
+
+# 5. Проверка: библиотеки, без которых приложение не запустится, должны
+#    лежать в корне поставки. Ошибку лучше поймать здесь, чем узнать от
+#    дежурного, что «окно мигнуло и закрылось».
+$mustBeInRoot = @("nvr-wall.exe", "Qt6Core.dll", "Qt6Quick.dll", "gstreamer-1.0-0.dll", "vcruntime140.dll", "msvcp140.dll")
+foreach ($name in $mustBeInRoot) {
+    if (-not (Test-Path (Join-Path $OutDir $name))) {
+        throw "Готовое приложение не запустится: в поставке нет $name"
+    }
 }
 
 $size = (Get-ChildItem $OutDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB

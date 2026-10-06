@@ -6,8 +6,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-# Quick — окна и QML, Multimedia — приём кадров и вывод, Network — HTTP к API.
-find_package(Qt6 REQUIRED COMPONENTS Quick Multimedia Network Qml)
+# Quick — окна и QML, Network — HTTP к API.
+#
+# Multimedia намеренно НЕ подключён: кадры рисует свой элемент
+# (src/video/VideoItem.cpp), а в Qt 6.4 приёмник у VideoOutput всё равно
+# только для чтения. Лишняя зависимость попала в поставку как требование
+# Windows загрузить Qt6Multimedia.dll — и приложение падало при запуске,
+# не успев ничего показать.
+find_package(Qt6 REQUIRED COMPONENTS Quick Network Qml)
 
 # GStreamer берём разными путями под Linux и Windows.
 #
@@ -78,7 +84,6 @@ target_include_directories(nvr-wall PRIVATE src)
 
 target_link_libraries(nvr-wall PRIVATE
     Qt6::Quick
-    Qt6::Multimedia
     Qt6::Network
     Qt6::Qml
 )

@@ -2,7 +2,10 @@
 #include <QCoreApplication>
 #include <QQmlApplicationEngine>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QStandardPaths>
+#include <QDateTime>
 #include <QDebug>
 
 #include <gst/gst.h>
@@ -89,13 +92,10 @@ void explainMissingGStreamer(const QString &element)
 /**
  * Готовит пути к GStreamer для переносимой поставки.
  *
- * Официальная сборка GStreamer для Windows ставится отдельно и прописывает
- * свои пути в систему. Но клиент должен работать и на машине, где GStreamer
- * поставили в свою папку рядом с ним: поэтому сначала смотрим рядом с
- * исполняемым файлом и только потом — на системную установку.
- *
- * Без этого приложение запустилось бы, но не смогло бы декодировать видео:
- * ошибка выглядела бы как «нет элемента rtspsrc», хотя компонент стоит.
+ * Библиотеки GStreamer лежат рядом с исполняемым файлом, поэтому Windows
+ * находит их сама. А вот плагины (папка gstreamer-1.0) GStreamer ищет
+ * только по переменным окружения — о них нужно сообщить, иначе поток
+ * просто не откроется на машине без установленного GStreamer.
  */
 void setupGStreamerPaths(const QString &appDir)
 {
@@ -104,14 +104,6 @@ void setupGStreamerPaths(const QString &appDir)
     const QString pluginDir = dir.filePath(QStringLiteral("gstreamer-1.0"));
     if (QFileInfo::exists(pluginDir)) {
         qputenv("GST_PLUGIN_PATH", pluginDir.toUtf8());
-    }
-
-    const QString binDir = dir.filePath(QStringLiteral("bin"));
-    if (QFileInfo::exists(binDir)) {
-        QByteArray path = qgetenv("PATH");
-        // Разделитель в PATH в Windows — точка с запятой, а не двоеточие.
-        path.prepend(binDir.toLocal8Bit() + ';');
-        qputenv("PATH", path);
     }
 }
 #else
@@ -124,6 +116,52 @@ void explainMissingGStreamer(const QString &element)
 #endif
 
 } // namespace
+
+/**
+ * Пишет вывод приложения в файл рядом с настройками.
+ *
+ * Зачем: на дежурной машине нет ни консоли, ни разработчика. Когда окно
+ * закрывается само или вместо картинки пусто, единственный след — этот
+ * файл. Сообщения о запуске и причинах отказа пишутся и в него, и в
+ * консоль, чтобы поведение при отладке не отличалось.
+ */
+void initLogging()
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    QDir().mkpath(dir);
+    const QString path = dir + QStringLiteral("/client.log");
+
+    // Указатель на файл живёт всё время работы приложения: обработчик
+    // вызывается из разных потоков, и повреждённый вывод хуже отсутствия
+    // вывода, поэтому открываем один раз в режиме добавления.
+    static QFile logFile(path);
+    if (!logFile.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        return;
+    }
+
+    qInstallMessageHandler([](QtMsgType type, const QMessageLogContext &, const QString &message) {
+        const char *level = "INFO";
+        switch (type) {
+        case QtWarningMsg: level = "WARN"; break;
+        case QtCriticalMsg: level = "CRIT"; break;
+        case QtFatalMsg: level = "FATAL"; break;
+        default: break;
+        }
+
+        const QByteArray line = QStringLiteral("%1 [%2] %3\n")
+                                    .arg(QDateTime::currentDateTime().toString(Qt::ISODate),
+                                         QString::fromLatin1(level),
+                                         message)
+                                    .toUtf8();
+        if (logFile.isOpen()) {
+            logFile.write(line);
+            logFile.flush();
+        }
+        fputs(line.constData(), stderr);
+    });
+
+    qInfo().noquote() << QStringLiteral("Запуск клиента, каталог %1").arg(QCoreApplication::applicationDirPath());
+}
 
 int main(int argc, char *argv[])
 {
@@ -138,6 +176,8 @@ int main(int argc, char *argv[])
 #if defined(NVR_WINDOWS_BUILD)
     setupGStreamerPaths(QCoreApplication::applicationDirPath());
 #endif
+
+    initLogging();
 
     // GStreamer инициализируем до окон: без этого первый конвейер
     // собирается медленно, и первая камера открывалась бы заметно дольше

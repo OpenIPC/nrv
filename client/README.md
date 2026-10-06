@@ -136,6 +136,11 @@ docker build -f deploy/Dockerfile.build -t nvr-wall-build .
 | `wall/columns`, `wall/rows` | размер сетки |
 | `wall/window` | положение окна, номер монитора, развёрнут ли на весь экран |
 
+Журнал работы клиента: `%LOCALAPPDATA%\NVR\client.log` (в Linux —
+`~/.local/share/NVR/client.log`). Туда пишутся запуск, сообщения об ошибках
+и причины отказа GStreamer — на дежурной машине это единственный след,
+когда окно закрывается само.
+
 ## Что нужно доделать на сервере
 
 - **Канал тревог** `GET /api/v1/ws?token=`: сейчас тревоги берутся

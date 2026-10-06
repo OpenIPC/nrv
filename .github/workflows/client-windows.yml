@@ -149,19 +149,25 @@ jobs:
       - name: Проверить, что клиент запускается
         shell: pwsh
         run: |
-          # Запускаем без графической сессии: окно не откроется, но
-          # приложение должно дойти до загрузки интерфейса и не упасть
-          # сразу. Падение здесь означает проблему с библиотеками или
-          # плагинами, и лучше узнать об этом на сборке.
+          # Проверяем в «чистом» окружении: PATH из одних системных путей,
+          # рабочая папка — сама поставка.
+          #
+          # Без этого проверка проходила за счёт того, что на сборочной
+          # машине установлены и Qt, и Visual C++: нехватка библиотеки в
+          # поставке не выявлялась, а всплывала у дежурного в виде «окно
+          # мигнуло и закрылось».
+          $dist = (Resolve-Path client/build/dist).Path
+          $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot"
           $env:QT_QPA_PLATFORM = "offscreen"
           # Окно «нужен GStreamer» в автоматической проверке ждало бы
           # нажатия и держало сборку до таймаута.
           $env:NVR_NO_GSTREAMER_PROMPT = "1"
 
-          $process = Start-Process client/build/dist/nvr-wall.exe -PassThru
+          $process = Start-Process (Join-Path $dist "nvr-wall.exe") -WorkingDirectory $dist -PassThru
           Start-Sleep -Seconds 8
           if ($process.HasExited) {
-            throw "Клиент завершился сразу после запуска (код $($process.ExitCode))"
+            throw "Клиент завершился сразу после запуска (код $($process.ExitCode)). " +
+                  "Обычно это значит, что в поставке нет нужной библиотеки."
           }
           $process.Kill()
 
