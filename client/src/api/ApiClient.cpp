@@ -1,0 +1,301 @@
+#include "api/ApiClient.h"
+
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QSettings>
+#include <QUrl>
+
+namespace {
+
+/** Убирает завершающий слэш: иначе адреса склеиваются как «//api/v1». */
+QString withoutTrailingSlash(const QString &value)
+{
+    QString result = value.trimmed();
+    while (result.endsWith('/')) {
+        result.chop(1);
+    }
+    return result;
+}
+
+/**
+ * Дополняет адрес сервера портом веб-интерфейса, если порт не указан.
+ *
+ * API и страницы отдаёт один и тот же веб-сервер, поэтому «3001» —
+ * разумное умолчание: внешний доступ обычно пробрасывают именно туда.
+ */
+QString normalizeServer(const QString &value)
+{
+    QString result = withoutTrailingSlash(value);
+    if (result.isEmpty()) {
+        return result;
+    }
+    if (!result.startsWith(QLatin1String("http://")) && !result.startsWith(QLatin1String("https://"))) {
+        result.prepend(QLatin1String("http://"));
+    }
+
+    const QUrl url(result);
+    if (url.port() == -1) {
+        result += QLatin1String(":3001");
+    }
+    return result;
+}
+
+} // namespace
+
+ApiClient::ApiClient(QObject *parent)
+    : QObject(parent)
+{
+    loadProfile();
+}
+
+void ApiClient::setBusy(bool value)
+{
+    if (m_busy == value) {
+        return;
+    }
+    m_busy = value;
+    emit busyChanged();
+}
+
+void ApiClient::setError(const QString &message)
+{
+    m_lastError = message;
+    emit lastErrorChanged();
+}
+
+void ApiClient::loadProfile()
+{
+    // Настройки храним локально: адрес сервера у каждого рабочего места
+    // свой, и держать его на сервере было бы лишней связностью.
+    QSettings settings;
+    m_serverUrl = settings.value(QStringLiteral("server/url")).toString();
+    m_mediaHost = settings.value(QStringLiteral("media/host")).toString();
+    m_mediaPort = settings.value(QStringLiteral("media/port"), 9784).toInt();
+    m_mediaUser = settings.value(QStringLiteral("media/user")).toString();
+    m_mediaPassword = settings.value(QStringLiteral("media/password")).toString();
+
+    // Умолчание для медиасервера — тот же хост, что и у сервера: обычно
+    // RTSP-прокси и веб-интерфейс живут на одной машине.
+    if (m_mediaHost.isEmpty() && !m_serverUrl.isEmpty()) {
+        m_mediaHost = QUrl(m_serverUrl).host();
+    }
+
+    m_token = settings.value(QStringLiteral("auth/token")).toString();
+    if (!m_token.isEmpty()) {
+        emit authenticatedChanged();
+        loadCameras();
+    }
+}
+
+void ApiClient::setMediaServer(const QString &host, int rtspPort,
+                               const QString &user, const QString &password)
+{
+    m_mediaHost = host.trimmed();
+    m_mediaPort = rtspPort > 0 ? rtspPort : 9784;
+    m_mediaUser = user;
+    m_mediaPassword = password;
+
+    QSettings settings;
+    settings.setValue(QStringLiteral("media/host"), m_mediaHost);
+    settings.setValue(QStringLiteral("media/port"), m_mediaPort);
+    settings.setValue(QStringLiteral("media/user"), m_mediaUser);
+    settings.setValue(QStringLiteral("media/password"), m_mediaPassword);
+    emit serverChanged();
+}
+
+void ApiClient::login(const QString &server, const QString &user, const QString &password)
+{
+    const QString normalized = normalizeServer(server);
+    if (normalized.isEmpty() || user.isEmpty() || password.isEmpty()) {
+        setError(tr("Заполните адрес сервера, логин и пароль"));
+        return;
+    }
+
+    m_serverUrl = normalized;
+    setError(QString());
+    setBusy(true);
+
+    QNetworkRequest request(QUrl(m_serverUrl + QStringLiteral("/api/v1/auth/login")));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+
+    QJsonObject body;
+    body.insert(QStringLiteral("username"), user);
+    body.insert(QStringLiteral("password"), password);
+
+    QNetworkReply *reply = m_net.post(request, QJsonDocument(body).toJson());
+    connect(reply, &QNetworkReply::finished, this, [this, reply, user]() {
+        reply->deleteLater();
+        setBusy(false);
+
+        if (reply->error() != QNetworkReply::NoError) {
+            // Сервер отвечает понятной причиной («неверный пароль»),
+            // поэтому показываем её, а не общее «ошибка сети».
+            const QByteArray payload = reply->readAll();
+            const QJsonDocument doc = QJsonDocument::fromJson(payload);
+            const QString serverError = doc.object().value(QStringLiteral("error")).toString();
+            setError(serverError.isEmpty() ? reply->errorString() : serverError);
+            return;
+        }
+
+        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+        m_token = doc.object().value(QStringLiteral("token")).toString();
+        if (m_token.isEmpty()) {
+            setError(tr("Сервер не вернул токен доступа"));
+            return;
+        }
+
+        m_userName = user;
+
+        QSettings settings;
+        settings.setValue(QStringLiteral("server/url"), m_serverUrl);
+        settings.setValue(QStringLiteral("auth/token"), m_token);
+
+        if (m_mediaHost.isEmpty()) {
+            m_mediaHost = QUrl(m_serverUrl).host();
+            settings.setValue(QStringLiteral("media/host"), m_mediaHost);
+        }
+
+        emit serverChanged();
+        emit authenticatedChanged();
+        emit userChanged();
+        refreshCameras();
+    });
+}
+
+void ApiClient::logout()
+{
+    m_token.clear();
+    m_userName.clear();
+    m_permissions.clear();
+    m_cameras.clear();
+
+    QSettings settings;
+    settings.remove(QStringLiteral("auth/token"));
+
+    emit authenticatedChanged();
+    emit userChanged();
+    emit camerasChanged();
+}
+
+void ApiClient::handleReply(QNetworkReply *reply, const std::function<void(const QJsonDocument &)> &done)
+{
+    reply->deleteLater();
+
+    if (reply->error() != QNetworkReply::NoError) {
+        setError(reply->errorString());
+        return;
+    }
+    done(QJsonDocument::fromJson(reply->readAll()));
+}
+
+void ApiClient::refreshCameras()
+{
+    if (m_token.isEmpty()) {
+        return;
+    }
+
+    setBusy(true);
+
+    // Заодно обновляем права: их могли изменить, пока клиент работал.
+    QNetworkRequest meRequest(QUrl(m_serverUrl + QStringLiteral("/api/v1/auth/me")));
+    meRequest.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+
+    QNetworkReply *meReply = m_net.get(meRequest);
+    connect(meReply, &QNetworkReply::finished, this, [this, meReply]() {
+        handleReply(meReply, [this](const QJsonDocument &doc) {
+            m_permissions.clear();
+            const QJsonObject perms = doc.object().value(QStringLiteral("permissions")).toObject();
+            for (auto it = perms.begin(); it != perms.end(); ++it) {
+                if (it.value().toBool()) {
+                    m_permissions.append(it.key());
+                }
+            }
+            emit userChanged();
+        });
+        loadCameras();
+    });
+}
+
+void ApiClient::loadCameras()
+{
+    if (m_token.isEmpty()) {
+        setBusy(false);
+        return;
+    }
+
+    QNetworkRequest request(QUrl(m_serverUrl
+        + QStringLiteral("/api/v1/cameras?page_size=500")));
+    request.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+
+    QNetworkReply *reply = m_net.get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        setBusy(false);
+        handleReply(reply, [this](const QJsonDocument &doc) {
+            m_cameras.clear();
+            const QJsonArray list = doc.array();
+            for (const QJsonValue &value : list) {
+                const QJsonObject camera = value.toObject();
+                QVariantMap item;
+                item.insert(QStringLiteral("id"), camera.value(QStringLiteral("id")).toString());
+                item.insert(QStringLiteral("name"), camera.value(QStringLiteral("name")).toString());
+                item.insert(QStringLiteral("ip"), camera.value(QStringLiteral("ip")).toString());
+                item.insert(QStringLiteral("ptz"), camera.value(QStringLiteral("ptz")).toBool());
+                m_cameras.append(item);
+            }
+            emit camerasChanged();
+        });
+    });
+}
+
+bool ApiClient::can(const QString &permission) const
+{
+    // Администратор получает пустой список прав: у него доступно всё.
+    // Пустой список у обычной учётной записи означал бы «ничего», но
+    // таких учётных записей сервер не создаёт (права выдаются ролью).
+    if (m_permissions.isEmpty()) {
+        return true;
+    }
+    return m_permissions.contains(permission);
+}
+
+QString ApiClient::streamUrl(const QString &cameraId, bool subStream) const
+{
+    if (cameraId.isEmpty() || m_mediaHost.isEmpty()) {
+        return QString();
+    }
+
+    // Имя пути в медиасервере — идентификатор камеры; субпоток отличается
+    // суффиксом «_sub». Это же соглашение использует сервер при
+    // регистрации потоков в go2rtc.
+    const QString path = subStream
+        ? cameraId + QStringLiteral("_sub")
+        : cameraId;
+
+    // Пароль кодируем: в нём могут оказаться «@», «:» и другие знаки,
+    // от которых адрес разбирался бы неверно.
+    const QString credentials = m_mediaUser.isEmpty()
+        ? QString()
+        : QStringLiteral("%1:%2@")
+              .arg(QString::fromUtf8(QUrl::toPercentEncoding(m_mediaUser)),
+                   QString::fromUtf8(QUrl::toPercentEncoding(m_mediaPassword)));
+
+    return QStringLiteral("rtsp://%1%2:%3/%4")
+        .arg(credentials, m_mediaHost)
+        .arg(m_mediaPort)
+        .arg(path);
+}
+
+QString ApiClient::snapshotUrl(const QString &cameraId) const
+{
+    if (cameraId.isEmpty() || m_serverUrl.isEmpty()) {
+        return QString();
+    }
+
+    // Токен в адресе, а не в заголовке: элемент Image в QML не умеет
+    // добавлять заголовки к запросу картинки.
+    return QStringLiteral("%1/api/v1/cameras/%2/snapshot?jwt=%3")
+        .arg(m_serverUrl, cameraId, m_token);
+}

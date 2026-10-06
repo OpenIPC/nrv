@@ -1,0 +1,40 @@
+# Проверка сборки клиента в контейнере.
+#
+# Нужен потому, что Qt 6 и GStreamer есть не на каждой машине разработки,
+# а сам клиент собирается и под Linux, и под Windows. Здесь проверяется
+# компиляция; запуск с окном возможен только на машине с графической
+# сессией.
+FROM debian:12
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        ninja-build \
+        pkg-config \
+        qt6-base-dev \
+        qt6-declarative-dev \
+        qt6-multimedia-dev \
+        qt6-tools-dev \
+        libgstreamer1.0-dev \
+        libgstreamer-plugins-base1.0-dev \
+        qml6-module-qtquick \
+        qml6-module-qtquick-controls \
+        qml6-module-qtquick-layouts \
+        qml6-module-qtquick-templates \
+        qml6-module-qtquick-window \
+        qml6-module-qtqml-workerscript \
+        qml6-module-qtqml-models \
+        qml6-module-qtmultimedia \
+        gstreamer1.0-tools \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        gstreamer1.0-plugins-bad \
+        gstreamer1.0-libav \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . /src
+
+# Сборка в два ядра: больше в контейнере не нужно, а память экономит.
+RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build -j2

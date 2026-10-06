@@ -1,0 +1,95 @@
+name: Сборка нативного клиента (Windows)
+
+# Windows собираем в облаке, а не на рабочей машине: инструменты для
+# Windows-сборки Qt приложения весят около гигабайта, и держать их на
+# каждой машине разработки незачем.
+#
+# Сборка запускается только при изменениях в клиенте. Веб-интерфейс сюда
+# не входит: клиент показывает страницы, которые отдаёт сервер.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/**'
+      - '.github/workflows/client-windows.yml'
+  # Ручной запуск — нужен, когда надо собрать версию без правок кода.
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Собрать nvr-wall.exe
+    runs-on: windows-latest
+
+    env:
+      # Версию GStreamer держим здесь: её же использует скрипт установки.
+      # Ветка 1.26 выбрана потому, что для неё ещё выкладывают установщики
+      # MSI: начиная с 1.28 development-пакет собирают только как .exe,
+      # и распаковать его в CI сложнее.
+      GSTREAMER_VERSION: '1.26.5'
+      GSTREAMER_ROOT: 'C:\gstreamer\1.0\msvc_x86_64'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.2'
+          # Без этого модуля нет VideoOutput и QtMultimedia.
+          modules: 'qtmultimedia'
+          cache: true
+
+      - name: Установить GStreamer
+        shell: pwsh
+        run: |
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GSTREAMER_VERSION/msvc"
+          $runtime = "gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.msi"
+          $devel = "gstreamer-1.0-devel-msvc-x86_64-$env:GSTREAMER_VERSION.msi"
+
+          foreach ($file in @($runtime, $devel)) {
+            Write-Host "Скачиваю $file"
+            Invoke-WebRequest "$base/$file" -OutFile $file
+            # Тихая установка: в CI нет интерактивного рабочего стола.
+            Start-Process msiexec.exe -ArgumentList "/i", $file, "/quiet", "/norestart" -Wait
+          }
+
+          if (-not (Test-Path "$env:GSTREAMER_ROOT\lib\gstreamer-1.0.lib")) {
+            throw "GStreamer не установился в $env:GSTREAMER_ROOT"
+          }
+
+      - name: Собрать
+        shell: pwsh
+        run: |
+          cmake -S client -B client/build -G "Visual Studio 17 2022" -A x64 `
+                -DCMAKE_BUILD_TYPE=Release `
+                -DGSTREAMER_ROOT="$env:GSTREAMER_ROOT"
+          cmake --build client/build --config Release
+
+      - name: Собрать поставку
+        shell: pwsh
+        run: |
+          pwsh -File client/deploy/windows/deploy.ps1 `
+               -BuildDir client/build/Release `
+               -GStreamerRoot "$env:GSTREAMER_ROOT"
+
+      - name: Проверить, что клиент запускается
+        shell: pwsh
+        run: |
+          # Запускаем без графической сессии: окно не откроется, но
+          # приложение должно дойти до загрузки интерфейса и не упасть
+          # сразу. Падение здесь означает проблему с библиотеками или
+          # плагинами, и лучше узнать об этом на сборке.
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $process = Start-Process client/build/dist/nvr-wall.exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($process.HasExited) {
+            throw "Клиент завершился сразу после запуска (код $($process.ExitCode))"
+          }
+          $process.Kill()
+
+      - name: Выложить архив
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvr-wall-win64
+          path: client/build/dist
+          retention-days: 30
