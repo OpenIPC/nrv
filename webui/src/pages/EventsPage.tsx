@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { camerasAPI, eventsAPI, DetectionEvent, TriggerType } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { AlertTriangle, Car, User, Dog, Package, Eye, X, Download } from 'lucide-react'
+import { authToken } from '../host/hostBridge'
 
 const classIcons: Record<string, any> = {
   person: User,
@@ -59,7 +60,7 @@ function hasSnapshot(ev: DetectionEvent): boolean {
 
 /** URL снимка события. Токен в query: <img> не передаёт заголовок Authorization. */
 function snapshotSrc(eventId: string): string {
-  const token = localStorage.getItem('token')
+  const token = authToken()
   return `/api/v1/events/${eventId}/snapshot${token ? `?jwt=${encodeURIComponent(token)}` : ''}`
 }
 

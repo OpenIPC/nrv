@@ -10,6 +10,11 @@ interface Props {
   /** Умеет ли камера принимать звук. Ложь — показываем пояснение. */
   backchannel: boolean
   speakerEnabled: boolean
+  /**
+   * Команда от оболочки настольного приложения: true — начать разговор,
+   * false — закончить. В браузере не передаётся вовсе.
+   */
+  talkWanted?: boolean
 }
 
 /**
@@ -21,7 +26,7 @@ interface Props {
  * что WebSocket для звука требует отдельного протокола, а порции по
  * ~100 мс дают приемлемую задержку и работают через обычный HTTP.
  */
-export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Props) {
+export default function TalkPanel({ cameraId, backchannel, speakerEnabled, talkWanted }: Props) {
   const toast = useToast()
   const { t } = useTranslation()
   const { can } = usePermissions()
@@ -174,6 +179,26 @@ export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Pro
     setTalking(false)
     toast.success(t('talkPanel.finished'))
   }
+
+  // Кнопка «Разговор» в заголовке окна настольного приложения переключает
+  // связь снаружи страницы. Реагируем на смену команды, а не на нажатие:
+  // страница может быть открыта после того, как кнопку уже нажали.
+  useEffect(() => {
+    if (talkWanted === undefined) return
+
+    if (talkWanted && backchannel && speakerEnabled && !talking && !starting) {
+      void start()
+      return
+    }
+
+    if (!talkWanted && talking) {
+      void stop()
+    }
+    // start и stop объявлены в этом же компоненте и пересоздаются при
+    // каждой отрисовке: в зависимостях держим только команду и состояние
+    // разговора, иначе эффект зациклился бы.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [talkWanted, talking, starting, backchannel, speakerEnabled])
 
   // Камера не умеет принимать звук — показываем пояснение вместо кнопки,
   // чтобы оператор не искал несуществующую функцию.

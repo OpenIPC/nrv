@@ -7,6 +7,7 @@ import { useToast } from '../context/ToastContext'
 import { usePermissions } from '../context/PermissionsContext'
 import VendorBadge from '../components/VendorBadge'
 import { Plus, Trash2, RefreshCw, Eye, Radio, Wifi, WifiOff, Activity, AlertTriangle } from 'lucide-react'
+import { authToken } from '../host/hostBridge'
 
 // Цвет и подпись для уровня здоровья камеры. Один источник правды, чтобы
 // карточка и подсказка не расходились.
@@ -489,7 +490,7 @@ function CameraThumb({ id, name }: { id: string; name: string }) {
   const slotTimer = useRef<number | null>(null)
 
   const buildSrc = () => {
-    const token = localStorage.getItem('token')
+    const token = authToken()
     const params = new URLSearchParams({ w: String(THUMB_WIDTH), t: String(Date.now()) })
     if (token) params.set('jwt', token)
     return `/api/v1/cameras/${id}/preview?${params.toString()}`

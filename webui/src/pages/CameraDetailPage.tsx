@@ -5,6 +5,7 @@ import { camerasAPI, logsAPI, majesticAPI, eventsAPI, type Camera, type Detectio
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
 import { usePermissions } from '../context/PermissionsContext'
+import { authToken, onHostToggleTalk } from '../host/hostBridge'
 import LivePlayer from '../components/LivePlayer'
 import EditCameraModal from '../components/EditCameraModal'
 import PTZPanel from '../components/PTZPanel'
@@ -37,7 +38,7 @@ const HLS_OVERLAY_LAG_SECONDS = 4
 
 /** URL снимка события. Токен в query: <img> не передаёт заголовок Authorization. */
 function eventSnapshotSrc(eventId: string): string {
-  const token = localStorage.getItem('token')
+  const token = authToken()
   return `/api/v1/events/${eventId}/snapshot${token ? `?jwt=${encodeURIComponent(token)}` : ''}`
 }
 
@@ -49,6 +50,21 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
   // разные права, и у диспетчера из них есть только просмотр.
   const { can } = usePermissions()
   const [tab, setTab] = useState<'live' | 'events' | 'detection' | 'audio' | 'settings' | 'advanced'>('live')
+  // Команда разговора от оболочки настольного приложения. undefined —
+  // обычный браузер, где панель разговора живёт сама по себе.
+  const [talkWanted, setTalkWanted] = useState<boolean | undefined>(undefined)
+
+  // Кнопка «Разговор» в заголовке окна приложения переключает панель
+  // разговора. Заодно открываем вкладку «Звук»: панель живёт там, и без
+  // этого разговор включался бы невидимо для оператора.
+  useEffect(() => {
+    return onHostToggleTalk((active) => {
+      setTalkWanted(active)
+      if (active) {
+        setTab('audio')
+      }
+    })
+  }, [])
   const [streamInfo, setStreamInfo] = useState<StreamInfo | null>(null)
   const [showEdit, setShowEdit] = useState(false)
   // Какой поток показываем в плеере: основной или дополнительный.
@@ -72,7 +88,7 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
 
   // Снапшот для рисования линии детекции. Токен в query, т.к. <img>
   // не умеет передавать заголовок Authorization (как в списке камер).
-  const snapshotToken = localStorage.getItem('token')
+  const snapshotToken = authToken()
   const snapshotUrl = id
     ? `/api/v1/cameras/${id}/snapshot${snapshotToken ? `?jwt=${encodeURIComponent(snapshotToken)}` : ''}`
     : undefined
@@ -601,7 +617,9 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
               </div>
             )}
 
-            {tab === 'audio' && <AudioSettingsPanel cameraId={camera.id} />}
+            {tab === 'audio' && (
+              <AudioSettingsPanel cameraId={camera.id} talkWanted={talkWanted} />
+            )}
 
             {tab === 'settings' && <CameraSettingsPanel cameraId={camera.id} />}
 

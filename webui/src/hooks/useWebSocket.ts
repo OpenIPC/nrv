@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { authToken } from '../host/hostBridge'
 
 export type WSMessage = {
   type: string
@@ -17,7 +18,7 @@ export function useWebSocket(url: string | null) {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
 
     // Добавляем JWT-токен
-    const token = localStorage.getItem('token')
+    const token = authToken()
     const wsUrl = url.includes('?') ? `${url}&token=${token}` : `${url}?token=${token}`
 
     const ws = new WebSocket(wsUrl)

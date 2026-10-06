@@ -7,6 +7,11 @@ import { Volume2, VolumeX, Mic, MicOff, Loader2, Activity, Save } from 'lucide-r
 
 interface Props {
   cameraId: string
+  /**
+   * Команда от оболочки настольного приложения: true — включить разговор,
+   * false — выключить. undefined означает обычный браузер.
+   */
+  talkWanted?: boolean
 }
 
 /**
@@ -16,7 +21,7 @@ interface Props {
  * перекодирование) и позволяет включить/выключить звук, задать громкость
  * и подготовить детекцию звуковых событий.
  */
-export default function AudioSettingsPanel({ cameraId }: Props) {
+export default function AudioSettingsPanel({ cameraId, talkWanted }: Props) {
   const toast = useToast()
   const { t } = useTranslation()
   const [settings, setSettings] = useState<AudioSettings | null>(null)
@@ -245,6 +250,7 @@ export default function AudioSettingsPanel({ cameraId }: Props) {
             cameraId={cameraId}
             backchannel={!!status?.backchannel}
             speakerEnabled={settings.speaker_enabled}
+            talkWanted={talkWanted}
           />
         </div>
       )}

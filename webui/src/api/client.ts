@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { authToken, isHostedInDesktop, notifyHostLogout } from '../host/hostBridge'
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -7,7 +8,7 @@ const api = axios.create({
 
 // Интерсептор для JWT
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token')
+  const token = authToken()
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -19,6 +20,12 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
+      // Оболочку просим забыть токен. Иначе она прислала бы тот же
+      // протухший токен снова после перехода на страницу входа, и
+      // получился бы бесконечный круг «вход — отказ — вход».
+      if (isHostedInDesktop()) {
+        notifyHostLogout()
+      }
       window.location.href = '/login'
     }
     return Promise.reject(error)
@@ -1695,7 +1702,7 @@ export const recordingsAPI = {
    */
   fileUrl: (filePath: string, opts?: { download?: boolean; name?: string }) => {
     const params = new URLSearchParams({ path: filePath })
-    const token = localStorage.getItem('token')
+    const token = authToken()
     if (token) params.set('token', token)
     if (opts?.download) params.set('download', '1')
     if (opts?.name) params.set('name', opts.name)
@@ -1964,7 +1971,7 @@ export const acsAPI = {
   // Адрес подложки для тега img. Токен передаём в строке запроса: тег img
   // не умеет слать заголовки, а отдавать схему этажа без авторизации нельзя.
   planImageURL: (id: string) => {
-    const token = localStorage.getItem('token')
+    const token = authToken()
     return `/api/v1/acs/plans/${id}/image?token=${token}`
   },
 
@@ -1994,7 +2001,7 @@ export const acsAPI = {
   // Прямая ссылка на снимок: показывается в теге img, поэтому токен
   // передаётся параметром, а не заголовком.
   holderPhotoURL: (id: string) => {
-    const token = localStorage.getItem('token')
+    const token = authToken()
     return `/api/v1/acs/holders/${id}/photo?token=${token}`
   },
 

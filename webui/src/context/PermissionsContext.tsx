@@ -7,6 +7,7 @@ import {
   useState,
 } from 'react'
 import { meAPI, type CurrentUser } from '../api/client'
+import { authToken } from '../host/hostBridge'
 
 /**
  * Права текущего пользователя.
@@ -35,7 +36,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
   const [ready, setReady] = useState(false)
 
   const refresh = useCallback(async () => {
-    const token = localStorage.getItem('token')
+    const token = authToken()
     if (!token) {
       setUser(null)
       setReady(true)

@@ -8,6 +8,7 @@ import { EditControllerModal } from '../components/EditControllerModal'
 import { FirmwareModal } from '../components/FirmwareModal'
 import Z5RModePanel from '../components/Z5RModePanel'
 import { usePermissions } from '../context/PermissionsContext'
+import { authToken } from '../host/hostBridge'
 
 /**
  * Названия производителей для показа.
@@ -363,12 +364,12 @@ export default function ACSPage() {
                         <td style={{ width: 70 }}>
                           {ev.media_type === 'snapshot' && (
                             <a
-                              href={`/api/v1/acs/events/${ev.id}/snapshot?jwt=${localStorage.getItem('token') || ''}`}
+                              href={`/api/v1/acs/events/${ev.id}/snapshot?jwt=${authToken() || ''}`}
                               target="_blank"
                               rel="noreferrer"
                             >
                               <img
-                                src={`/api/v1/acs/events/${ev.id}/snapshot?jwt=${localStorage.getItem('token') || ''}`}
+                                src={`/api/v1/acs/events/${ev.id}/snapshot?jwt=${authToken() || ''}`}
                                 alt={t('acsPage.snapshotAlt')}
                                 style={{ width: 56, height: 42, objectFit: 'cover', borderRadius: 4 }}
                               />

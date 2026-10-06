@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AxiosResponse } from 'axios'
+import {
+  getHostToken,
+  isHostedInDesktop,
+  notifyHostLogout,
+  onHostToken,
+} from '../host/hostBridge'
 
 export function useAsync<T>(
   fn: () => Promise<AxiosResponse<T>>,
@@ -28,14 +34,32 @@ export function useAsync<T>(
 }
 
 export function useAuth() {
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'))
+  // В настольном приложении токен приходит от оболочки и живёт только в
+  // памяти: он уже хранится зашифрованным средствами Windows. В обычном
+  // браузере — как раньше, в localStorage.
+  const [token, setToken] = useState<string | null>(() =>
+    isHostedInDesktop() ? getHostToken() : localStorage.getItem('token')
+  )
+
+  useEffect(() => {
+    if (!isHostedInDesktop()) return
+    // Оболочка может прислать токен чуть позже первого кадра.
+    return onHostToken(setToken)
+  }, [])
 
   const login = (t: string) => {
-    localStorage.setItem('token', t)
+    if (!isHostedInDesktop()) {
+      localStorage.setItem('token', t)
+    }
     setToken(t)
   }
 
   const logout = () => {
+    // Оболочку просим забыть токен: иначе она пришлёт его снова при
+    // следующей загрузке страницы, и выход не состоится.
+    if (isHostedInDesktop()) {
+      notifyHostLogout()
+    }
     localStorage.removeItem('token')
     setToken(null)
     window.location.href = '/login'

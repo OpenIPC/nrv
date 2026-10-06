@@ -79,6 +79,12 @@ public partial class CameraWindow : Window
             SetupPermissions();
             SetupTokenForwarding();
 
+            // Токен вкладываем в окно страницы до загрузки: иначе первый
+            // кадр успел бы увидеть пустое хранилище, увести оператора на
+            // страницу входа — и она мигнула бы формой перед появлением
+            // картинки с камеры.
+            await InjectTokenScriptAsync();
+
             // Переходим на страницу камеры. Токен в адресе не передаём:
             // он попал бы в журналы и в историю. Вместо этого страница
             // получает его отдельным сообщением (см. ниже).
@@ -172,9 +178,12 @@ public partial class CameraWindow : Window
             }
             else if (type == "clear-token")
             {
-                // Страница сообщает о выходе — стираем сохранённый токен,
-                // чтобы при следующем запуске не восстанавливать сессию.
+                // Страница сообщает о выходе. Стираем сохранённый токен и
+                // забываем его в памяти: иначе при следующей загрузке
+                // страницы мы вернули бы его обратно, и выход не состоялся
+                // бы — оператор снова оказался бы в системе.
                 new TokenStore().Clear();
+                _api.UseToken("");
             }
         };
 
@@ -226,13 +235,35 @@ public partial class CameraWindow : Window
         }
     }
 
+    /// <summary>
+    /// Вкладывает токен и адрес сервера в окно страницы.
+    ///
+    /// Скрипт выполняется до загрузки документа, поэтому страница читает
+    /// токен синхронно при первом же рендере и не показывает форму входа.
+    /// Значения подставляем через сериализатор, а не склейкой строк: в
+    /// токене и адресе встречаются кавычки и обратные слэши, от которых
+    /// склеенный скрипт сломался бы.
+    /// </summary>
+    private async Task InjectTokenScriptAsync()
+    {
+        if (View.CoreWebView2 is null)
+        {
+            return;
+        }
+
+        var token = JsonSerializer.Serialize(_api.Token ?? string.Empty);
+        var server = JsonSerializer.Serialize(_api.BaseUrl ?? string.Empty);
+
+        await View.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
+            $"window.__nvrHostToken = {token}; window.__nvrHostServer = {server};");
+    }
+
     private void SendToken()
     {
         if (View.CoreWebView2 is null || string.IsNullOrEmpty(_api.Token))
         {
             return;
         }
-
         // Передаём через сообщение, а не через адрес страницы: адрес
         // попадает в журналы сервера и в историю переходов.
         var payload = JsonSerializer.Serialize(new
