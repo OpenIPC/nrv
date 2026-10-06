@@ -11,25 +11,13 @@ import Nvr 1.0
 Item {
     id: wall
 
-    // 4×4 — шестнадцать субпотоков на монитор. Субпоток, а не основной:
-    // 16 потоков 1080p не поднять даже с аппаратным декодированием.
-    property int columns: 4
-    property int rows: 4
+    // Раскладка и назначения живут в профиле (WallProfile): стена должна
+    // восстанавливаться при следующем запуске — дежурный собирает её под
+    // свою смену, и терять эту работу нельзя.
+    readonly property int columns: Wall.columns
+    readonly property int rows: Wall.rows
 
-    // Назначения ячеек: индекс ячейки → идентификатор камеры.
-    // Храним как объект, чтобы менять его целиком и тем самым обновлять
-    // привязки в ячейках (QML не следит за изменениями полей объекта).
-    property var assignments: ({})
     property int selectedCell: -1
-
-    function assign(cellIndex, cameraId) {
-        if (cellIndex < 0) {
-            return
-        }
-        var next = Object.assign({}, wall.assignments)
-        next[cellIndex] = cameraId
-        wall.assignments = next
-    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -53,6 +41,21 @@ Item {
                           : qsTr("Нажмите ячейку, затем камеру в списке")
                     color: "#666"
                     Layout.fillWidth: true
+                }
+
+                // Раскладка: 2×2 для слабых машин и для работы с крупными
+                // картинками, 4×4 — шестнадцать камер разом.
+                Repeater {
+                    model: [[2, 2], [3, 3], [4, 4]]
+                    delegate: Button {
+                        text: modelData[0] + "×" + modelData[1]
+                        checkable: true
+                        checked: Wall.columns === modelData[0] && Wall.rows === modelData[1]
+                        onClicked: {
+                            Wall.columns = modelData[0]
+                            Wall.rows = modelData[1]
+                        }
+                    }
                 }
 
                 Button {
@@ -89,7 +92,7 @@ Item {
                         text: modelData.name && modelData.name.length > 0
                               ? modelData.name
                               : modelData.ip
-                        onClicked: wall.assign(wall.selectedCell, modelData.id)
+                        onClicked: Wall.assign(wall.selectedCell, modelData.id)
                     }
 
                     Label {
@@ -116,11 +119,11 @@ Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         cellIndex: index
-                        cameraId: wall.assignments[index] || ""
+                        cameraId: Wall.assignments[index] || ""
                         selected: wall.selectedCell === index
                         onSelected: wall.selectedCell = (wall.selectedCell === index ? -1 : index)
                         onCleared: {
-                            wall.assign(index, "")
+                            Wall.clear(index)
                             if (wall.selectedCell === index) {
                                 wall.selectedCell = -1
                             }

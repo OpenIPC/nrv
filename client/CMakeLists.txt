@@ -64,6 +64,7 @@ qt_add_executable(nvr-wall
     src/api/ApiClient.cpp
     src/video/StreamPlayer.cpp
     src/video/VideoItem.cpp
+    src/wall/WallProfile.cpp
 )
 
 # Пометка для кода: по ней приложение выставит пути к плагинам рядом

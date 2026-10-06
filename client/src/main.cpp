@@ -15,6 +15,7 @@
 #include "api/ApiClient.h"
 #include "video/StreamPlayer.h"
 #include "video/VideoItem.h"
+#include "wall/WallProfile.h"
 
 namespace {
 
@@ -163,6 +164,11 @@ int main(int argc, char *argv[])
     // токен и список камер общие для окна входа и стены.
     ApiClient api;
     qmlRegisterSingletonInstance("Nvr", 1, 0, "Api", &api);
+
+    // Раскладка стены — один объект на приложение: её читает окно стены,
+    // а сохраняется она в настройках рабочего места (см. WallProfile).
+    WallProfile wall;
+    qmlRegisterSingletonInstance("Nvr", 1, 0, "Wall", &wall);
 
     // Проигрыватель создаётся по одному на ячейку стены.
     qmlRegisterType<StreamPlayer>("Nvr", 1, 0, "StreamPlayer");
