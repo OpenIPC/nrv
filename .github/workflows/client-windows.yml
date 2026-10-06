@@ -25,8 +25,10 @@ jobs:
       # Ветка 1.26 выбрана потому, что для неё ещё выкладывают установщики
       # MSI: начиная с 1.28 development-пакет собирают только как .exe,
       # и распаковать его в CI сложнее.
+      #
+      # Каталог установки (GSTREAMER_ROOT) не задаём: его определяет сам
+      # установщик, а шаг установки передаёт найденный путь дальше.
       GSTREAMER_VERSION: '1.26.5'
-      GSTREAMER_ROOT: 'C:\gstreamer\1.0\msvc_x86_64'
 
     steps:
       - uses: actions/checkout@v4
@@ -48,14 +50,46 @@ jobs:
 
           foreach ($file in @($runtime, $devel)) {
             Write-Host "Скачиваю $file"
-            Invoke-WebRequest "$base/$file" -OutFile $file
-            # Тихая установка: в CI нет интерактивного рабочего стола.
-            Start-Process msiexec.exe -ArgumentList "/i", $file, "/quiet", "/norestart" -Wait
+
+            # Путь должен быть абсолютным: msiexec ищет файл-пакет относительно
+            # system32 и на относительный путь отвечает «пакет не найден».
+            $msi = Join-Path $env:RUNNER_TEMP $file
+            Invoke-WebRequest "$base/$file" -OutFile $msi
+
+            $log = "$msi.log"
+            $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+              "/i", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`""
+            )
+
+            if ($process.ExitCode -ne 0) {
+              # Показываем хвост журнала установщика: без него причина
+              # остаётся загадкой, а сборка уже упала и не перезапускается.
+              Write-Host "--- журнал установки $file ---"
+              Get-Content $log -Tail 40 -ErrorAction SilentlyContinue
+              throw "Установка $file завершилась с кодом $($process.ExitCode)"
+            }
           }
 
-          if (-not (Test-Path "$env:GSTREAMER_ROOT\lib\gstreamer-1.0.lib")) {
-            throw "GStreamer не установился в $env:GSTREAMER_ROOT"
+          # Путь не угадываем, а ищем по факту: установщик сам выбирает
+          # каталог (обычно C:\gstreamer\1.0\msvc_x86_64), и от версии к
+          # версии это может меняться.
+          $lib = Get-ChildItem C:\gstreamer -Recurse -Filter gstreamer-1.0.lib -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $lib) {
+            throw "После установки GStreamer не найден gstreamer-1.0.lib в C:\gstreamer"
           }
+
+          # Каталог библиотек — родитель папки lib. В CMake путь пишем
+          # с прямыми слэшами: обратный слэш в нём — escape-символ.
+          $root = (Split-Path -Parent (Split-Path -Parent $lib.FullName)) -replace '\\', '/'
+          Write-Host "GSTREAMER_ROOT=$root"
+
+          # Передаём в последующие шаги через окружение запуска.
+          "GSTREAMER_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          # Заодно печатаем версию: она попадает в отчёт сборки и помогает
+          # понять, что именно собралось, когда что-то ведёт себя странно.
+          & "$root/bin/gst-inspect-1.0.exe" --version
 
       - name: Собрать
         shell: pwsh
