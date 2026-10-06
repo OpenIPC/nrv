@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/nvr/backend/internal/domain"
+	"github.com/nvr/backend/internal/live"
 	"github.com/rs/zerolog/log"
 )
 
@@ -62,6 +63,10 @@ type DetectionSubscriber struct {
 	recognize RecognitionMatcher
 	notifier  Notifier
 	webhooks  WebhookDispatcher
+	// live — поток событий для клиентов (тревоги на стене, всплывающие
+	// карточки). Отдельно от webhooks: там получатель — чужая программа,
+	// здесь — рабочие места операторов.
+	live LiveBroadcaster
 }
 
 // Notifier отправляет уведомления о событиях во внешние каналы.
@@ -174,6 +179,23 @@ func (s *DetectionSubscriber) WithWebhooks(d WebhookDispatcher) *DetectionSubscr
 	return s
 }
 
+// LiveBroadcaster — шина событий для клиентов реального времени
+// (настольный клиент, веб-интерфейс, мобильное приложение).
+//
+// Интерфейс, а не конкретный хаб: подписчик не должен зависеть от способа
+// доставки, а в тестах шину можно заменить записью в память.
+type LiveBroadcaster interface {
+	// Publish отправляет событие клиентам. Вызов не блокирующий:
+	// медленный клиент не должен задерживать обработку детекций.
+	Publish(ev live.Event)
+}
+
+// WithLive подключает поток событий для клиентов.
+func (s *DetectionSubscriber) WithLive(b LiveBroadcaster) *DetectionSubscriber {
+	s.live = b
+	return s
+}
+
 func (s *DetectionSubscriber) Start(ctx context.Context) error {
 	// Подписываемся на все детекции со всех камер
 	_, err := s.nc.Subscribe("cameras.*.detection", func(msg *nats.Msg) {
@@ -264,6 +286,20 @@ func (s *DetectionSubscriber) saveAudioEvent(ctx context.Context, ev *AudioEvent
 
 	// Звуковые события тоже уведомляют: крик или выстрел ночью оператор
 	// должен узнать сразу, а не при разборе архива.
+	if s.live != nil {
+		// Поток событий: классификатор звука не даёт снимка, поэтому
+		// карточка тревоги покажет только класс и уверенность.
+		s.live.Publish(live.Event{
+			Type:          "audio",
+			Time:          eventTime,
+			CameraID:      cameraID.String(),
+			CameraName:    s.cameraName(ctx, cameraID),
+			ObjectClass:   ev.EventClass,
+			Confidence:    float64(ev.Confidence),
+			TriggerType:   "audio",
+			TriggerDetail: ev.EventClass,
+		})
+	}
 	if s.notifier != nil {
 		s.notifier.NotifyEvent(ctx, NotificationEvent{
 			Type:       "audio",
@@ -346,13 +382,18 @@ func (s *DetectionSubscriber) saveEvent(ctx context.Context, ev *DetectionEvent)
 		go s.recorder.HandleEvent(context.Background(), cameraID, eventTime, trigger, detail)
 	}
 
+	// Имя камеры нужно двум получателям — вебхуку и потоку событий для
+	// клиентов. Запрашиваем один раз: это обращение к базе на каждое
+	// событие, а детекций при движении бывает много.
+	cameraName := s.cameraName(ctx, cameraID)
+
 	// Уведомление о событии. Снимок передаём уже декодированным: для
 	// уведомления нужны байты JPEG, а не путь в хранилище.
 	if s.notifier != nil {
 		s.notifier.NotifyEvent(context.Background(), NotificationEvent{
 			Type:       string(trigger),
 			CameraID:   cameraID,
-			CameraName: s.cameraName(ctx, cameraID),
+			CameraName: cameraName,
 			Detail:     detail,
 			Class:      ev.ObjectClass,
 			Confidence: ev.Confidence,
@@ -361,21 +402,40 @@ func (s *DetectionSubscriber) saveEvent(ctx context.Context, ev *DetectionEvent)
 		})
 	}
 
+	// Снимок и его адрес нужны и вебхуку, и потоку событий.
+	snapshotURL := ""
+	if snapshotPath != "" {
+		snapshotURL = "/api/v1/events/" + eventID.String() + "/snapshot"
+	}
+
+	// Событие операторам — сразу после сохранения: тревога должна появиться
+	// на стене в тот же момент, когда о ней можно спросить архив.
+	if s.live != nil {
+		s.live.Publish(live.Event{
+			Type:          "detection",
+			Time:          eventTime,
+			EventID:       eventID.String(),
+			CameraID:      cameraID.String(),
+			CameraName:    cameraName,
+			ObjectClass:   ev.ObjectClass,
+			Confidence:    ev.Confidence,
+			TriggerType:   string(trigger),
+			TriggerDetail: detail,
+			MatchedName:   match.Name,
+			SnapshotURL:   snapshotURL,
+		})
+	}
+
 	// Рассылка внешним подписчикам — сразу после сохранения, а не вместе
 	// с уведомлением: умный дом ждёт событие мгновенно, и задерживать его
 	// сборкой клипа или отправкой в мессенджер нельзя. Имя камеры берём
 	// уже полученным — это лишний запрос к базе на каждое событие.
 	if s.webhooks != nil {
-		snapshotURL := ""
-		if snapshotPath != "" {
-			snapshotURL = "/api/v1/events/" + eventID.String() + "/snapshot"
-		}
-
 		s.webhooks.Dispatch(context.Background(), WebhookEvent{
 			Type:          "detection",
 			ID:            eventID,
 			CameraID:      cameraID,
-			CameraName:    s.cameraName(ctx, cameraID),
+			CameraName:    cameraName,
 			ObjectClass:   ev.ObjectClass,
 			Confidence:    ev.Confidence,
 			Time:          eventTime,

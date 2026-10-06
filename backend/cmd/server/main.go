@@ -15,6 +15,7 @@ import (
 	"github.com/nvr/backend/internal/config"
 	"github.com/nvr/backend/internal/domain"
 	"github.com/nvr/backend/internal/hostagent"
+	"github.com/nvr/backend/internal/live"
 	"github.com/nvr/backend/internal/monitor"
 	natspkg "github.com/nvr/backend/internal/nats"
 	"github.com/nvr/backend/internal/notify"
@@ -122,6 +123,13 @@ func main() {
 			log.Warn().Err(err).Str("iface", cfg.WGInterface).Msg("wireguard manager init failed, continuing without")
 		}
 	}
+
+	// Шина событий реального времени: тревоги для рабочих мест.
+	//
+	// Создаётся до источников: в неё публикуют и подписчик детекций,
+	// и приём событий СКУД, и она же передаётся в роутер для потока.
+	// Источники не знают, кто слушает, а клиенты — откуда пришло событие.
+	liveHub := live.NewHub()
 
 	// NATS Detection Subscriber (сохраняет AI детекции в БД)
 	// Объявлен заранее: хранилище снимков появится после инициализации MinIO.
@@ -280,6 +288,9 @@ func main() {
 		detSubscriber.WithRecording(recordingMgr)
 		detSubscriber.WithNotifier(notifierAdapter{svc: notifier})
 		detSubscriber.WithWebhooks(webhookSvc)
+		// Тревога должна появиться на стене в момент события, а не при
+		// следующем обновлении страницы.
+		detSubscriber.WithLive(liveHub)
 	}
 
 	// Съёмка по событиям доступа: подключаем камеры, хранилище и запись.
@@ -469,6 +480,7 @@ func main() {
 		ACSAccessSvc:       acsAccessSvc,
 		CardCapture:        cardCapture,
 		ACSPlanSvc:         acsPlanSvc,
+		LiveHub:            liveHub,
 		SwitchSvc:          switchSvc,
 		CameraAPISvc:       cameraAPISvc,
 		FirmwareSvc:        firmwareSvc,

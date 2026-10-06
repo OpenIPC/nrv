@@ -13,6 +13,7 @@ import (
 	"github.com/nvr/backend/internal/api/handlers"
 	mw "github.com/nvr/backend/internal/api/middleware"
 	"github.com/nvr/backend/internal/hostagent"
+	"github.com/nvr/backend/internal/live"
 	"github.com/nvr/backend/internal/notify"
 	miniorepo "github.com/nvr/backend/internal/repository/minio"
 	"github.com/nvr/backend/internal/repository/postgres"
@@ -33,6 +34,11 @@ type RouterConfig struct {
 	CardCapture *service.CardCaptureManager
 	// ACSPlanSvc — планы помещений: схемы этажей с расстановкой устройств.
 	ACSPlanSvc *service.ACSPlanService
+	// LiveHub — шина событий реального времени (тревоги для клиентов).
+	//
+	// Передаётся сюда, а не создаётся внутри: в неё публикуют события
+	// источники вне роутера — подписчик детекций, служба здоровья камер.
+	LiveHub *live.Hub
 	// SwitchSvc — PoE-коммутаторы: питание портов и мониторинг.
 	//
 	// Отдельный сервис, а не часть камер: коммутатор живёт сам по себе
@@ -135,7 +141,6 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	ptzH := handlers.NewPTZHandler(cfg.CameraSvc)
 	docsH := handlers.NewAPIDocHandler()
 	eventH := handlers.NewEventHandler(cfg.EventSvc)
-	acsH := handlers.NewACSHandler(cfg.ACSSvc)
 	// Подсистема доступа: владельцы карт, группы и двери.
 	// Отдельный обработчик, потому что это другая предметная область —
 	// люди и права, а не устройства и события.
@@ -144,6 +149,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// Планы помещений: схемы этажей. Отдельный обработчик, потому что
 	// предмет другой — не «кто куда может пройти», а «где это стоит».
 	acsPlanH := handlers.NewACSPlanHandler(cfg.ACSPlanSvc, tokenAuth)
+	acsH := handlers.NewACSHandler(cfg.ACSSvc).WithLive(cfg.LiveHub)
+	// Поток событий для клиентов: тревоги, проходы, состояние каналов.
+	// Отдельный обработчик, а не метод событий: у него другой транспорт
+	// (долгоживущий HTTP-ответ) и своя проверка токена.
+	liveH := handlers.NewLiveHandler(cfg.LiveHub, tokenAuth, userSvc)
 	// Коммутаторы: питание портов и мониторинг.
 	switchH := handlers.NewSwitchHandler(cfg.SwitchSvc)
 	// Доступ к камерам по их собственным протоколам.
@@ -228,6 +238,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		// Превью камеры: тоже тег <img>, поэтому вне JWT-группы,
 		// токен проверяется внутри обработчика из ?jwt=.
 		r.Get("/cameras/{id}/preview", camPreviewH.Get)
+
+		// Поток событий (SSE): тревоги, проходы и состояние каналов
+		// для настольного клиента, веб-интерфейса и мобильного приложения.
+		//
+		// Вне JWT-группы: EventSource в браузере не умеет передавать
+		// заголовок Authorization, поэтому токен приходит параметром,
+		// а право проверяет сам обработчик. Тот же приём, что у снимков.
+		r.Get("/events/stream", liveH.Stream)
 
 		// Снимок события детекции — тоже вне JWT-группы: показывается
 		// в теге <img> без возможности передать заголовок.

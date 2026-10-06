@@ -10,16 +10,27 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nvr/backend/internal/domain"
+	"github.com/nvr/backend/internal/live"
 	"github.com/nvr/backend/internal/service"
 	"github.com/rs/zerolog/log"
 )
 
 type ACSHandler struct {
 	svc *service.ACSService
+	// live — поток событий для клиентов. Необязателен: без него СКУД
+	// работает как раньше, просто проходы не появляются на стене.
+	live *live.Hub
 }
 
 func NewACSHandler(svc *service.ACSService) *ACSHandler {
 	return &ACSHandler{svc: svc}
+}
+
+// WithLive подключает поток событий: проход и отказ в доступе должны
+// появляться у оператора сразу, а не при следующем открытии журнала.
+func (h *ACSHandler) WithLive(hub *live.Hub) *ACSHandler {
+	h.live = hub
+	return h
 }
 
 func (h *ACSHandler) ListControllers(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +136,32 @@ func (h *ACSHandler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Событие сразу уходит операторам: открытие двери и отказ в доступе —
+	// именно то, ради чего дежурный держит стену открытой.
+	if h.live != nil {
+		granted := ev.EventType == "access_granted"
+		event := live.Event{
+			Type:          "access",
+			Time:          ev.Timestamp,
+			EventID:       ev.ID.String(),
+			DoorID:        ev.DoorID,
+			PersonName:    ev.CardName,
+			CardNumber:    ev.CardNumber,
+			AccessGranted: &granted,
+			Text:          ev.EventType,
+		}
+		if ev.CameraID != nil {
+			event.CameraID = ev.CameraID.String()
+		}
+		// Ссылку на снимок даём только когда он есть: пустой адрес
+		// заставлял бы клиент загружать заведомо отсутствующую картинку.
+		if ev.SnapshotPath != "" {
+			event.SnapshotURL = "/api/v1/acs/events/" + ev.ID.String() + "/snapshot"
+		}
+		h.live.Publish(event)
+	}
+
 	writeJSON(w, http.StatusCreated, ev)
 }
 
