@@ -42,7 +42,17 @@ if(WIN32)
         "${GSTREAMER_ROOT}/include/glib-2.0"
         "${GSTREAMER_ROOT}/lib/glib-2.0/include")
     set(GST_LIBRARY_DIRS "${GSTREAMER_ROOT}/lib")
-    set(GST_LIBRARIES gstreamer-1.0 gstapp-1.0 gstvideo-1.0)
+    # glib и gobject перечисляем явно: в Linux их подтягивает pkg-config как
+    # зависимости gstreamer, а MSVC-пакет этого не делает, и сборка падает
+    # на неразрешённых символах (g_free, g_signal_connect_data и прочих).
+    set(GST_LIBRARIES
+        gstreamer-1.0
+        gstapp-1.0
+        gstvideo-1.0
+        glib-2.0
+        gobject-2.0
+        gmodule-2.0
+        gthread-2.0)
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GST REQUIRED IMPORTED_TARGET
