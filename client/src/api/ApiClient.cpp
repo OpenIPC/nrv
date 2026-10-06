@@ -88,6 +88,7 @@ void ApiClient::loadProfile()
     if (!m_token.isEmpty()) {
         emit authenticatedChanged();
         loadCameras();
+        refreshPlans();
     }
 }
 
@@ -163,6 +164,7 @@ void ApiClient::login(const QString &server, const QString &user, const QString 
         emit authenticatedChanged();
         emit userChanged();
         refreshCameras();
+        refreshPlans();
     });
 }
 
@@ -176,6 +178,15 @@ void ApiClient::logout()
     m_mainUrls.clear();
     m_subUrls.clear();
 
+    // Раскладка стен остаётся, а вот чужие схемы этажей — нет: следующий
+    // пользователь входит со своими правами и своим списком планов.
+    m_plans.clear();
+    m_currentPlanId.clear();
+    m_currentPlanName.clear();
+    m_planPoints.clear();
+    m_planHasImage = false;
+    m_planError.clear();
+
     QSettings settings;
     settings.remove(QStringLiteral("auth/token"));
 
@@ -183,6 +194,8 @@ void ApiClient::logout()
     emit userChanged();
     emit camerasChanged();
     emit streamsChanged();
+    emit plansChanged();
+    emit planChanged();
 }
 
 void ApiClient::handleReply(QNetworkReply *reply, const std::function<void(const QJsonDocument &)> &done)
@@ -334,6 +347,138 @@ void ApiClient::prepareStream(const QString &cameraId)
     });
 }
 
+void ApiClient::setPlanBusy(bool value)
+{
+    if (m_planBusy == value) {
+        return;
+    }
+    m_planBusy = value;
+    emit planBusyChanged();
+}
+
+void ApiClient::refreshPlans()
+{
+    if (m_token.isEmpty()) {
+        return;
+    }
+
+    QNetworkRequest request(QUrl(m_serverUrl + QStringLiteral("/api/v1/acs/plans")));
+    request.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+
+    QNetworkReply *reply = m_net.get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            // Пустой список вместо ошибки: у учётной записи без права на
+            // планы запрос откажет, и это нормальная ситуация, а не сбой.
+            // Подробность уходит в журнал — по ней разбираются с правами.
+            qWarning("Не удалось получить список планов: %s", qPrintable(reply->errorString()));
+            m_plans.clear();
+            emit plansChanged();
+            return;
+        }
+
+        const QJsonArray list = QJsonDocument::fromJson(reply->readAll()).array();
+        m_plans.clear();
+        for (const QJsonValue &value : list) {
+            const QJsonObject plan = value.toObject();
+            QVariantMap item;
+            item.insert(QStringLiteral("id"), plan.value(QStringLiteral("id")).toString());
+            item.insert(QStringLiteral("name"), plan.value(QStringLiteral("name")).toString());
+            item.insert(QStringLiteral("description"),
+                        plan.value(QStringLiteral("description")).toString());
+            // Подложки может не быть: план заводят и до появления схемы.
+            // Признак нужен списку, чтобы помечать такие планы словами.
+            item.insert(QStringLiteral("hasImage"),
+                        !plan.value(QStringLiteral("image_path")).toString().isEmpty());
+            m_plans.append(item);
+        }
+        emit plansChanged();
+    });
+}
+
+void ApiClient::openPlan(const QString &planId)
+{
+    if (planId.isEmpty() || m_token.isEmpty()) {
+        return;
+    }
+
+    setPlanBusy(true);
+
+    QNetworkRequest request(QUrl(m_serverUrl
+        + QStringLiteral("/api/v1/acs/plans/") + planId));
+    request.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+
+    QNetworkReply *reply = m_net.get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, planId]() {
+        reply->deleteLater();
+        setPlanBusy(false);
+
+        if (reply->error() != QNetworkReply::NoError) {
+            // Текст ошибки читаем из тела: сервер отвечает причиной
+            // («план не найден», «требуется авторизация»), и она понятнее
+            // общего «сеть недоступна».
+            const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+            const QString serverError = doc.object().value(QStringLiteral("error")).toString();
+            m_planError = serverError.isEmpty() ? reply->errorString() : serverError;
+            m_currentPlanId = planId;
+            m_currentPlanName.clear();
+            m_planPoints.clear();
+            m_planHasImage = false;
+            emit planChanged();
+            return;
+        }
+
+        const QJsonObject plan = QJsonDocument::fromJson(reply->readAll()).object();
+
+        m_planError.clear();
+        m_currentPlanId = plan.value(QStringLiteral("id")).toString(planId);
+        m_currentPlanName = plan.value(QStringLiteral("name")).toString();
+        m_planHasImage = !plan.value(QStringLiteral("image_path")).toString().isEmpty();
+
+        m_planPoints.clear();
+        const QJsonArray points = plan.value(QStringLiteral("points")).toArray();
+        for (const QJsonValue &value : points) {
+            const QJsonObject point = value.toObject();
+            QVariantMap item;
+            item.insert(QStringLiteral("id"), point.value(QStringLiteral("id")).toString());
+            item.insert(QStringLiteral("kind"), point.value(QStringLiteral("kind")).toString());
+            // Идентификатор устройства — по нему метка камеры открывает
+            // поток. Пусто у точки, чьё устройство удалили: такую метку
+            // показываем серой и не даём нажать.
+            item.insert(QStringLiteral("deviceId"),
+                        point.value(QStringLiteral("device_id")).toString());
+            item.insert(QStringLiteral("deviceName"),
+                        point.value(QStringLiteral("device_name")).toString());
+            item.insert(QStringLiteral("label"), point.value(QStringLiteral("label")).toString());
+            // Координаты — доли от размера подложки (0..1). В пиксели их
+            // пересчитывает интерфейс: тогда схема не «съезжает» при
+            // замене снимка этажа на другой размер.
+            item.insert(QStringLiteral("x"), point.value(QStringLiteral("x")).toDouble());
+            item.insert(QStringLiteral("y"), point.value(QStringLiteral("y")).toDouble());
+            item.insert(QStringLiteral("rotation"),
+                        point.value(QStringLiteral("rotation")).toInt());
+            item.insert(QStringLiteral("online"), point.value(QStringLiteral("online")).toBool());
+            item.insert(QStringLiteral("statusText"),
+                        point.value(QStringLiteral("status_text")).toString());
+            item.insert(QStringLiteral("missing"),
+                        point.value(QStringLiteral("missing")).toBool());
+            m_planPoints.append(item);
+        }
+
+        emit planChanged();
+    });
+}
+
+QString ApiClient::planImageUrl(const QString &planId) const
+{
+    if (planId.isEmpty() || m_serverUrl.isEmpty()) {
+        return QString();
+    }
+    return QStringLiteral("%1/api/v1/acs/plans/%2/image?token=%3")
+        .arg(m_serverUrl, planId, m_token);
+}
+
 QString ApiClient::streamUrl(const QString &cameraId, bool subStream) const
 {
     if (cameraId.isEmpty()) {
@@ -380,4 +525,27 @@ QString ApiClient::snapshotUrl(const QString &cameraId) const
     // добавлять заголовки к запросу картинки.
     return QStringLiteral("%1/api/v1/cameras/%2/snapshot?jwt=%3")
         .arg(m_serverUrl, cameraId, m_token);
+}
+
+QString ApiClient::authorizedUrl(const QString &path) const
+{
+    if (path.isEmpty() || m_serverUrl.isEmpty()) {
+        return QString();
+    }
+
+    // Сервер принимает токен и как `token`, и как `jwt` — так сложилось
+    // исторически у разных потребителей. Здесь используем `jwt`, чтобы
+    // не путать его с адресом потока событий.
+    return QStringLiteral("%1%2%3jwt=%4")
+        .arg(m_serverUrl, path,
+             path.contains(QLatin1Char('?')) ? QStringLiteral("&") : QStringLiteral("?"),
+             m_token);
+}
+
+QString ApiClient::liveStreamUrl() const
+{
+    if (m_serverUrl.isEmpty() || m_token.isEmpty()) {
+        return QString();
+    }
+    return QStringLiteral("%1/api/v1/events/stream?token=%2").arg(m_serverUrl, m_token);
 }

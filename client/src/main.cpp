@@ -17,6 +17,7 @@
 #endif
 
 #include "api/ApiClient.h"
+#include "live/LiveEvents.h"
 #include "video/StreamPlayer.h"
 #include "video/VideoItem.h"
 #include "wall/WallProfile.h"
@@ -319,6 +320,14 @@ int main(int argc, char *argv[])
     // а сохраняется она в настройках рабочего места (см. WallProfile).
     WallProfile wall;
     qmlRegisterSingletonInstance("Nvr", 1, 0, "Wall", &wall);
+
+    // Поток тревог. Разбор приходится делать в C++: данные идут кусками
+    // по долгоживущему соединению, а QML-код не умеет читать такой поток.
+    LiveEvents live(&api);
+    qmlRegisterSingletonInstance("Nvr", 1, 0, "Live", &live);
+    // Соединение открываем сразу: если вход сохранён с прошлого запуска,
+    // тревоги должны приниматься без захода в окно входа.
+    live.start();
 
     // Проигрыватель создаётся по одному на ячейку стены.
     qmlRegisterType<StreamPlayer>("Nvr", 1, 0, "StreamPlayer");

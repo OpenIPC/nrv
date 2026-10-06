@@ -13,6 +13,14 @@ Rectangle {
     property int cellIndex: 0
     property string cameraId: ""
     property bool selected: false
+    /**
+     * В камере этой ячейки сейчас тревога.
+     *
+     * Признак ставит стена по событию из потока, и снимает его по таймеру:
+     * ячейка — единственное место, где тревога видна вместе с картинкой,
+     * и по ней сразу понятно, куда смотреть.
+     */
+    property bool alarmed: false
 
     // Сигналы названы не так, как свойство: одноимённые свойство и сигнал
     // конфликтуют — Qt берёт свойство, и вызов «selected()» перестаёт быть
@@ -21,8 +29,8 @@ Rectangle {
     signal cellDoubleClicked()
 
     color: "#0d1117"
-    border.width: cell.selected ? 2 : 1
-    border.color: cell.selected ? "#2196f3" : "#1f2733"
+    border.width: cell.alarmed ? 3 : (cell.selected ? 2 : 1)
+    border.color: cell.alarmed ? "#e05252" : (cell.selected ? "#2196f3" : "#1f2733")
 
     StreamPlayer {
         id: player
@@ -101,6 +109,43 @@ Rectangle {
         font.pixelSize: 11
         wrapMode: Text.WordWrap
         width: parent.width - 12
+    }
+
+    // Мигание при тревоге. Три вспышки, а не постоянное свечение:
+    // движущаяся картинка в соседних ячейках должна оставаться видна,
+    // а заметность тревоги обеспечивает именно начало.
+    Rectangle {
+        id: alarmFlash
+        anchors.fill: parent
+        color: "#e05252"
+        opacity: 0
+        visible: cell.alarmed
+
+        SequentialAnimation {
+            running: alarmFlash.visible
+            loops: 3
+            NumberAnimation {
+                target: alarmFlash
+                property: "opacity"
+                from: 0.45
+                to: 0
+                duration: 420
+            }
+            PauseAnimation {
+                duration: 220
+            }
+        }
+    }
+
+    Label {
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 6
+        visible: cell.alarmed
+        text: qsTr("ТРЕВОГА")
+        color: "#ff8a80"
+        font.bold: true
+        font.pixelSize: 11
     }
 
     MouseArea {

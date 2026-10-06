@@ -19,7 +19,50 @@ Item {
     readonly property int columns: Wall.columns
     readonly property int rows: Wall.rows
 
+    /** Вид содержимого стены: «grid» — сетка камер, «plan» — план этажа. */
+    readonly property string content: Wall.content
+
     property int selectedCell: -1
+
+    /** Текущая тревога: событие из потока и камера, в которой она видна. */
+    property var alarmEvent: null
+    property string alarmCameraId: ""
+
+    // Тревогу снимаем по времени, а не только по нажатию: дежурный может
+    // быть занят, а подсветка, висящая полчаса, перестаёт что-либо значить.
+    Timer {
+        id: alarmTimer
+        interval: 25000
+        onTriggered: wall.clearAlarm()
+    }
+
+    function clearAlarm() {
+        wall.alarmEvent = null
+        wall.alarmCameraId = ""
+        alarmTimer.stop()
+    }
+
+    /** Показывает тревогу и подсвечивает ячейку, если камера есть на стене. */
+    function showAlarm(event) {
+        // Отметка в журнале: по ней на стенде видно, дошло ли событие
+        // до клиента, и с какими полями.
+        console.log("тревога:", event.type, event.camera_name || "", event.object_class || "")
+        wall.alarmEvent = event
+        wall.alarmCameraId = event.camera_id ? event.camera_id : ""
+        alarmTimer.restart()
+    }
+
+    // События приходят из потока (см. LiveEvents). Разбор полей — в QML,
+    // потому что показ зависит от того, что сейчас на экране.
+    Connections {
+        target: Live
+        function onEventReceived(event) {
+            if (event.type === "detection" || event.type === "audio"
+                    || event.type === "access" || event.type === "stream") {
+                wall.showAlarm(event)
+            }
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -35,6 +78,30 @@ Item {
                 Label {
                     text: qsTr("Оператор: %1").arg(Api.userName)
                     Layout.leftMargin: 8
+                }
+
+                // Состояние потока событий. Без него непонятно, почему
+                // тревог нет: не происходит событий или потеряна связь.
+                Rectangle {
+                    id: liveIndicator
+                    width: 10
+                    height: 10
+                    radius: 5
+                    color: Live.connected ? "#4caf50" : "#e05252"
+                    Layout.leftMargin: 8
+
+                    MouseArea {
+                        id: liveHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                    }
+
+                    ToolTip.visible: liveHover.containsMouse
+                    ToolTip.text: Live.connected
+                        ? qsTr("Тревоги принимаются")
+                        : (Live.lastError.length > 0
+                           ? qsTr("Тревоги: %1").arg(Live.lastError)
+                           : qsTr("Связь с потоком событий потеряна"))
                 }
 
                 Label {
@@ -60,6 +127,36 @@ Item {
                     }
                 }
 
+                // Что показывает рабочее место: сетка потоков или схема
+                // этажа. Кнопка «План» появляется только при праве на
+                // планы — прятать недоступное правило проекта.
+                Button {
+                    text: qsTr("Сетка")
+                    checkable: true
+                    checked: wall.content !== "plan"
+                    onClicked: Wall.content = "grid"
+                }
+
+                Button {
+                    visible: Api.can("plans.view")
+                    text: qsTr("План")
+                    checkable: true
+                    checked: wall.content === "plan"
+                    onClicked: Wall.content = "plan"
+                }
+
+                ComboBox {
+                    id: planCombo
+                    visible: wall.content === "plan"
+                    enabled: Api.plans.length > 0
+                    Layout.preferredWidth: 220
+                    model: Api.plans
+                    textRole: "name"
+                    displayText: Api.plans.length === 0
+                                 ? qsTr("Планов нет") : currentText
+                    onActivated: Wall.planId = model[index].id
+                }
+
                 Button {
                     text: qsTr("Обновить")
                     enabled: !Api.busy
@@ -82,6 +179,9 @@ Item {
                 Layout.preferredWidth: 260
                 Layout.fillHeight: true
                 padding: 0
+                // В режиме плана список отнимал бы место у схемы этажа:
+                // назначать камеры там не во что.
+                visible: wall.content !== "plan"
 
                 ListView {
                     id: cameraList
@@ -106,31 +206,93 @@ Item {
                 }
             }
 
-            GridLayout {
+            Loader {
+                id: contentLoader
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                columns: wall.columns
-                columnSpacing: 2
-                rowSpacing: 2
+                sourceComponent: wall.content === "plan" ? planComponent : gridComponent
+            }
+        }
+    }
 
-                Repeater {
-                    id: cells
-                    model: wall.columns * wall.rows
+    // Сетка потоков. Компонент, а не разметка в дереве: стена должна
+    // освобождать декодеры, когда показывается план, иначе двенадцать
+    // камер продолжают тянуть поток, хотя их не видно.
+    Component {
+        id: gridComponent
 
-                    VideoCell {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        cellIndex: index
-                        cameraId: Wall.assignments[index] || ""
-                        selected: wall.selectedCell === index
-                        onCellClicked: wall.selectedCell = (wall.selectedCell === index ? -1 : index)
-                        onCellDoubleClicked: {
-                            Wall.clear(index)
-                            if (wall.selectedCell === index) {
-                                wall.selectedCell = -1
-                            }
+        GridLayout {
+            columns: wall.columns
+            columnSpacing: 2
+            rowSpacing: 2
+
+            Repeater {
+                id: cells
+                model: wall.columns * wall.rows
+
+                VideoCell {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    cellIndex: index
+                    cameraId: Wall.assignments[index] || ""
+                    selected: wall.selectedCell === index
+                    // Тревога привязана к камере, а не к ячейке: раскладку
+                    // могли поменять уже после события.
+                    alarmed: wall.alarmCameraId.length > 0
+                             && wall.alarmCameraId === cameraId
+                    onCellClicked: wall.selectedCell = (wall.selectedCell === index ? -1 : index)
+                    onCellDoubleClicked: {
+                        Wall.clear(index)
+                        if (wall.selectedCell === index) {
+                            wall.selectedCell = -1
                         }
                     }
+                }
+            }
+        }
+    }
+
+    Component {
+        id: planComponent
+
+        PlanView {
+            onCameraActivated: function (cameraId, cameraName) {
+                viewer.open(cameraId, cameraName)
+            }
+        }
+    }
+
+    // Окно просмотра одной камеры: создаётся один раз на стену и
+    // переиспользуется — открывать новое окно на каждую камеру значило бы
+    // тянуть несколько потоков сразу.
+    FullscreenCamera {
+        id: viewer
+    }
+
+    // Карточка тревоги — последней в дереве: она должна быть поверх
+    // содержимого, но не забирать фокус у стены.
+    AlarmCard {
+        id: alarmCard
+        event: wall.alarmEvent
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.topMargin: 64
+        anchors.rightMargin: 16
+        onOpenCamera: function (cameraId, cameraName) {
+            viewer.open(cameraId, cameraName)
+        }
+        onDismissed: wall.clearAlarm()
+    }
+
+    // При первом показе подставляем сохранённый план в список, а также
+    // после обновления списка: сохранённый этаж мог быть удалён.
+    Connections {
+        target: Api
+        function onPlansChanged() {
+            for (var i = 0; i < Api.plans.length; ++i) {
+                if (Api.plans[i].id === Wall.planId) {
+                    planCombo.currentIndex = i
+                    return
                 }
             }
         }

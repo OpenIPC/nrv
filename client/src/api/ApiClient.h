@@ -32,6 +32,36 @@ class ApiClient : public QObject
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
     /** Состояние связи с сервером для строки состояния стены. */
     Q_PROPERTY(QString serverUrl READ serverUrl NOTIFY serverChanged)
+
+    /**
+     * Планы помещений: схемы этажей с расстановкой устройств.
+     *
+     * Список без расстановки: он нужен для выбора плана; точки тянутся
+     * отдельно и только для открытого этажа, иначе клиент при запуске
+     * забирал бы расстановку всех этажей сразу.
+     */
+    Q_PROPERTY(QVariantList plans READ plans NOTIFY plansChanged)
+    /** Открытый план: пустой идентификатор — план ещё не выбран. */
+    Q_PROPERTY(QString currentPlanId READ currentPlanId NOTIFY planChanged)
+    Q_PROPERTY(QString currentPlanName READ currentPlanName NOTIFY planChanged)
+    /**
+     * Есть ли у плана подложка.
+     *
+     * План можно завести до того, как появится снимок этажа; тогда
+     * клиент показывает подсказку вместо пустого серого прямоугольника.
+     */
+    Q_PROPERTY(bool planHasImage READ planHasImage NOTIFY planChanged)
+    /** Точки открытого плана вместе с состоянием устройств. */
+    Q_PROPERTY(QVariantList planPoints READ planPoints NOTIFY planChanged)
+    /** Идёт загрузка плана — интерфейс показывает «Загрузка…». */
+    Q_PROPERTY(bool planBusy READ planBusy NOTIFY planBusyChanged)
+    /**
+     * Причина, по которой план не открылся: «нет права», «сеть».
+     *
+     * Отдельно от lastError: тот показывается в окне входа, и класть
+     * туда сетевую ошибку плана значило бы выглядеть как сбой входа.
+     */
+    Q_PROPERTY(QString planError READ planError NOTIFY planChanged)
     /**
      * Счётчик изменений адресов потоков.
      *
@@ -50,6 +80,14 @@ public:
     QVariantList cameras() const { return m_cameras; }
     QString lastError() const { return m_lastError; }
     QString serverUrl() const { return m_serverUrl; }
+
+    QVariantList plans() const { return m_plans; }
+    QString currentPlanId() const { return m_currentPlanId; }
+    QString currentPlanName() const { return m_currentPlanName; }
+    bool planHasImage() const { return m_planHasImage; }
+    QVariantList planPoints() const { return m_planPoints; }
+    bool planBusy() const { return m_planBusy; }
+    QString planError() const { return m_planError; }
 
     /** Вход: адрес сервера можно вводить с портом или без него. */
     Q_INVOKABLE void login(const QString &server, const QString &user, const QString &password);
@@ -76,6 +114,32 @@ public:
     Q_INVOKABLE QString snapshotUrl(const QString &cameraId) const;
 
     /**
+     * Токен доступа.
+     *
+     * Нужен там, где запрос делает не код с заголовками, а готовый адрес:
+     * поток событий и картинки (снимок события) берут токен в строке
+     * запроса. Сам токен наружу не показывается — это значение настроек.
+     */
+    Q_INVOKABLE QString accessToken() const { return m_token; }
+
+    /**
+     * Дополняет путь к API токеном в строке запроса.
+     *
+     * Путь приходит от сервера в событии (`snapshot_url`) и уже начинается
+     * с «/api/v1», поэтому адрес склеивается из адреса сервера и пути.
+     */
+    Q_INVOKABLE QString authorizedUrl(const QString &path) const;
+
+    /**
+     * Адрес потока событий.
+     *
+     * Поток открывается долгоживущим запросом, поэтому токен идёт
+     * параметром: так адрес остаётся обычной строкой, а соединение
+     * можно переоткрыть при обрыве.
+     */
+    Q_INVOKABLE QString liveStreamUrl() const;
+
+    /**
      * Запрашивает у сервера параметры потока камеры (адрес медиасервера,
      * пути, учётные данные).
      *
@@ -85,6 +149,27 @@ public:
      */
     Q_INVOKABLE void prepareStream(const QString &cameraId);
     int streamsRevision() const { return m_streamsRevision; }
+
+    /** Список планов помещений (без расстановки). */
+    Q_INVOKABLE void refreshPlans();
+
+    /**
+     * Открывает план: тянет расстановку устройств с их состоянием.
+     *
+     * Состояние берётся на момент открытия. Канал тревог появится
+     * позже (этап 4 плана) — тогда состояние будет обновляться само,
+     * а пока оператор перечитывает план повторным выбором.
+     */
+    Q_INVOKABLE void openPlan(const QString &planId);
+
+    /**
+     * Адрес подложки плана.
+     *
+     * Токен идёт параметром запроса: элемент Image в QML не умеет
+     * добавлять заголовок Authorization к запросу картинки. Сервер
+     * принимает токен и из `?token=`, и из `?jwt=`.
+     */
+    Q_INVOKABLE QString planImageUrl(const QString &planId) const;
 
     /** Адрес медиасервера и учётные данные внешнего RTSP. */
     Q_INVOKABLE void setMediaServer(const QString &host, int rtspPort,
@@ -100,12 +185,16 @@ signals:
     void lastErrorChanged();
     void serverChanged();
     void streamsChanged();
+    void plansChanged();
+    void planChanged();
+    void planBusyChanged();
 
 private:
     void setBusy(bool value);
     void setError(const QString &message);
     void loadProfile();
     void loadCameras();
+    void setPlanBusy(bool value);
     void handleReply(QNetworkReply *reply, const std::function<void(const QJsonDocument &)> &done);
     QNetworkAccessManager m_net;
     QString m_serverUrl;      // без завершающего слэша, например http://192.168.1.111:3000
@@ -125,4 +214,12 @@ private:
     QHash<QString, QString> m_mainUrls;
     QHash<QString, QString> m_subUrls;
     int m_streamsRevision = 0;
+
+    QVariantList m_plans;
+    QString m_currentPlanId;
+    QString m_currentPlanName;
+    bool m_planHasImage = false;
+    QVariantList m_planPoints;
+    bool m_planBusy = false;
+    QString m_planError;
 };

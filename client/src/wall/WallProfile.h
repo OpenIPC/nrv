@@ -25,15 +25,31 @@ class WallProfile : public QObject
     Q_PROPERTY(int columns READ columns WRITE setColumns NOTIFY layoutChanged)
     Q_PROPERTY(int rows READ rows WRITE setRows NOTIFY layoutChanged)
 
+    /**
+     * Что показывает рабочее место: «grid» — сетка камер, «plan» — план
+     * помещения.
+     *
+     * Хранится в профиле, а не выбирается заново: дежурному удобнее,
+     * чтобы при запуске сразу открывалось то, с чем он работал — схема
+     * этажа или сетка потоков.
+     */
+    Q_PROPERTY(QString content READ content WRITE setContent NOTIFY contentChanged)
+    /** Схема этажа, открытая в режиме «plan». Пусто — не выбрана. */
+    Q_PROPERTY(QString planId READ planId WRITE setPlanId NOTIFY contentChanged)
+
 public:
     explicit WallProfile(QObject *parent = nullptr);
 
     QVariantMap assignments() const { return m_assignments; }
     int columns() const { return m_columns; }
     int rows() const { return m_rows; }
+    QString content() const { return m_content; }
+    QString planId() const { return m_planId; }
 
     void setColumns(int value);
     void setRows(int value);
+    void setContent(const QString &value);
+    void setPlanId(const QString &value);
 
     /** Ставит камеру в ячейку. Пустой идентификатор очищает ячейку. */
     Q_INVOKABLE void assign(int cell, const QString &cameraId);
@@ -57,6 +73,8 @@ signals:
     void assignmentsChanged();
     /** Изменился размер сетки (число ячеек). */
     void layoutChanged();
+    /** Изменился вид содержимого или выбранный план. */
+    void contentChanged();
 
 private:
     void load();
@@ -65,4 +83,6 @@ private:
     QVariantMap m_assignments;
     int m_columns = 4;
     int m_rows = 4;
+    QString m_content = QStringLiteral("grid");
+    QString m_planId;
 };

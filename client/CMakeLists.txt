@@ -68,6 +68,7 @@ endif()
 qt_add_executable(nvr-wall
     src/main.cpp
     src/api/ApiClient.cpp
+    src/live/LiveEvents.cpp
     src/video/StreamPlayer.cpp
     src/video/VideoItem.cpp
     src/wall/WallProfile.cpp
