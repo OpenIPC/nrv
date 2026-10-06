@@ -26,6 +26,9 @@ jobs:
       # выложен (у 1.28 и новее его нет вовсе — только runtime),
       # а без заголовков и .lib клиент не собрать.
       GSTREAMER_VERSIONS: '1.26.5,1.24.13'
+      # Ключ кэша отдельной строкой без запятых: actions/cache их не
+      # принимает в ключе, а список версий пришлось бы чистить в выражении.
+      GSTREAMER_CACHE_KEY: 'gstreamer-msvc-1.26.5-1.24.13'
 
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +50,7 @@ jobs:
           path: |
             ${{ runner.temp }}/gst-1.26.5
             ${{ runner.temp }}/gst-1.24.13
-          key: gstreamer-msvc-${{ env.GSTREAMER_VERSIONS }}
+          key: ${{ env.GSTREAMER_CACHE_KEY }}
 
       - name: Подготовить GStreamer
         shell: pwsh
