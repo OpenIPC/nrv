@@ -146,6 +146,14 @@ jobs:
                -BuildDir client/build `
                -GStreamerRoot "$env:GSTREAMER_ROOT"
 
+      - name: Проверить, что в поставке есть все библиотеки
+        shell: pwsh
+        run: |
+          # Проверяем по зависимостям самих файлов, а не по списку имён:
+          # именно список упустил msvcp140_1.dll и msvcp140_2.dll, без
+          # которых приложение закрывалось на дежурной машине сразу.
+          pwsh -File client/deploy/windows/verify-deps.ps1 -DistDir client/build/dist
+
       - name: Проверить, что клиент запускается
         shell: pwsh
         run: |

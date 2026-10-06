@@ -47,7 +47,7 @@ Copy-Item $QmlDir (Join-Path $OutDir "qml") -Recurse -Force
 # 2. Библиотеки Qt вместе с плагинами QML.
 #    Без --qmldir не подтянутся модули QtQuick и Controls, и окно откроется
 #    пустым — самая частая ошибка при поставке Qt-приложения вручную.
-& windeployqt --release --qmldir $QmlDir --no-translations (Join-Path $OutDir "nvr-wall.exe")
+& windeployqt --release --qmldir $QmlDir --no-translations --compiler-runtime (Join-Path $OutDir "nvr-wall.exe")
 if ($LASTEXITCODE -ne 0) { throw "windeployqt завершился с ошибкой" }
 
 # 3. GStreamer: библиотеки кладём РЯДОМ С ФАЙЛОМ — в корень поставки.
@@ -66,16 +66,21 @@ Copy-Item (Join-Path $gstBin "*.dll") $OutDir -Force
 # 4. Средства выполнения Visual C++.
 #
 # Без них приложение работает только на машинах, где установлен пакет
-# распространяемых компонентов (на сборочной машине он есть, поэтому CI
-# ничего не замечал). На дежурном компьютере его может не быть — кладём
-# рядом и больше об этом не думаем.
-foreach ($runtime in @("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "concrt140.dll")) {
-    $source = Join-Path $env:SystemRoot "System32\$runtime"
-    if (Test-Path $source) {
-        Copy-Item $source $OutDir -Force
-    } else {
-        Write-Warning "Не найден $runtime — проверьте, что на машине сборки есть Visual C++ 2015–2022"
+# распространяемых компонентов. Копируем по маскам, а не по списку имён:
+# Qt требует не только msvcp140.dll, но и msvcp140_1.dll, msvcp140_2.dll —
+# без них загрузка Qt6Core.dll срывается, и приложение закрывается
+# мгновенно, не показав ни окна, ни сообщения. Список имён вручную эту
+# связь упускает: ошибка уже случалась.
+$runtimeCopied = 0
+foreach ($mask in @("vcruntime140*.dll", "msvcp140*.dll", "concrt140.dll")) {
+    $found = Get-ChildItem (Join-Path $env:SystemRoot "System32") -Filter $mask -ErrorAction SilentlyContinue
+    foreach ($file in $found) {
+        Copy-Item $file.FullName $OutDir -Force
+        $runtimeCopied++
     }
+}
+if ($runtimeCopied -lt 4) {
+    Write-Warning "Скопировано файлов среды выполнения: $runtimeCopied — проверьте, что на машине сборки есть Visual C++ 2015–2022"
 }
 
 if ($WithPlugins) {
@@ -110,7 +115,14 @@ else {
 # 5. Проверка: библиотеки, без которых приложение не запустится, должны
 #    лежать в корне поставки. Ошибку лучше поймать здесь, чем узнать от
 #    дежурного, что «окно мигнуло и закрылось».
-$mustBeInRoot = @("nvr-wall.exe", "Qt6Core.dll", "Qt6Quick.dll", "gstreamer-1.0-0.dll", "vcruntime140.dll", "msvcp140.dll")
+#
+#    Список включает части среды выполнения: их нехватку не видно на
+#    сборочной машине, но она останавливает запуск на чистой.
+$mustBeInRoot = @(
+    "nvr-wall.exe", "Qt6Core.dll", "Qt6Quick.dll", "gstreamer-1.0-0.dll",
+    "vcruntime140.dll", "vcruntime140_1.dll",
+    "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll"
+)
 foreach ($name in $mustBeInRoot) {
     if (-not (Test-Path (Join-Path $OutDir $name))) {
         throw "Готовое приложение не запустится: в поставке нет $name"

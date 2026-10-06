@@ -19,10 +19,11 @@ import pathlib, sys, yaml
 root = pathlib.Path(sys.argv[1])
 out = pathlib.Path(sys.argv[2])
 
-# Скрипт поставки лежит отдельным файлом.
-deploy = root / "client/deploy/windows/deploy.ps1"
-if deploy.exists():
-    (out / "deploy.ps1").write_text(deploy.read_text(encoding="utf-8"), encoding="utf-8")
+# Скрипты поставки лежат отдельными файлами.
+for name in ("deploy.ps1", "verify-deps.ps1"):
+    script = root / "client/deploy/windows" / name
+    if script.exists():
+        (out / name).write_text(script.read_text(encoding="utf-8"), encoding="utf-8")
 
 # Блоки `run` из workflow вытаскиваем в отдельные файлы: в YAML они лежат
 # одной строкой с отступами и напрямую парсеру не отдать.
