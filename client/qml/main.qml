@@ -47,7 +47,13 @@ ApplicationWindow {
         }
     }
 
-    Component.onCompleted: restoreWindow()
+    Component.onCompleted: {
+        // Отметки в журнале: по ним видно, докуда дошла отрисовка, если
+        // окно закрывается сразу после открытия.
+        console.log("окно создано")
+        restoreWindow()
+        console.log("положение окна восстановлено")
+    }
 
     onClosing: {
         // Номер экрана пишем вместе с координатами: по нему потом видно,

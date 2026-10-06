@@ -25,6 +25,8 @@ Rectangle {
         id: player
     }
 
+    Component.onCompleted: console.log("ячейка", cell.cellIndex, "готова")
+
     // Субпоток: в сетке 4×4 основной поток не поднять на 16 ячеек.
     //
     // Адрес берём у сервера (через prepareStream): он знает внешний номер
