@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nvr/backend/internal/httpdigest"
 	"github.com/rs/zerolog/log"
 )
 
@@ -255,6 +257,22 @@ type TalkSession struct {
 // Многие камеры (включая Vivotek и OpenIPC из этого парка) такой
 // возможности не имеют — тогда честно сообщаем об этом, а не создаём
 // видимость работающей функции.
+// SupportsBackchannel проверяет, принимает ли камера звук на динамик.
+//
+// Камеры OpenIPC (Majestic) показывают обратный канал только тогда, когда
+// клиент явно просит его по ONVIF: в DESCRIBE уходит заголовок
+// `Require: www.onvif.org/ver20/backchannel`, и лишь в ответ на такой запрос
+// камера помечает аудиодорожку как `a=sendonly` — «готова принимать звук».
+//
+// Прежняя проверка (запрос OPTIONS и поиск ANNOUNCE/RECORD в заголовке
+// Public) давала ложное «нет»: на OPTIONS без учётных данных камеры отвечают
+// 401 без заголовка Public, и признак поддержки терялся. Проверено на живом:
+// `.106` отдаёт `a=sendonly` с заголовком Require, но по OPTIONS считалась
+// камерой без динамика — то есть кнопка двусторонней связи не появлялась там,
+// где связь есть.
+//
+// Адрес приходит из базы вместе с учётными данными (см. StreamURLForRecord),
+// поэтому отдельно их передавать не нужно.
 func SupportsBackchannel(rtspURL string) bool {
 	u, err := url.Parse(rtspURL)
 	if err != nil || u.Host == "" {
@@ -266,31 +284,153 @@ func SupportsBackchannel(rtspURL string) bool {
 		port = "554"
 	}
 
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 5*time.Second)
+	addr := net.JoinHostPort(host, port)
+
+	username, password := "", ""
+	if u.User != nil {
+		username = u.User.Username()
+		password, _ = u.User.Password()
+	}
+
+	auth := ""
+	if username != "" {
+		credentials := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+		auth = "Basic " + credentials
+	}
+
+	response, err := cameraDescribe(addr, rtspURL, auth)
 	if err != nil {
 		return false
+	}
+
+	// Камеры Beward (домофон `.11`) отвечают на DESCRIBE требованием Digest,
+	// причём и по RTSP. С Basic они отдают 401, и проверка всегда давала
+	// «нет» — хотя звук на камеру идёт. Challenge разбирает httpdigest: тот же
+	// код, что и для HTTP-устройств, чтобы способы авторизации не разошлись.
+	if strings.Contains(response, "401") {
+		if challenge := digestChallenge(response); challenge != "" {
+			if digest := httpdigest.Authorize("DESCRIBE", rtspURL, username, password, challenge); digest != "" {
+				if retried, retryErr := cameraDescribe(addr, rtspURL, digest); retryErr == nil {
+					response = retried
+				}
+			}
+		}
+	}
+
+	// Отделяем заголовки ответа от тела: признаки ищем только в SDP.
+	if idx := strings.Index(response, "\r\n\r\n"); idx >= 0 {
+		response = response[idx+4:]
+	}
+
+	// Признаки обратного канала у разных прошивок разные:
+	//
+	//	a=sendonly / a=sendrecv       — направление дорожки (ONVIF Profile T);
+	//	a=control:audio-backchannel   — отдельная дорожка под приём звука,
+	//	                                так это делает Majestic на OpenIPC.
+	//
+	// Признак обратного канала ищем во ВСЕХ аудиосекциях SDP.
+	//
+	// Это принципиально: на камерах Majestic (`.34`, `.75`) обратный канал
+	// объявлен ВТОРОЙ дорожкой, а первая отдаёт звук в нашу сторону:
+	//
+	//	m=audio ... PCMA              a=control:audio
+	//	m=audio ... PCMU a=sendonly   a=control:audio-backchannel
+	//
+	// Разбор только первой секции давал ложное «нет» на исправных камерах:
+	// оператор не видел кнопку там, где звук на камеру идёт.
+	//
+	// Достаточно любого из признаков: направление дорожки (ONVIF Profile T)
+	// или отдельная дорожка обратного канала (Majestic).
+	for _, audio := range audioSections(response) {
+		if strings.Contains(audio, "a=control:audio-backchannel") ||
+			strings.Contains(audio, "a=sendonly") ||
+			strings.Contains(audio, "a=sendrecv") {
+			return true
+		}
+	}
+	return false
+}
+
+// cameraDescribe выполняет DESCRIBE к камере и возвращает ответ целиком.
+//
+// authHeader — уже собранное значение заголовка Authorization (пустое, если
+// авторизация не нужна). Соединение открывается на каждый запрос: после 401
+// камера может закрыть сессию, а повторный DESCRIBE по тому же сокету
+// приводил бы к пустому ответу.
+func cameraDescribe(addr, requestURL, authHeader string) (string, error) {
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		return "", err
 	}
 	defer conn.Close()
 
-	// Отправляем OPTIONS и читаем ответ: список методов приходит
-	// в заголовке Public.
-	req := fmt.Sprintf("OPTIONS %s RTSP/1.0\r\nCSeq: 1\r\n\r\n", rtspURL)
-	if _, err := conn.Write([]byte(req)); err != nil {
-		return false
+	// Общий срок на обмен: DESCRIBE занимает доли секунды, но при
+	// недоступной камере соединение иначе висело бы до системного таймаута.
+	_ = conn.SetDeadline(time.Now().Add(6 * time.Second))
+
+	request := "DESCRIBE " + requestURL + " RTSP/1.0\r\n" +
+		"CSeq: 1\r\n" +
+		"Accept: application/sdp\r\n" +
+		"Require: www.onvif.org/ver20/backchannel\r\n"
+	if authHeader != "" {
+		request += "Authorization: " + authHeader + "\r\n"
+	}
+	request += "\r\n"
+
+	if _, err := conn.Write([]byte(request)); err != nil {
+		return "", err
 	}
 
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	buf := make([]byte, 4096)
+	// Буфер с запасом: SDP с двумя потоками и списком кодеков занимает
+	// несколько килобайт, а обрезанный ответ дал бы ложное «нет».
+	buf := make([]byte, 64<<10)
 	n, err := conn.Read(buf)
-	if err != nil {
-		return false
+	if err != nil && n == 0 {
+		return "", err
 	}
+	return string(buf[:n]), nil
+}
 
-	resp := string(buf[:n])
-	// 401 без заголовка Public — камера требует авторизацию для OPTIONS.
-	// Обратный канал можно проверить только с кредами, поэтому в этом
-	// случае считаем поддержку неизвестной и не обещаем её.
-	return strings.Contains(resp, "ANNOUNCE") && strings.Contains(resp, "RECORD")
+// digestChallenge достаёт строку WWW-Authenticate из ответа камеры.
+// Пустая строка означает, что Digest камера не предлагает.
+func digestChallenge(response string) string {
+	for _, line := range strings.Split(response, "\r\n") {
+		if strings.HasPrefix(strings.ToLower(line), "www-authenticate:") {
+			return strings.TrimSpace(line[len("WWW-Authenticate:"):])
+		}
+	}
+	return ""
+}
+
+// audioSections вырезает из SDP все аудиосекции: от каждой строки m=audio до
+// следующей медиасекции или до конца описания.
+//
+// Искать нужно все секции, а не только первую: у камер с обратным каналом их
+// две, и признак стоит во второй. Видео не рассматриваем — в его секции тоже
+// бывает a=sendonly (камера отправляет видео), и по нему вышел бы ложный
+// вывод «камера принимает звук».
+func audioSections(sdp string) []string {
+	var sections []string
+	rest := sdp
+	for {
+		start := strings.Index(rest, "m=audio")
+		if start < 0 {
+			return sections
+		}
+		rest = rest[start:]
+
+		end := len(rest)
+		for _, marker := range []string{"\r\nm=", "\nm="} {
+			if idx := strings.Index(rest[1:], marker); idx >= 0 && idx+1 < end {
+				end = idx + 1
+			}
+		}
+		sections = append(sections, rest[:end])
+		if end >= len(rest) {
+			return sections
+		}
+		rest = rest[end:]
+	}
 }
 
 // StartTalk начинает передачу звука оператора на камеру.

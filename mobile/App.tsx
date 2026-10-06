@@ -18,6 +18,7 @@ import LoginScreen from './src/screens/LoginScreen';
 import CamerasScreen from './src/screens/CamerasScreen';
 import LiveScreen from './src/screens/LiveScreen';
 import ArchiveScreen from './src/screens/ArchiveScreen';
+import AccessScreen from './src/screens/AccessScreen';
 import TvApp from './src/tv/TvApp';
 import { isTelevision } from './src/tv/device';
 import { colors } from './src/theme';
@@ -35,7 +36,8 @@ type Route =
   | { name: 'login' }
   | { name: 'cameras' }
   | { name: 'live'; camera: Camera }
-  | { name: 'archive'; camera?: Camera };
+  | { name: 'archive'; camera?: Camera }
+  | { name: 'access' };
 
 function Router() {
   const { ready, current, token } = useApp();
@@ -86,12 +88,16 @@ function Router() {
         />
       );
 
+    case 'access':
+      return <AccessScreen onBack={() => setRoute({ name: 'cameras' })} />;
+
     case 'cameras':
     default:
       return (
         <CamerasScreen
           onOpenCamera={(camera) => setRoute({ name: 'live', camera })}
           onOpenArchive={() => setRoute({ name: 'archive' })}
+          onOpenAccess={() => setRoute({ name: 'access' })}
           onOpenServers={() => setRoute({ name: 'servers' })}
         />
       );

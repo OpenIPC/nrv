@@ -135,14 +135,18 @@ func (h *AudioHandler) Status(w http.ResponseWriter, r *http.Request) {
 			st.Codec = codec
 			st.Transcoding = st.Transcoding || !service.NeedsTranscode(codec)
 		}
-		// Возможность обратного канала проверяем только для камер
-		// со звуком: у остальных динамика заведомо нет.
-		if st.Available {
+		// Возможность обратного канала проверяем ВСЕГДА, когда известен адрес
+		// камеры, а не только при найденном звуке в нашу сторону: бывают камеры
+		// (например, .106 в текущем парке), которые отдают только обратный
+		// канал — микрофона у них нет, а динамик есть. Прежняя проверка внутри
+		// `if st.Available` такие камеры пропускала, и кнопка двусторонней связи
+		// на них не появлялась.
+		if rtspURL != "" {
 			st.Backchannel = service.SupportsBackchannel(rtspURL)
 		}
 	}
 	// Звук в HLS есть, когда дорожка существует и приведена к AAC.
-st.AudioAvailable = st.Available
+	st.AudioAvailable = st.Available
 
 	writeJSON(w, http.StatusOK, st)
 }

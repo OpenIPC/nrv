@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-chi/jwtauth/v5"
+	"github.com/nvr/backend/internal/api/middleware"
 	"github.com/nvr/backend/internal/domain"
 	"github.com/nvr/backend/internal/repository/postgres"
 	"golang.org/x/crypto/bcrypt"
@@ -54,5 +55,27 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Token:     tokenString,
 		ExpiresAt: expiresAt.Unix(),
 		User:      *user,
+	})
+}
+
+// Me — GET /api/v1/auth/me
+//
+// Отдаёт текущего пользователя вместе с развёрнутым списком прав.
+//
+// Права приходят из базы (middleware кладёт их в контекст), а не из токена:
+// интерфейс должен узнать об изменении прав сразу, а токен живёт сутки.
+// Развёрнутый вид («разрешено» по каждому пункту) нужен, чтобы интерфейс не
+// знал, что означает роль «диспетчер»: он просто смотрит на права.
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "требуется вход"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":          user.ID,
+		"username":    user.Username,
+		"role":        user.Role,
+		"permissions": user.EffectivePermissions(),
 	})
 }

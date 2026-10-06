@@ -2,9 +2,10 @@ import { useState, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ptzAPI, type PTZPreset } from '../api/client'
 import { useToast } from '../context/ToastContext'
+import { usePermissions } from '../context/PermissionsContext'
 import {
   ChevronUp, ChevronDown, ChevronLeft, ChevronRight,
-  ZoomIn, ZoomOut, Circle, Loader2, Camera,
+  ZoomIn, ZoomOut, Circle, Loader2, Camera, Info,
 } from 'lucide-react'
 
 interface Props {
@@ -21,6 +22,9 @@ interface Props {
 export default function PTZPanel({ cameraId }: Props) {
   const toast = useToast()
   const { t } = useTranslation()
+  // Без права на поворот пульт не показываем: иначе каждая попытка
+  // нажатия завершалась бы ошибкой 403 и выглядела как поломка камеры.
+  const { can } = usePermissions()
   const [busy, setBusy] = useState<string | null>(null)
   const [presets, setPresets] = useState<PTZPreset[]>([])
   const [loadingPresets, setLoadingPresets] = useState(false)
@@ -83,6 +87,17 @@ export default function PTZPanel({ cameraId }: Props) {
   const padBtn: React.CSSProperties = {
     width: 44, height: 44, display: 'flex',
     alignItems: 'center', justifyContent: 'center', padding: 0,
+  }
+
+  // Без права на поворот пульт не показываем: иначе нажатия заканчивались
+  // бы ошибкой 403 и выглядели как неисправность камеры.
+  if (!can('ptz.control')) {
+    return (
+      <div className="card" style={{ marginTop: 16, display: 'flex', gap: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
+        <Info size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+        <span>{t('noRightsHint')}</span>
+      </div>
+    )
   }
 
   return (

@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from './hooks/useApi'
+import { usePermissions } from './context/PermissionsContext'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
@@ -21,6 +22,7 @@ import SettingsPage from './pages/SettingsPage'
 import NotificationsPage from './pages/NotificationsPage'
 import ServerSettingsPage from './pages/ServerSettingsPage'
 import ExternalAccessPage from './pages/ExternalAccessPage'
+import UsersPage from './pages/UsersPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth()
@@ -28,6 +30,43 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" state={{ from: location }} replace />
+  }
+  return <>{children}</>
+}
+
+/**
+ * Раздел доступен только с нужным правом.
+ *
+ * Сервер проверит права сам и ответит 403 — эта проверка нужна, чтобы
+ * пользователь не попадал на страницу, где всё будет отдавать ошибку, а
+ * сразу видел понятный отказ. Скрытие пункта меню от этого не спасает:
+ * адрес можно ввести руками.
+ */
+function RequirePermission({
+  perm,
+  children,
+}: {
+  perm: string
+  children: React.ReactNode
+}) {
+  const { can, ready } = usePermissions()
+
+  // Права ещё не загружены: показываем пусто, иначе на миг мелькнул бы
+  // отказ «нет прав» у администратора.
+  if (!ready) return null
+
+  if (!can(perm)) {
+    return (
+      <div>
+        <div className="card" style={{ padding: 24 }}>
+          <h2 style={{ marginTop: 0 }}>Раздел недоступен</h2>
+          <p style={{ color: 'var(--text-muted, #888)' }}>
+            У вашей учётной записи нет прав на этот раздел. Обратитесь к
+            администратору сервера.
+          </p>
+        </div>
+      </div>
+    )
   }
   return <>{children}</>
 }
@@ -43,33 +82,169 @@ export default function App() {
             <Layout>
               <Routes>
                 <Route path="/" element={<DashboardPage />} />
-                <Route path="/grid" element={<GridPage />} />
-                <Route path="/cameras" element={<CamerasPage />} />
-                <Route path="/cameras/:id" element={<CameraDetailPage />} />
-                <Route path="/scanner" element={<ScannerPage />} />
-                <Route path="/events" element={<EventsPage />} />
-                <Route path="/audio-events" element={<AudioEventsPage />} />
-                <Route path="/recordings" element={<RecordingsPage />} />
-                <Route path="/logs" element={<LogsPage />} />
-                <Route path="/majestic" element={<MajesticPage />} />
-                <Route path="/recognition" element={<RecognitionPage />} />
-                <Route path="/acs" element={<ACSPage />} />
+                <Route
+                  path="/grid"
+                  element={
+                    <RequirePermission perm="cameras.view">
+                      <GridPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/cameras"
+                  element={
+                    <RequirePermission perm="cameras.view">
+                      <CamerasPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/cameras/:id"
+                  element={
+                    <RequirePermission perm="cameras.view">
+                      <CameraDetailPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/scanner"
+                  element={
+                    <RequirePermission perm="cameras.manage">
+                      <ScannerPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/events"
+                  element={
+                    <RequirePermission perm="events.view">
+                      <EventsPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/audio-events"
+                  element={
+                    <RequirePermission perm="audio.listen">
+                      <AudioEventsPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/recordings"
+                  element={
+                    <RequirePermission perm="archive.view">
+                      <RecordingsPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/logs"
+                  element={
+                    <RequirePermission perm="logs.view">
+                      <LogsPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/majestic"
+                  element={
+                    <RequirePermission perm="cameras.manage">
+                      <MajesticPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/recognition"
+                  element={
+                    <RequirePermission perm="events.view">
+                      <RecognitionPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/acs"
+                  element={
+                    <RequirePermission perm="acs.view">
+                      <ACSPage />
+                    </RequirePermission>
+                  }
+                />
                 {/* Доступ — отдельно от контроллеров: там железо,
                     здесь люди и права. Оператору, который выдаёт пропуск,
                     не нужно разбираться в настройках устройств. */}
-                <Route path="/access" element={<AccessPage />} />
-                <Route path="/plans" element={<PlansPage />} />
+                <Route
+                  path="/access"
+                  element={
+                    <RequirePermission perm="acs.manage">
+                      <AccessPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/plans"
+                  element={
+                    <RequirePermission perm="plans.view">
+                      <PlansPage />
+                    </RequirePermission>
+                  }
+                />
                 {/* Коммутаторы — отдельно от камер: там изображение,
                     здесь питание и связь. Отказ камеры разбирается
                     с двух сторон, и смешивать их неудобно. */}
-                <Route path="/switches" element={<SwitchesPage />} />
-                <Route path="/external-access" element={<ExternalAccessPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="/notifications" element={<NotificationsPage />} />
+                <Route
+                  path="/switches"
+                  element={
+                    <RequirePermission perm="switches.manage">
+                      <SwitchesPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/external-access"
+                  element={
+                    <RequirePermission perm="settings.manage">
+                      <ExternalAccessPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/settings"
+                  element={
+                    <RequirePermission perm="settings.manage">
+                      <SettingsPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="/notifications"
+                  element={
+                    <RequirePermission perm="settings.manage">
+                      <NotificationsPage />
+                    </RequirePermission>
+                  }
+                />
                 {/* Страница сервера отдельная: здесь меняются системные
                     настройки (время и сеть), и ошибка тут заметнее по
                     последствиям, чем в настройках камер. */}
-                <Route path="/server" element={<ServerSettingsPage />} />
+                <Route
+                  path="/server"
+                  element={
+                    <RequirePermission perm="settings.manage">
+                      <ServerSettingsPage />
+                    </RequirePermission>
+                  }
+                />
+                {/* Пользователи: доступ к разделу только с правом
+                    users.manage — иначе любой мог бы выдать себе права. */}
+                <Route
+                  path="/users"
+                  element={
+                    <RequirePermission perm="users.manage">
+                      <UsersPage />
+                    </RequirePermission>
+                  }
+                />
               </Routes>
             </Layout>
           </ProtectedRoute>

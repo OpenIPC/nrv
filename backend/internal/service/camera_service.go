@@ -28,8 +28,8 @@ type CameraService struct {
 	// например "http://host.docker.internal:1984".
 	mediaAPI string
 	client   *http.Client
-	ssh         *CameraSSH
-	ptz         *PTZServiceClient
+	ssh      *CameraSSH
+	ptz      *PTZServiceClient
 	// externalRTSP публикует потоки под внешними адресами для сторонних
 	// систем. Может быть nil, если внешний доступ не настроен.
 	externalRTSP *ExternalRTSPService
@@ -559,10 +559,10 @@ func (s *CameraService) registerStreams(cam *domain.Camera, username, password s
 			}
 			s.warnedNoCreds.Unlock()
 		}
-		go s.addStreamPath(cam.ID.String(), embedded)
+		go s.addStreamPath(cam.ID.String(), embedded, true)
 	}
 	if cam.SubStream != "" {
-		go s.addStreamPath(cam.ID.String()+"_sub", EmbedCredentials(cam.SubStream, username, password))
+		go s.addStreamPath(cam.ID.String()+"_sub", EmbedCredentials(cam.SubStream, username, password), false)
 	}
 }
 
@@ -640,7 +640,21 @@ func (s *CameraService) AddPublisherPath(pathName string) error {
 // адресом заменяет старый. Это проверено на живом сервере и снимает нужду
 // в отдельном обновлении — после правки адреса или пароля камеры достаточно
 // вызвать метод снова, и поток перестанет ходить на старый URL.
-func (s *CameraService) addStreamPath(pathName, rtspSource string) {
+// addStreamPath регистрирует поток в go2rtc.
+//
+// backchannel добавляет вторым источником адрес с `#backchannel=1`: тогда
+// оператор может говорить в динамик камеры через WebRTC (микрофон клиента
+// уходит в камеру тем же соединением). Источник ленивый — go2rtc откроет
+// его только когда клиент действительно пришлёт звук, поэтому лишнего
+// подключения к камере не появляется (проверено на живом: producers
+// содержит два адреса, но sdp только у активного).
+//
+// Ставим его всем камерам, а не только тем, у кого обратный канал
+// подтверждён: определить это стоит отдельного DESCRIBE к камере, а цена
+// ошибки в другую сторону хуже — оператор не увидит кнопку «Говорить» на
+// исправной камере. Неподдерживаемая камера просто откажет при попытке
+// разговора, на просмотр видео это не влияет.
+func (s *CameraService) addStreamPath(pathName, rtspSource string, backchannel bool) {
 	// Параметры передаём В СТРОКЕ ЗАПРОСА, а не в теле.
 	//
 	// Это ловушка go2rtc: при передаче name/src в теле приходит «200 OK»
@@ -649,6 +663,9 @@ func (s *CameraService) addStreamPath(pathName, rtspSource string) {
 	q := url.Values{}
 	q.Set("name", pathName)
 	q.Set("src", rtspSource)
+	if backchannel {
+		q.Add("src", rtspSource+"#backchannel=1")
+	}
 
 	req, err := http.NewRequest(http.MethodPut, s.mediaAPI+"/api/streams?"+q.Encode(), nil)
 	if err != nil {
@@ -836,11 +853,11 @@ func (s *CameraService) Update(ctx context.Context, id uuid.UUID, req domain.Upd
 		}
 		mainRTSP = EmbedCredentials(mainRTSP, username, password)
 		if mainRTSP != "" {
-			go s.addStreamPath(cam.ID.String(), mainRTSP)
+			go s.addStreamPath(cam.ID.String(), mainRTSP, true)
 		}
 		if cam.SubStream != "" {
 			subRTSP := EmbedCredentials(cam.SubStream, username, password)
-			go s.addStreamPath(cam.ID.String()+"_sub", subRTSP)
+			go s.addStreamPath(cam.ID.String()+"_sub", subRTSP, false)
 		}
 	}
 

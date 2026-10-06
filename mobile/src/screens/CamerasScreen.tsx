@@ -193,10 +193,13 @@ function CameraCard({
 export default function CamerasScreen({
   onOpenCamera,
   onOpenArchive,
+  onOpenAccess,
   onOpenServers,
 }: {
   onOpenCamera: (camera: Camera) => void;
   onOpenArchive: () => void;
+  /** Контроль доступа: двери и журнал проходов. */
+  onOpenAccess: () => void;
   onOpenServers: () => void;
 }) {
   const { client, current, token } = useApp();
@@ -253,9 +256,16 @@ export default function CamerasScreen({
           </Pressable>
         </View>
 
-        <Pressable style={styles.archiveButton} onPress={onOpenArchive}>
-          <Text style={styles.archiveButtonText}>Архив записей</Text>
-        </Pressable>
+        <View style={styles.headerRow}>
+          <Pressable style={styles.archiveButton} onPress={onOpenArchive}>
+            <Text style={styles.archiveButtonText}>Архив записей</Text>
+          </Pressable>
+          {/* Доступ рядом с архивом: обе кнопки ведут в разделы, куда
+              оператор заходит регулярно, и прятать их в меню незачем. */}
+          <Pressable style={styles.archiveButton} onPress={onOpenAccess}>
+            <Text style={styles.archiveButtonText}>Доступ</Text>
+          </Pressable>
+        </View>
       </View>
 
       {error && (
@@ -321,8 +331,12 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   headerButtonText: { color: colors.text, fontSize: 13, fontWeight: '500' },
-  archiveButton: {
+  headerRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
     marginTop: spacing.md,
+  },
+  archiveButton: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     borderWidth: 1,

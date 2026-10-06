@@ -1,5 +1,9 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import type {
+  AccessController,
+  AccessDoor,
+  AccessEvent,
+  AudioStatus,
   Camera,
   LoginResult,
   Recording,
@@ -92,6 +96,104 @@ export class ApiClient {
     return response.data as StreamInfo;
   }
 
+  /** Статус звука камеры: кодек, наличие звука и обратного канала. */
+  async getAudioStatus(cameraId: string): Promise<AudioStatus> {
+    const response = await this.http.get(`/cameras/${cameraId}/audio/status`);
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('audio'));
+    }
+    return response.data as AudioStatus;
+  }
+
+  /**
+   * Обмен SDP для живого просмотра по WebRTC (WHEP через бэкенд).
+   *
+   * Сервер принимает оффер клиента, отдаёт готовый ответ медиасервера.
+   * Тело запроса и ответа — не JSON, а SDP, поэтому axios нужно явно
+   * попросить не трогать данные: по умолчанию он превратил бы строку
+   * в JSON со кавычками, и медиасервер её не разобрал бы.
+   *
+   * Таймаут больше общего: первое подключение поднимает поток камеры
+   * на сервере, и это может занять несколько секунд.
+   */
+  async webrtcExchange(
+    cameraId: string,
+    offerSdp: string,
+    options: { sub?: boolean; mic?: string } = {},
+  ): Promise<string> {
+    const response = await this.http.post(`/cameras/${cameraId}/webrtc`, offerSdp, {
+      params: {
+        stream: options.sub ? 'sub' : 'main',
+        mic: options.mic || undefined,
+      },
+      headers: { 'Content-Type': 'application/sdp', Accept: 'application/sdp' },
+      responseType: 'text',
+      transformRequest: [(data) => data],
+      timeout: 25000,
+    });
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('webrtc'));
+    }
+    return String(response.data);
+  }
+
+  /**
+   * Движение поворотной камеры.
+   *
+   * pan/tilt — доля скорости в диапазоне −1…1, zoom — скорость зума.
+   * Сервер сам остановит движение через duration_ms: камера не умеет
+   * держать команду бесконечно, а оператору нужен шаг за нажатие.
+   */
+  async ptzMove(
+    cameraId: string,
+    move: { pan: number; tilt: number; zoom?: number; durationMs?: number },
+  ): Promise<void> {
+    const response = await this.http.post(`/cameras/${cameraId}/ptz/move`, {
+      pan: move.pan,
+      tilt: move.tilt,
+      zoom: move.zoom ?? 0,
+      duration_ms: move.durationMs ?? 500,
+    });
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('ptz'));
+    }
+  }
+
+  /** Останавливает движение камеры. */
+  async ptzStop(cameraId: string): Promise<void> {
+    const response = await this.http.post(`/cameras/${cameraId}/ptz/stop`);
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('ptz'));
+    }
+  }
+
+  /** Доступность PTZ и текущее положение (если камера его отдаёт). */
+  async ptzStatus(cameraId: string): Promise<{ supported?: boolean }> {
+    const response = await this.http.get(`/cameras/${cameraId}/ptz/status`);
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('ptz'));
+    }
+    return response.data as { supported?: boolean };
+  }
+
+  /** Список сохранённых положений камеры. */
+  async ptzPresets(cameraId: string): Promise<Array<{ token: string; name?: string }>> {
+    const response = await this.http.get(`/cameras/${cameraId}/ptz/presets`);
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('ptz'));
+    }
+    const data = response.data as { presets?: Array<{ token: string; name?: string }> };
+    return data.presets ?? [];
+  }
+
+  /** Переход к сохранённому положению. */
+  async ptzGotoPreset(cameraId: string, token: string): Promise<void> {
+    const response = await this.http.post(`/cameras/${cameraId}/ptz/presets/goto`, { token });
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('ptz'));
+    }
+  }
+
   /** Страница архива записей. */
   async listRecordings(params: {
     cameraId?: string;
@@ -120,6 +222,49 @@ export class ApiClient {
       throw toApiError(response.status, response.data, new Error('recording'));
     }
     return response.data as Recording;
+  }
+
+  /** Список контроллеров СКУД. */
+  async listAccessControllers(): Promise<AccessController[]> {
+    const response = await this.http.get('/acs/controllers');
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('acs'));
+    }
+    return (response.data ?? []) as AccessController[];
+  }
+
+  /** Двери контроллера. */
+  async listAccessDoors(controllerId: string): Promise<AccessDoor[]> {
+    const response = await this.http.get(`/acs/controllers/${controllerId}/doors`);
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('acs'));
+    }
+    return (response.data ?? []) as AccessDoor[];
+  }
+
+  /**
+   * Открывает дверь.
+   *
+   * Тело запроса обязательное: сервер отвергает открытие без явного
+   * идентификатора двери (защита от случайного открытия не той точки).
+   */
+  async openAccessDoor(controllerId: string, doorId: string): Promise<void> {
+    const response = await this.http.post(`/acs/doors/${controllerId}/open`, {
+      door_id: doorId,
+    });
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('door'));
+    }
+  }
+
+  /** Последние события проходов. */
+  async listAccessEvents(limit = 30): Promise<AccessEvent[]> {
+    const response = await this.http.get('/acs/events', { params: { limit } });
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('acs'));
+    }
+    const data = response.data as { events?: AccessEvent[] } | AccessEvent[];
+    return Array.isArray(data) ? data : data.events ?? [];
   }
 }
 

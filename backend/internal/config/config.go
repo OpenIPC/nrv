@@ -9,11 +9,11 @@ import (
 )
 
 type Config struct {
-	Port         int
-	DatabaseURL  string
-	JWTSecret    string
-	LogLevel     string
-	LogFormat    string
+	Port        int
+	DatabaseURL string
+	JWTSecret   string
+	LogLevel    string
+	LogFormat   string
 	WGInterface string
 	NatsURL     string
 	// Go2rtcAPI — адрес API медиасервера go2rtc (регистрация потоков,
@@ -68,11 +68,11 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		Port:         envInt("PORT", 8080),
-		DatabaseURL:  envStr("DATABASE_URL", "postgres://nvr:nvr@localhost:5432/nvr?sslmode=disable"),
-		JWTSecret:    envStr("JWT_SECRET", "change-me-in-production"),
-		LogLevel:     envStr("LOG_LEVEL", "info"),
-		LogFormat:    envStr("LOG_FORMAT", "console"),
+		Port:        envInt("PORT", 8080),
+		DatabaseURL: envStr("DATABASE_URL", "postgres://nvr:nvr@localhost:5432/nvr?sslmode=disable"),
+		JWTSecret:   envStr("JWT_SECRET", "change-me-in-production"),
+		LogLevel:    envStr("LOG_LEVEL", "info"),
+		LogFormat:   envStr("LOG_FORMAT", "console"),
 		WGInterface: envStr("WG_INTERFACE", ""),
 		NatsURL:     envStr("NATS_URL", "nats://localhost:4222"),
 		// Медиасервер: go2rtc вместо go2rtc (см. plans/go2rtc-migration.md).

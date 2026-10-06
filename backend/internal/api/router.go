@@ -56,9 +56,9 @@ type RouterConfig struct {
 	// Адрес медиасервера (go2rtc) для браузера оператора.
 	Go2rtcPublicHost string
 	Scanner          *service.CameraScanner
-	VideoRepo          *miniorepo.VideoRepo
-	StorageSvc         *service.StorageService
-	RetentionSvc       *service.RetentionService
+	VideoRepo        *miniorepo.VideoRepo
+	StorageSvc       *service.StorageService
+	RetentionSvc     *service.RetentionService
 	// AudioSvc обеспечивает звук с камер (транскодирование G.711 → AAC)
 	AudioSvc *service.AudioService
 	// HealthSvc собирает показатели здоровья камер OpenIPC (Majestic)
@@ -114,8 +114,15 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(cfg.UserRepo, tokenAuth)
+	// Пользователи и права: сервис один на всё приложение — по нему же
+	// middleware проверяет права на каждом запросе (и держит их в кеше).
+	userSvc := service.NewUserService(cfg.UserRepo)
+	userH := handlers.NewUserHandler(userSvc)
 	cameraH := handlers.NewCameraHandler(cfg.CameraSvc)
 	streamH := handlers.NewStreamHandler(cfg.CameraSvc, cfg.Go2rtcAPI, cfg.Go2rtcPublicHost, tokenAuth)
+	// WHEP-прокси для мобильного приложения: адрес медиасервера тот же,
+	// что у HLS — go2rtc отдаёт и то, и другое с одного API-порта.
+	webrtcH := handlers.NewWebRTCHandler(cfg.CameraSvc, cfg.Go2rtcAPI)
 	scannerH := handlers.NewScannerHandler(cfg.Scanner)
 	camHealthH := handlers.NewCameraHealthHandler(cfg.HealthSvc)
 	camSettingsH := handlers.NewCameraSettingsHandler(cfg.SettingsSvc)
@@ -248,6 +255,21 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		r.Group(func(r chi.Router) {
 			r.Use(jwtauth.Verifier(tokenAuth))
 			r.Use(jwtauth.Authenticator(tokenAuth))
+			// Проверка прав по разделам: вход подтверждает, КТО пришёл,
+			// а это middleware — что ему МОЖНО. До этого права в базе лежали
+			// без применения: любая учётка могла открыть дверь или удалить камеру.
+			r.Use(mw.RequirePermission(userSvc))
+
+			// Свои данные и права: интерфейс строит по ним меню и кнопки.
+			r.Get("/auth/me", authH.Me)
+
+			// Пользователи и права доступа. Право users.manage проверяет
+			// middleware по таблице правил в middleware/rights.go.
+			r.Get("/users", userH.List)
+			r.Get("/users/schema", userH.Schema)
+			r.Post("/users", userH.Create)
+			r.Put("/users/{id}", userH.Update)
+			r.Delete("/users/{id}", userH.Delete)
 
 			// Камеры
 			r.Get("/cameras", cameraH.List)
@@ -281,6 +303,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// Стримы
 			r.Get("/cameras/{id}/stream", streamH.GetStream)
 			// (snapshot зарегистрирован выше, вне JWT-группы)
+
+			// WHEP-сессия для нативных клиентов (мобильное приложение).
+			//
+			// Внутри JWT-группы, в отличие от /hls/: нативный клиент
+			// умеет слать Authorization, а прямой путь /webrtc/<id>/whep
+			// в nginx открыт всем в локальной сети — он для браузера,
+			// который заголовок приложить не может.
+			r.Post("/cameras/{id}/webrtc", webrtcH.Whep)
 
 			// PTZ (поворотные камеры, ONVIF)
 			r.Get("/cameras/{id}/ptz/status", ptzH.Status)
@@ -342,10 +372,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/cameras/{id}/detection", detH.GetSettings)
 			r.Patch("/cameras/{id}/detection", detH.UpdateSettings)
 
-				// Счётчик пересечений линии: сколько объектов прошло через неё
-				// за период, отдельно по направлениям. Нужен, чтобы работу
-				// линии было видно сразу, а не только в списке событий.
-				r.Get("/cameras/{id}/crossings", eventH.CrossingStats)
+			// Счётчик пересечений линии: сколько объектов прошло через неё
+			// за период, отдельно по направлениям. Нужен, чтобы работу
+			// линии было видно сразу, а не только в списке событий.
+			r.Get("/cameras/{id}/crossings", eventH.CrossingStats)
 			r.Get("/settings", detH.GetServerSettings)
 			r.Patch("/settings", detH.UpdateServerSettings)
 			// Предпросмотр автоочистки: что удалится при текущей глубине хранения

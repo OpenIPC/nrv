@@ -4,6 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { camerasAPI, logsAPI, majesticAPI, eventsAPI, type Camera, type DetectionEvent, type StreamInfo, type NTPStatus, type LogRemoteState, type MajesticWatchState } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
+import { usePermissions } from '../context/PermissionsContext'
 import LivePlayer from '../components/LivePlayer'
 import EditCameraModal from '../components/EditCameraModal'
 import PTZPanel from '../components/PTZPanel'
@@ -44,6 +45,9 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
   const navigate = useNavigate()
   const { t } = useTranslation()
   const toast = useToast()
+  // Вкладки показываем по правам: настройки камеры, детекция и звук —
+  // разные права, и у диспетчера из них есть только просмотр.
+  const { can } = usePermissions()
   const [tab, setTab] = useState<'live' | 'events' | 'detection' | 'audio' | 'settings' | 'advanced'>('live')
   const [streamInfo, setStreamInfo] = useState<StreamInfo | null>(null)
   const [showEdit, setShowEdit] = useState(false)
@@ -461,6 +465,7 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
               <button
                 className={`btn ${tab === 'detection' ? 'btn-primary' : 'btn-outline'} btn-sm`}
                 onClick={() => setTab('detection')}
+                hidden={!can('detection.manage')}
               >
                 <Crosshair size={14} />
                 {t('cameraPage.tabDetection')}
@@ -468,6 +473,7 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
               <button
                 className={`btn ${tab === 'audio' ? 'btn-primary' : 'btn-outline'} btn-sm`}
                 onClick={() => setTab('audio')}
+                hidden={!can('audio.listen')}
               >
                 <Volume2 size={14} />
                 {t('cameraPage.tabAudio')}
@@ -475,6 +481,7 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
               <button
                 className={`btn ${tab === 'settings' ? 'btn-primary' : 'btn-outline'} btn-sm`}
                 onClick={() => setTab('settings')}
+                hidden={!can('cameras.manage')}
               >
                 <Sliders size={14} />
                 {t('cameraPage.tabSettings')}
@@ -485,7 +492,7 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
                   Кнопку показываем только на OpenIPC. На чужой камере
                   схему настроек взять негде, и кнопка вела бы в пустоту:
                   оператор нажал бы и решил, что камера не отвечает. */}
-              {isOpenIPC && (
+              {isOpenIPC && can('cameras.manage') && (
                 <button
                   className={`btn ${tab === 'advanced' ? 'btn-primary' : 'btn-outline'} btn-sm`}
                   onClick={() => setTab('advanced')}
@@ -640,10 +647,12 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
               {t('cameraPage.actions')}
             </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {can('cameras.manage') && (
               <button className="btn btn-outline btn-sm" onClick={() => setShowEdit(true)}>
                 <Pencil size={14} />
                 {t('cameraPage.edit')}
               </button>
+              )}
               <button className="btn btn-outline btn-sm" onClick={handleRefresh}>
                 <RefreshCw size={14} />
                 {t('cameraPage.refresh')}

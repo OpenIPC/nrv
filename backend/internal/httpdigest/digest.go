@@ -122,6 +122,23 @@ func Do(client *http.Client, req *http.Request, username, password string) (*htt
 	return client.Do(retry)
 }
 
+// Authorize собирает значение заголовка Authorization для Digest-схемы.
+//
+// Нужна там, где обмен идёт НЕ через HTTP-клиент: камеры Beward требуют
+// Digest и по RTSP, а работать с ними приходится через обычный сокет.
+// Разбирать challenge в вызывающем коде не нужно — он умеет то же самое,
+// но, будучи скопированным, разошёлся бы с этим.
+//
+// Пустая строка означает, что заголовок не похож на Digest: тогда вызывающий
+// должен остаться на Basic.
+func Authorize(method, uri, username, password, challengeHeader string) string {
+	ch := parseChallenge(challengeHeader)
+	if ch == nil {
+		return ""
+	}
+	return buildAuth(method, uri, username, password, ch)
+}
+
 // parseChallenge разбирает заголовок WWW-Authenticate.
 func parseChallenge(header string) *challenge {
 	if !strings.HasPrefix(strings.ToLower(header), "digest ") {

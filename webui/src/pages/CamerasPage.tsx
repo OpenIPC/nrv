@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { camerasAPI, Camera, CameraHealth, HealthIssue } from '../api/client'
 import { useAsync } from '../hooks/useApi'
 import { useToast } from '../context/ToastContext'
+import { usePermissions } from '../context/PermissionsContext'
 import VendorBadge from '../components/VendorBadge'
 import { Plus, Trash2, RefreshCw, Eye, Radio, Wifi, WifiOff, Activity, AlertTriangle } from 'lucide-react'
 
@@ -132,6 +133,9 @@ export default function CamerasPage() {
   const navigate = useNavigate()
   const toast = useToast()
   const { t } = useTranslation()
+  // Добавление и удаление камер — отдельное право: смотреть список можно
+  // и без него, а менять состав парка — нет.
+  const { can } = usePermissions()
   const { data: cameras, loading, error, refetch } = useAsync<Camera[]>(() => camerasAPI.list())
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({
@@ -210,10 +214,12 @@ export default function CamerasPage() {
             <RefreshCw size={16} />
             {t('camerasPage.refresh')}
           </button>
+          {can('cameras.manage') && (
           <button className="btn btn-primary" onClick={() => setShowModal(true)}>
             <Plus size={18} />
             {t('camerasPage.addCamera')}
           </button>
+          )}
         </div>
       </div>
 
@@ -332,6 +338,7 @@ export default function CamerasPage() {
                   <Eye size={14} />
                   {t('camerasPage.view')}
                 </button>
+                {can('cameras.manage') && (
                 <button
                   className="btn btn-outline btn-sm"
                   style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
@@ -340,6 +347,7 @@ export default function CamerasPage() {
                 >
                   <Trash2 size={14} />
                 </button>
+                )}
               </div>
             </div>
           )})}

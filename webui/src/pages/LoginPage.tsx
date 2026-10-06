@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useApi'
+import { usePermissions } from '../context/PermissionsContext'
 import { authAPI } from '../api/client'
 import { Camera } from 'lucide-react'
 
@@ -12,6 +13,7 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const { login } = useAuth()
+  const { refresh } = usePermissions()
   const navigate = useNavigate()
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -21,6 +23,9 @@ export default function LoginPage() {
     try {
       const res = await authAPI.login(username, password)
       login(res.data.token)
+      // Права подтягиваем сразу: сервер отдаёт их вместе с сессией, и
+      // меню должно построиться по ним, а не после перезагрузки страницы.
+      await refresh()
       navigate('/')
     } catch (err: any) {
       setError(err.response?.data?.error || t('loginPage.failed'))

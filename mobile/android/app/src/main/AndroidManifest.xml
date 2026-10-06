@@ -1,6 +1,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+      WebRTC: состояние сети нужно для отслеживания смены Wi-Fi/мобильной
+      сети и перезапуска соединения, а не для сбора данных.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!--
+      Двусторонний звук: микрофон телефона передаётся в камеру (backchannel).
+      Система спросит разрешение при первом включении; отказ не ломает
+      остальные функции — просмотр остаётся со звуком из камеры.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <!--
       Приложение работает и на телевизоре, и на телефоне.

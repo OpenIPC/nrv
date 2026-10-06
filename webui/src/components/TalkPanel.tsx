@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { audioAPI } from '../api/client'
 import { useToast } from '../context/ToastContext'
+import { usePermissions } from '../context/PermissionsContext'
 import { Mic, MicOff, Loader2, Info } from 'lucide-react'
 
 interface Props {
@@ -23,6 +24,7 @@ interface Props {
 export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Props) {
   const toast = useToast()
   const { t } = useTranslation()
+  const { can } = usePermissions()
   const [talking, setTalking] = useState(false)
   const [starting, setStarting] = useState(false)
   const [level, setLevel] = useState(0)
@@ -201,6 +203,21 @@ export default function TalkPanel({ cameraId, backchannel, speakerEnabled }: Pro
         <span>
           {t('talkPanel.disabledHint')}
         </span>
+      </div>
+    )
+  }
+
+  // Микрофон в камеру — отдельное право: слушать звук и говорить в камеру
+  // это разные действия по последствиям.
+  if (!can('audio.talk')) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: 8, padding: 12,
+        borderRadius: 8, background: 'rgba(0,0,0,0.02)', fontSize: 13,
+        color: 'var(--text-secondary)',
+      }}>
+        <Info size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+        <span>{t('noRightsHint')}</span>
       </div>
     )
   }

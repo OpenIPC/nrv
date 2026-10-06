@@ -2402,3 +2402,57 @@ export const recognitionAPI = {
     api.patch<RecognitionSettings>('/settings/recognition', data),
   stats: () => api.get<{ faces: number; plates: number }>('/recognition/stats'),
 }
+// --- Пользователи и права ---
+
+/** Учётная запись сервера. */
+export interface UserAccount {
+  id: string
+  username: string
+  role: string
+  /** Разрешённые права: `{"cameras.view": true}`. У администратора пусто —
+   *  у него полный доступ по роли. */
+  permissions?: Record<string, boolean>
+  created_at?: string
+}
+
+/** Справочник для формы прав: роли, заготовки и полный список прав. */
+export interface UsersSchema {
+  roles: string[]
+  presets: Record<string, string[]>
+  permissions: string[]
+}
+
+/** Свои данные и права: по ним интерфейс строит меню и кнопки. */
+export interface CurrentUser {
+  id: string
+  username: string
+  role: string
+  permissions: Record<string, boolean>
+}
+
+export const usersAPI = {
+  list: () => api.get<UserAccount[]>('/users'),
+  schema: () => api.get<UsersSchema>('/users/schema'),
+  create: (data: {
+    username: string
+    password: string
+    role: string
+    permissions: Record<string, boolean>
+  }) => api.post<UserAccount>('/users', data),
+  /** Пустой пароль означает «не менять»: так правка прав не требует
+   *  вводить пароль заново. */
+  update: (
+    id: string,
+    data: {
+      username?: string
+      password?: string
+      role?: string
+      permissions?: Record<string, boolean>
+    }
+  ) => api.put<UserAccount>(`/users/${id}`, data),
+  remove: (id: string) => api.delete(`/users/${id}`),
+}
+
+export const meAPI = {
+  me: () => api.get<CurrentUser>('/auth/me'),
+}

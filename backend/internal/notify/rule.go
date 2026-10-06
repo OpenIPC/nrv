@@ -103,11 +103,11 @@ type Decision struct {
 // Коды причин отказа. Новые значения добавляются сюда, а не в текст
 // подписи: журнал хранит именно код, а подписи живут в файлах переводов.
 const (
-	ReasonChannelDisabled = "channel_disabled"
-	ReasonEventNotAllowed = "event_not_allowed"
+	ReasonChannelDisabled  = "channel_disabled"
+	ReasonEventNotAllowed  = "event_not_allowed"
 	ReasonCameraNotAllowed = "camera_not_allowed"
-	ReasonLowConfidence = "low_confidence"
-	ReasonQuietHours = "quiet_hours"
+	ReasonLowConfidence    = "low_confidence"
+	ReasonQuietHours       = "quiet_hours"
 )
 
 // Decide проверяет событие по правилу.

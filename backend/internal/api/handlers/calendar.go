@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"net/http"
-	"strings"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -331,11 +331,11 @@ func (h *RecordingHandler) DayTimeline(w http.ResponseWriter, r *http.Request) {
 				endRatio = 1
 			}
 			marks = append(marks, map[string]any{
-				"camera_id": cameraID,
-				"kind":      class,
-				"count":        count,
-				"start_ratio":  startRatio,
-				"end_ratio":    endRatio,
+				"camera_id":   cameraID,
+				"kind":        class,
+				"count":       count,
+				"start_ratio": startRatio,
+				"end_ratio":   endRatio,
 			})
 		}
 	}

@@ -1,17 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import Video, { type OnVideoErrorData } from 'react-native-video';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useApp } from '../state/AppContext';
 import { describeNetworkError } from '../net/api';
-import { joinUrl } from '../net/address';
+import LivePlayer from '../components/LivePlayer';
+import PtzPanel from '../components/PtzPanel';
 import { colors, radius, spacing } from '../theme';
-import type { Camera, StreamInfo } from '../types';
+import type { AudioStatus, Camera, StreamInfo } from '../types';
 
 /** Тип потока камеры: основной или дополнительный. */
 type StreamKind = 'sub' | 'main';
@@ -19,12 +13,14 @@ type StreamKind = 'sub' | 'main';
 /**
  * Онлайн-просмотр камеры.
  *
- * Видео идёт по HLS: сервер отдаёт плейлист через свой API, а токен
- * подставляется в query — плеер не умеет слать заголовок Authorization.
+ * Видео идёт по WebRTC (WHEP через бэкенд), при неудаче плеер сам переходит
+ * на HLS. Транспорт выбирает не этот экран, а `LivePlayer`: здесь остаётся
+ * только выбор потока и подписи.
  *
  * По умолчанию открывается дополнительный поток (704×576): он заметно
  * экономичнее по трафику и батарее, что важно за пределами локальной сети.
- * Переключиться на основной можно кнопкой.
+ * Переключиться на основной можно кнопкой — при этом поток на сервере
+ * пересоздаётся, поэтому плеер закрывает прежнее соединение.
  */
 export default function LiveScreen({
   camera,
@@ -38,13 +34,12 @@ export default function LiveScreen({
   const [kind, setKind] = useState<StreamKind>('sub');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [videoError, setVideoError] = useState<string | null>(null);
-  const [paused, setPaused] = useState(false);
-
-  // Плеер пересоздаётся при смене потока, поэтому ключ считаем из адреса:
-  // без этого переключение может оставить старое видео на экране.
-  const [reloadKey, setReloadKey] = useState(0);
-  const retriesRef = useRef(0);
+  const [transport, setTransport] = useState<'webrtc' | 'hls' | null>(null);
+  // Состояние звука: нужен признак обратного канала, чтобы не показывать
+  // кнопку «Говорить» на камере без динамика.
+  const [audio, setAudio] = useState<AudioStatus | null>(null);
+  const [talking, setTalking] = useState(false);
+  const [ptzError, setPtzError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +57,16 @@ export default function LiveScreen({
       } finally {
         if (!cancelled) setLoading(false);
       }
+
+      // Статус звука запрашиваем отдельно: он ходит к камере (определение
+      // кодека и обратного канала), поэтому его сбой не должен скрывать
+      // видео — просмотр важнее.
+      try {
+        const status = await client.getAudioStatus(camera.id);
+        if (!cancelled) setAudio(status);
+      } catch {
+        if (!cancelled) setAudio(null);
+      }
     })();
     return () => {
       cancelled = true;
@@ -69,146 +74,87 @@ export default function LiveScreen({
   }, [client, camera.id]);
 
   /**
-   * Адрес HLS-плейлиста.
+   * Адрес HLS-плейлиста — резервный путь.
    *
-   * Сервер отдаёт путь относительным, поэтому приклеиваем адрес сервера.
-   * Поле webrtc_url не используем: сервер отдаёт в нём внутренний
-   * адрес вида localhost:8889, недоступный с телефона.
+   * Нужен только на случай, когда WebRTC не поднимается. Сервер отдаёт
+   * путь относительным, поэтому базовый адрес приклеивает плеер.
    */
-  const hlsUrl = useMemo(() => {
-    if (!stream || !token) return null;
-    const path =
-      kind === 'sub'
-        ? stream.sub_hls_url || stream.hls_url
-        : stream.main_hls_url || stream.hls_url;
-    if (!path) return null;
-
-    const full = joinUrl(current?.baseUrl ?? '', path);
-    const separator = full.includes('?') ? '&' : '?';
-    return `${full}${separator}token=${encodeURIComponent(token)}`;
-  }, [stream, kind, token, current]);
-
-  const handleVideoError = useCallback(
-    (event: OnVideoErrorData) => {
-      const message =
-        event?.error?.errorString || event?.error?.localizedDescription || '';
-      // Сетевые сбои лечим повтором: поток мог ещё не подняться на сервере
-      // или сессия плейлиста устарела.
-      if (retriesRef.current < 3) {
-        retriesRef.current += 1;
-        setTimeout(() => setReloadKey((value) => value + 1), 1500);
-        setVideoError('Поток не отвечает, пробую снова…');
-        return;
-      }
-      setVideoError(
-        message
-          ? `Не удалось воспроизвести: ${message}`
-          : 'Не удалось воспроизвести поток',
-      );
-    },
-    [],
-  );
+  const hlsPath = useMemo(() => {
+    if (!stream) return null;
+    return kind === 'sub'
+      ? stream.sub_hls_url || stream.hls_url || null
+      : stream.main_hls_url || stream.hls_url || null;
+  }, [stream, kind]);
 
   const switchStream = () => {
-    const next: StreamKind = kind === 'sub' ? 'main' : 'sub';
-    // Сбрасываем счётчик повторов: у другого потока может быть своя причина
-    // временной недоступности, и попытки нужно отсчитывать заново.
-    retriesRef.current = 0;
-    setVideoError(null);
-    setKind(next);
-    setReloadKey((value) => value + 1);
+    setKind((value) => (value === 'sub' ? 'main' : 'sub'));
   };
 
   return (
     <View style={styles.container}>
-      <View style={styles.videoBox}>
-        {hlsUrl ? (
-          <Video
-            key={`${kind}-${reloadKey}`}
-            source={{ uri: hlsUrl }}
-            style={styles.video}
-            resizeMode="contain"
-            paused={paused}
-            controls
-            onError={handleVideoError}
-            onLoad={() => {
-              retriesRef.current = 0;
-              setVideoError(null);
-            }}
-            // Плеер не должен останавливаться при уходе приложения в фон:
-            // оператор обычно сверяется с другими делами, глядя на экран.
-            playInBackground={false}
-            // Задержка минимальная: для наблюдения важно видеть происходящее
-            // сейчас, а не 10 секунд назад.
-            bufferConfig={{
-              minBufferMs: 1000,
-              maxBufferMs: 5000,
-              bufferForPlaybackMs: 500,
-              bufferForPlaybackAfterRebufferMs: 1000,
-            }}
-          />
-        ) : (
-          <View style={styles.videoPlaceholder}>
-            {loading ? (
-              <>
-                <ActivityIndicator color={colors.primary} size="large" />
-                <Text style={styles.placeholderText}>Готовлю поток…</Text>
-              </>
-            ) : (
-              <Text style={styles.placeholderText}>
-                {error || 'Адрес потока недоступен'}
-              </Text>
-            )}
-          </View>
-        )}
-      </View>
-
-      {videoError && (
-        <View style={styles.warning}>
-          <Text style={styles.warningText}>{videoError}</Text>
-        </View>
-      )}
+      <LivePlayer
+        client={client}
+        cameraId={camera.id}
+        sub={kind === 'sub'}
+        hlsPath={hlsPath}
+        token={token}
+        baseUrl={current?.baseUrl ?? ''}
+        micCodec={talking ? 'pcmu' : undefined}
+        onTransport={setTransport}
+      />
 
       <View style={styles.info}>
         <Text style={styles.cameraName}>{camera.name}</Text>
         <Text style={styles.cameraMeta}>
           {camera.ip || 'адрес не указан'}
           {stream?.status ? ` · ${stream.status}` : ''}
+          {transport ? ` · ${transport.toUpperCase()}` : ''}
         </Text>
       </View>
 
+      {/* Пульт показываем только поворотным камерам: у остальных моторов
+          нет, и команды движения уйдут в пустоту. */}
+      {camera.ptz ? (
+        <PtzPanel client={client} cameraId={camera.id} onError={setPtzError} />
+      ) : null}
+
       <View style={styles.buttons}>
-        <Pressable
-          style={styles.button}
-          onPress={switchStream}
-          disabled={!stream}
-        >
+        <Pressable style={styles.button} onPress={switchStream} disabled={!stream}>
           <Text style={styles.buttonText}>
             {kind === 'sub' ? 'Основной поток' : 'Дополнительный поток'}
           </Text>
         </Pressable>
 
-        <Pressable
-          style={styles.button}
-          onPress={() => setPaused((value) => !value)}
-        >
-          <Text style={styles.buttonText}>
-            {paused ? 'Продолжить' : 'Пауза'}
-          </Text>
-        </Pressable>
-
-        <Pressable
-          style={[styles.button, styles.buttonBack]}
-          onPress={onBack}
-        >
+        <Pressable style={[styles.button, styles.buttonBack]} onPress={onBack}>
           <Text style={styles.buttonText}>К списку</Text>
         </Pressable>
+
+        {audio?.backchannel ? (
+          <Pressable
+            style={[styles.button, talking && styles.buttonActive]}
+            onPress={() => setTalking((value) => !value)}
+          >
+            <Text style={styles.buttonText}>
+              {talking ? 'Закончить разговор' : 'Говорить'}
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
 
+      {loading ? (
+        <View style={styles.statusRow}>
+          <ActivityIndicator color={colors.primary} />
+        </View>
+      ) : null}
+
       <Text style={styles.hint}>
-        {kind === 'sub'
-          ? 'Дополнительный поток экономит трафик. Переключитесь на основной для большей детализации.'
-          : 'Основной поток даёт лучшее качество и расходует больше трафика.'}
+        {error || ptzError
+          ? error || ptzError
+          : talking
+            ? 'Микрофон включён: голос идёт в динамик камеры. Разговор работает только по WebRTC — в резервном режиме HLS его нет.'
+            : kind === 'sub'
+              ? 'Дополнительный поток экономит трафик. Переключитесь на основной для большей детализации.'
+              : 'Основной поток даёт лучшее качество и расходует больше трафика.'}
       </Text>
     </View>
   );
@@ -216,35 +162,6 @@ export default function LiveScreen({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  videoBox: {
-    width: '100%',
-    aspectRatio: 16 / 9,
-    backgroundColor: '#000',
-  },
-  video: { width: '100%', height: '100%' },
-  videoPlaceholder: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.md,
-    padding: spacing.lg,
-  },
-  placeholderText: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    textAlign: 'center',
-  },
-
-  warning: {
-    margin: spacing.lg,
-    marginBottom: 0,
-    backgroundColor: 'rgba(245,158,11,0.12)',
-    borderWidth: 1,
-    borderColor: colors.warning,
-    borderRadius: radius.md,
-    padding: spacing.md,
-  },
-  warningText: { color: colors.text, fontSize: 13 },
 
   info: { padding: spacing.lg },
   cameraName: { fontSize: 20, fontWeight: '700', color: colors.text },
@@ -269,7 +186,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   buttonBack: { borderColor: colors.primary },
+  buttonActive: { borderColor: colors.warning, backgroundColor: 'rgba(245,158,11,0.15)' },
   buttonText: { color: colors.text, fontSize: 14, fontWeight: '500' },
+
+  statusRow: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
 
   hint: {
     fontSize: 12,

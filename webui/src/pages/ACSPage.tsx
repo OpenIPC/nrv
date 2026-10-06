@@ -7,6 +7,7 @@ import { CardsModal } from '../components/CardsModal'
 import { EditControllerModal } from '../components/EditControllerModal'
 import { FirmwareModal } from '../components/FirmwareModal'
 import Z5RModePanel from '../components/Z5RModePanel'
+import { usePermissions } from '../context/PermissionsContext'
 
 /**
  * Названия производителей для показа.
@@ -31,6 +32,7 @@ function vendorLabel(vendor: string, t: (key: string) => string): string {
 
 export default function ACSPage() {
   const { t } = useTranslation()
+  const { can } = usePermissions()
   const [tab, setTab] = useState<'controllers' | 'events'>('controllers')
 
   const {
@@ -175,10 +177,12 @@ export default function ACSPage() {
           <h1>{t('acsPage.title')}</h1>
           <p>{t('acsPage.subtitle')}</p>
         </div>
+        {can('acs.manage') && (
         <button className="btn btn-primary" onClick={() => setShowModal(true)}>
           <Plus size={18} />
           {t('acsPage.addController')}
         </button>
+        )}
       </div>
 
       {/* Табы */}
@@ -233,12 +237,15 @@ export default function ACSPage() {
                     Показывать панель для других вендоров нельзя — там
                     такого понятия нет.
                   */}
-                  {ctrl.vendor === 'z5r' && (
+                  {ctrl.vendor === 'z5r' && can('acs.manage') && (
                     <div style={{ marginBottom: 12 }}>
                       <Z5RModePanel controllerID={ctrl.id} />
                     </div>
                   )}
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {/* Кнопку открытия показываем только с правом: диспетчеру
+                        она нужна, наблюдателю — нет. */}
+                    {can('acs.open') && (
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => handleOpenDoor(ctrl.id, doors[ctrl.id]?.[0]?.id)}
@@ -252,6 +259,11 @@ export default function ACSPage() {
                       <Unlock size={14} />
                       {t('acsPage.openDoor')}
                     </button>
+                    )}
+                    {/* Карты, прошивка, правка и удаление контроллера — это
+                        настройка СКУД, а не работа с ней. Диспетчеру этот
+                        блок не нужен: он открывает двери и смотрит журнал. */}
+                    {can('acs.manage') && (
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => setCardsFor(ctrl)}
@@ -259,6 +271,8 @@ export default function ACSPage() {
                       <CreditCard size={14} />
                       {t('acsPage.cards')}
                     </button>
+                    )}
+                    {can('acs.manage') && (
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => setFirmwareFor(ctrl)}
@@ -267,6 +281,8 @@ export default function ACSPage() {
                       <Cpu size={14} />
                       {t('acsPage.firmware')}
                     </button>
+                    )}
+                    {can('acs.manage') && (
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => setEditFor(ctrl)}
@@ -274,6 +290,8 @@ export default function ACSPage() {
                       <Pencil size={14} />
                       {t('acsPage.edit')}
                     </button>
+                    )}
+                    {can('acs.manage') && (
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => handleDeleteController(ctrl)}
@@ -281,6 +299,7 @@ export default function ACSPage() {
                     >
                       <Trash2 size={14} />
                     </button>
+                    )}
                   </div>
                 </div>
               ))}

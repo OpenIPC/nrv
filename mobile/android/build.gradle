@@ -1,7 +1,11 @@
 buildscript {
     ext {
         buildToolsVersion = "34.0.0"
-        minSdkVersion = 23
+        // 24 (Android 7.0) — требование react-native-webrtc: библиотека
+        // объявляет minSdkVersion 24 жёстко, и сборка с 23 падает. Менять
+        // на 23 нельзя без отказа от WebRTC, а он — основной транспорт
+        // просмотра (задержка <1 c и звук внутри потока).
+        minSdkVersion = 24
         compileSdkVersion = 34
         targetSdkVersion = 34
         ndkVersion = "26.1.10909125"

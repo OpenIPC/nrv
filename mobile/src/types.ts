@@ -77,6 +77,28 @@ export interface StreamInfo {
   snapshot_url?: string;
 }
 
+/**
+ * Состояние звука камеры (ответ /cameras/{id}/audio/status).
+ *
+ * backchannel — камера принимает звук на динамик: только при этом флаге
+ * показываем кнопку «Говорить». Признак приходит с сервера, который сам
+ * спрашивает камеру по ONVIF (Require: backchannel) — на телефоне такую
+ * проверку делать нечем.
+ */
+export interface AudioStatus {
+  camera_id: string;
+  /** Есть ли у камеры микрофон (звук в нашу сторону). */
+  available: boolean;
+  /** Аудиокодек камеры, например pcm_alaw. */
+  codec?: string;
+  /** Идёт ли перекодирование на сервере. */
+  transcoding?: boolean;
+  /** Доступен ли звук в потоке, который сейчас отдаётся клиенту. */
+  audio_available?: boolean;
+  /** Принимает ли камера звук (есть динамик и обратный канал). */
+  backchannel: boolean;
+}
+
 /** Одна запись архива. */
 export interface Recording {
   id: string;
@@ -107,4 +129,40 @@ export interface RecordingsPage {
   total: number;
   page: number;
   page_size: number;
+}
+
+/** Контроллер системы контроля доступа (СКУД). */
+export interface AccessController {
+  id: string;
+  name: string;
+  vendor: string;
+  ip?: string;
+  port?: number;
+  /** online | offline — сервер опрашивает контроллер сам. */
+  status: string;
+}
+
+/** Дверь (точка прохода) контроллера. */
+export interface AccessDoor {
+  /** Идентификатор двери внутри контроллера: у Z5R это door-1. */
+  id: string;
+  name?: string;
+  /** locked | unlocked — состояние замка на момент запроса. */
+  status?: string;
+}
+
+/** Событие прохода. */
+export interface AccessEvent {
+  id: string;
+  controller_id: string;
+  door_id: string;
+  /** passage, remote_open, access_denied, door_forced и подобные. */
+  event_type: string;
+  card_number?: string;
+  /** Имя владельца карты, если карта есть в справочнике. */
+  card_name?: string;
+  timestamp: string;
+  /** Снимок или клип, снятые по этому событию (если настроено). */
+  media_type?: string;
+  recording_id?: string;
 }
