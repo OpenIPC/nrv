@@ -103,10 +103,10 @@ jobs:
           $lib = Get-ChildItem $prepared -Recurse -Filter gstreamer-1.0.lib -ErrorAction SilentlyContinue |
                  Select-Object -First 1
           if (-not $lib) {
-            Write-Host "Содержимое $prepared:"
+            Write-Host "Содержимое каталога ${prepared}:"
             Get-ChildItem $prepared -Recurse -Depth 3 -ErrorAction SilentlyContinue |
               Select-Object -First 30 -ExpandProperty FullName
-            throw "В $prepared не найден gstreamer-1.0.lib"
+            throw "В ${prepared} не найден gstreamer-1.0.lib"
           }
 
           $root = (Split-Path -Parent (Split-Path -Parent $lib.FullName)) -replace '\\', '/'
