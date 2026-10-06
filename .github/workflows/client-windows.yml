@@ -215,6 +215,35 @@ jobs:
           }
           $process.Kill()
 
+      - name: Проверить полную поставку
+        shell: pwsh
+        run: |
+          # Полная поставка должна работать без установленного GStreamer.
+          # Проверяем не по именам файлов, а по факту: запускаем клиент,
+          # смотрим его журнал и убеждаемся, что плагины подхватились.
+          $dist = (Resolve-Path client/build/dist-full).Path
+          $log = Join-Path $env:LOCALAPPDATA "NVR\client.log"
+          Remove-Item $log -ErrorAction SilentlyContinue
+
+          $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:NVR_NO_GSTREAMER_PROMPT = "1"
+
+          $process = Start-Process (Join-Path $dist "nvr-wall.exe") -WorkingDirectory $dist -PassThru
+          Start-Sleep -Seconds 8
+          if (-not $process.HasExited) { $process.Kill() }
+
+          if (-not (Test-Path $log)) {
+            throw "Клиент не создал журнал — значит не запустился"
+          }
+
+          $notReady = Get-Content $log | Where-Object { $_ -match "GStreamer не готов" }
+          if ($notReady) {
+            Write-Host $notReady
+            throw "Плагины GStreamer не подхватились — полная поставка непригодна"
+          }
+          Write-Host "Полная поставка: плагины GStreamer подхватились"
+
       - name: Выложить архив
         uses: actions/upload-artifact@v4
         with:

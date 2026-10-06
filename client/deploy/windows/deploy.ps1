@@ -75,6 +75,16 @@ $gstPlugins = Join-Path $GStreamerRoot "lib\gstreamer-1.0"
 
 Copy-Item (Join-Path $gstBin "*.dll") $OutDir -Force
 
+# Утилиты GStreamer кладём рядом: ими удобно проверить поток на стенде
+# руками (gst-launch-1.0) и посмотреть доступные элементы (gst-inspect-1.0),
+# не устанавливая ничего дополнительно.
+foreach ($tool in @("gst-inspect-1.0.exe", "gst-launch-1.0.exe")) {
+    $source = Join-Path $gstBin $tool
+    if (Test-Path $source) {
+        Copy-Item $source $OutDir -Force
+    }
+}
+
 # 4. Средства выполнения Visual C++.
 #
 # Без них приложение работает только на машинах, где установлен пакет
@@ -104,7 +114,18 @@ if ($WithPlugins) {
 
     # Проверка обязательных плагинов: их отсутствие даёт «поток не
     # открывается» без внятной причины, поэтому проверяем на сборке.
-    $required = @("gstrtspsrc.dll", "gstrtph264.dll", "gstvideoconvert.dll", "gstapp.dll")
+    #
+    # Имена здесь — имена файлов плагинов, и они не совпадают с именами
+    # элементов: rtspsrc даёт плагин rtsp, h264parse — videoparsersbad,
+    # videoconvert — videoconvertscale. Проверка по «gstrtspsrc.dll»
+    # находила бы пустоту и ругалась на исправной поставке.
+    $required = @(
+        "gstrtsp.dll",              # rtspsrc
+        "gstrtpmanager.dll",        # rtph264depay
+        "gstvideoparsersbad.dll",   # h264parse
+        "gstvideoconvertscale.dll", # videoconvert
+        "gstapp.dll"                # appsink
+    )
     $missing = @()
     foreach ($name in $required) {
         $found = Get-ChildItem (Join-Path $OutDir "gstreamer-1.0") -Filter $name -ErrorAction SilentlyContinue
