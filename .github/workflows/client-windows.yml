@@ -121,19 +121,29 @@ jobs:
           # требования, а нам важно проверить именно рабочий вариант.
           "GST_PLUGIN_PATH=$plugins" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Настроить MSVC
+        # Генератор «Visual Studio …» на этом образе не находится, поэтому
+        # собираем через Ninja, а окружение компилятора выставляет этот шаг:
+        # он находит установленную Visual Studio и прописывает пути к cl.exe.
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Собрать
         shell: pwsh
         run: |
-          cmake -S client -B client/build -G "Visual Studio 17 2022" -A x64 `
+          cmake -S client -B client/build -G Ninja `
                 -DCMAKE_BUILD_TYPE=Release `
                 -DGSTREAMER_ROOT="$env:GSTREAMER_ROOT"
-          cmake --build client/build --config Release
+          cmake --build client/build
 
       - name: Собрать поставку
         shell: pwsh
         run: |
+          # При Ninja сборка одноконфигурационная: файлы лежат прямо в
+          # каталоге сборки, без подкаталога Release.
           pwsh -File client/deploy/windows/deploy.ps1 `
-               -BuildDir client/build/Release `
+               -BuildDir client/build `
                -GStreamerRoot "$env:GSTREAMER_ROOT"
 
       - name: Проверить, что клиент запускается
