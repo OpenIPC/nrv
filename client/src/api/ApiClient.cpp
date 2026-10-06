@@ -1,5 +1,6 @@
 #include "api/ApiClient.h"
 
+#include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -171,6 +172,9 @@ void ApiClient::logout()
     m_userName.clear();
     m_permissions.clear();
     m_cameras.clear();
+    // Адреса потоков содержат учётные данные: после выхода их нужно забыть.
+    m_mainUrls.clear();
+    m_subUrls.clear();
 
     QSettings settings;
     settings.remove(QStringLiteral("auth/token"));
@@ -178,6 +182,7 @@ void ApiClient::logout()
     emit authenticatedChanged();
     emit userChanged();
     emit camerasChanged();
+    emit streamsChanged();
 }
 
 void ApiClient::handleReply(QNetworkReply *reply, const std::function<void(const QJsonDocument &)> &done)
@@ -261,21 +266,98 @@ bool ApiClient::can(const QString &permission) const
     return m_permissions.contains(permission);
 }
 
+void ApiClient::prepareStream(const QString &cameraId)
+{
+    if (cameraId.isEmpty() || m_token.isEmpty()) {
+        return;
+    }
+    // Адрес уже известен — второй раз не спрашиваем: ячейка может
+    // перерисовываться часто, а список камер большой.
+    if (m_subUrls.contains(cameraId)) {
+        return;
+    }
+
+    QNetworkRequest request(QUrl(m_serverUrl
+        + QStringLiteral("/api/v1/cameras/") + cameraId + QStringLiteral("/client-stream")));
+    request.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+
+    QNetworkReply *reply = m_net.get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, cameraId]() {
+        reply->deleteLater();
+
+        // Ошибку тут не показываем: ячейка останется на адресе по
+        // умолчанию (он тоже рабочий) либо покажет снимок кадра. А вот
+        // текст причины полезен в отчёте, если поток не пойдёт.
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning("Не удалось получить параметры потока камеры %s: %s",
+                     qPrintable(cameraId), qPrintable(reply->errorString()));
+            return;
+        }
+
+        const QJsonObject info = QJsonDocument::fromJson(reply->readAll()).object();
+        const QString user = info.value(QStringLiteral("username")).toString();
+        const QString password = info.value(QStringLiteral("password")).toString();
+        const int port = info.value(QStringLiteral("port")).toInt(m_mediaPort);
+
+        // Хост берём из настроек, а не из ответа: сервер видит себя
+        // как «localhost», а клиенту нужен адрес, по которому он сам до
+        // него добрался.
+        const QString host = m_mediaHost.isEmpty()
+            ? info.value(QStringLiteral("server_ip")).toString()
+            : m_mediaHost;
+
+        const QString credentials = user.isEmpty()
+            ? QString()
+            : QStringLiteral("%1:%2@")
+                  .arg(QString::fromUtf8(QUrl::toPercentEncoding(user)),
+                       QString::fromUtf8(QUrl::toPercentEncoding(password)));
+
+        const auto buildUrl = [&](const QString &path) {
+            return QStringLiteral("rtsp://%1%2:%3%4")
+                .arg(credentials, host)
+                .arg(port)
+                .arg(path);
+        };
+
+        const QString mainPath = info.value(QStringLiteral("main_path")).toString();
+        const QString subPath = info.value(QStringLiteral("sub_path")).toString();
+
+        if (!mainPath.isEmpty()) {
+            m_mainUrls.insert(cameraId, buildUrl(mainPath));
+        }
+        if (!subPath.isEmpty()) {
+            m_subUrls.insert(cameraId, buildUrl(subPath));
+        }
+
+        ++m_streamsRevision;
+        emit streamsChanged();
+    });
+}
+
 QString ApiClient::streamUrl(const QString &cameraId, bool subStream) const
 {
-    if (cameraId.isEmpty() || m_mediaHost.isEmpty()) {
+    if (cameraId.isEmpty()) {
         return QString();
     }
 
-    // Имя пути в медиасервере — идентификатор камеры; субпоток отличается
-    // суффиксом «_sub». Это же соглашение использует сервер при
-    // регистрации потоков в go2rtc.
+    // Если сервер уже назвал адрес — берём его: там учтён номер канала и
+    // учётные данные внешнего доступа.
+    const QHash<QString, QString> &cache = subStream ? m_subUrls : m_mainUrls;
+    const auto cached = cache.constFind(cameraId);
+    if (cached != cache.constEnd()) {
+        return cached.value();
+    }
+
+    if (m_mediaHost.isEmpty()) {
+        return QString();
+    }
+
+    // Запасной путь — прямое имя потока в медиасервере. Нужен, пока ответ
+    // сервера не пришёл, и на старом сервере без /client-stream.
     const QString path = subStream
         ? cameraId + QStringLiteral("_sub")
         : cameraId;
 
-    // Пароль кодируем: в нём могут оказаться «@», «:» и другие знаки,
-    // от которых адрес разбирался бы неверно.
     const QString credentials = m_mediaUser.isEmpty()
         ? QString()
         : QStringLiteral("%1:%2@")

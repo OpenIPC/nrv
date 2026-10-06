@@ -302,6 +302,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			// Стримы
 			r.Get("/cameras/{id}/stream", streamH.GetStream)
+			// Параметры потока для нативного клиента: адрес медиасервера и пути
+			// потоков. Права проверяются общим правилом для GET по камере
+			// (cameras.view), поэтому клиенту не нужно собирать адрес из
+			// внутренних имён go2rtc и хранить логин внешнего RTSP.
+			r.Get("/cameras/{id}/client-stream", extRTSPH.ClientStream)
 			// (snapshot зарегистрирован выше, вне JWT-группы)
 
 			// WHEP-сессия для нативных клиентов (мобильное приложение).

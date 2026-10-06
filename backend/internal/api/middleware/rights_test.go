@@ -30,6 +30,11 @@ func TestPermissionFor(t *testing.T) {
 		// Частные действия внутри камеры.
 		{http.MethodPost, "/api/v1/cameras/abc-123/ptz/move", domain.PermPTZControl},
 		{http.MethodGet, "/api/v1/cameras/abc-123/ptz/presets", domain.PermPTZControl},
+
+		// Параметры потока для нативного клиента — это просмотр камеры:
+		// отдельного права не заводим, иначе оператору пришлось бы выдать
+		// управление камерами ради одного адреса.
+		{http.MethodGet, "/api/v1/cameras/abc-123/client-stream", domain.PermCamerasView},
 		{http.MethodPost, "/api/v1/cameras/abc-123/audio/talk/start", domain.PermAudioTalk},
 		{http.MethodPatch, "/api/v1/cameras/abc-123/detection", domain.PermDetectionManage},
 

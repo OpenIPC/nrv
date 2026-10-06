@@ -26,9 +26,20 @@ Rectangle {
     }
 
     // Субпоток: в сетке 4×4 основной поток не поднять на 16 ячеек.
-    readonly property string streamUrl: cell.cameraId.length > 0
-                                        ? Api.streamUrl(cell.cameraId, true)
-                                        : ""
+    //
+    // Адрес берём у сервера (через prepareStream): он знает внешний номер
+    // канала камеры и проверяет право на просмотр. Счётчик streamsRevision
+    // в выражении нужен, чтобы адрес пересчитался, когда ответ придёт.
+    readonly property string streamUrl: {
+        var revision = Api.streamsRevision
+        return cell.cameraId.length > 0 ? Api.streamUrl(cell.cameraId, true) : ""
+    }
+
+    onCameraIdChanged: {
+        if (cell.cameraId.length > 0) {
+            Api.prepareStream(cell.cameraId)
+        }
+    }
 
     onStreamUrlChanged: {
         if (cell.streamUrl.length > 0) {

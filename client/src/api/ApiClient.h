@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <QHash>
 #include <QNetworkAccessManager>
 
 #include <functional>
@@ -31,6 +32,14 @@ class ApiClient : public QObject
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
     /** Состояние связи с сервером для строки состояния стены. */
     Q_PROPERTY(QString serverUrl READ serverUrl NOTIFY serverChanged)
+    /**
+     * Счётчик изменений адресов потоков.
+     *
+     * Адрес потока становится известен только после ответа сервера, а
+     * ячейки строят его в момент привязки камеры. Счётчик нужен, чтобы
+     * QML пересчитал адрес, когда ответ придёт.
+     */
+    Q_PROPERTY(int streamsRevision READ streamsRevision NOTIFY streamsChanged)
 
 public:
     explicit ApiClient(QObject *parent = nullptr);
@@ -66,6 +75,17 @@ public:
     /** Снимок кадра: показывается в ячейке, пока нет потока. */
     Q_INVOKABLE QString snapshotUrl(const QString &cameraId) const;
 
+    /**
+     * Запрашивает у сервера параметры потока камеры (адрес медиасервера,
+     * пути, учётные данные).
+     *
+     * Так клиент не хранит логин внешнего RTSP и не собирает адрес из
+     * внутренних имён go2rtc: сервер сам решает, под каким адресом камера
+     * доступна снаружи, и проверяет право на её просмотр.
+     */
+    Q_INVOKABLE void prepareStream(const QString &cameraId);
+    int streamsRevision() const { return m_streamsRevision; }
+
     /** Адрес медиасервера и учётные данные внешнего RTSP. */
     Q_INVOKABLE void setMediaServer(const QString &host, int rtspPort,
                                     const QString &user, const QString &password);
@@ -79,6 +99,7 @@ signals:
     void camerasChanged();
     void lastErrorChanged();
     void serverChanged();
+    void streamsChanged();
 
 private:
     void setBusy(bool value);
@@ -98,4 +119,10 @@ private:
     QString m_mediaUser;
     QString m_mediaPassword;
     bool m_busy = false;
+
+    // Готовые адреса потоков: идентификатор камеры → адрес. Заполняются по
+    // ответу сервера, чтобы не спрашивать его на каждую отрисовку ячейки.
+    QHash<QString, QString> m_mainUrls;
+    QHash<QString, QString> m_subUrls;
+    int m_streamsRevision = 0;
 };
