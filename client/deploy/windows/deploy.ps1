@@ -31,7 +31,19 @@ if (-not $QmlDir) { $QmlDir = Join-Path (Split-Path -Parent $PSScriptRoot) "..\q
 
 $exe = Join-Path $BuildDir "nvr-wall.exe"
 if (-not (Test-Path $exe)) {
-    throw "Не найден $exe. Сначала соберите проект (cmake --build)."
+    # Каталог сборки зависит от генератора: Ninja кладёт исполняемый файл
+    # прямо в него, Visual Studio — в подкаталог конфигурации (Release или
+    # Debug). Ищем рядом, чтобы вызывающий скрипт не угадывал путь: из-за
+    # этой ошибки сборка в CI уже падала.
+    $found = Get-ChildItem $BuildDir -Recurse -Depth 2 -Filter "nvr-wall.exe" -ErrorAction SilentlyContinue |
+             Select-Object -First 1
+    if ($found) {
+        $exe = $found.FullName
+        Write-Host "Исполняемый файл найден в $($found.DirectoryName)"
+    }
+}
+if (-not (Test-Path $exe)) {
+    throw "Не найден nvr-wall.exe в $BuildDir. Сначала соберите проект (cmake --build)."
 }
 if (-not (Test-Path (Join-Path $GStreamerRoot "bin"))) {
     throw "В $GStreamerRoot нет папки bin. Проверьте путь к GStreamer."

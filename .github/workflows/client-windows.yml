@@ -174,7 +174,7 @@ jobs:
           # библиотека в клиенте и системная установка должны быть одной
           # версии, иначе плагины не подходят и видео не работает.
           pwsh -File client/deploy/windows/deploy.ps1 `
-               -BuildDir client/build/Release `
+               -BuildDir client/build `
                -GStreamerRoot "$env:GSTREAMER_ROOT" `
                -OutDir client/build/dist-full `
                -WithPlugins
