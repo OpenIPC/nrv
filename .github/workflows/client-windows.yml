@@ -38,85 +38,88 @@ jobs:
           modules: 'qtmultimedia'
           cache: true
 
-      - name: Установить GStreamer
+      - name: Подготовить GStreamer
         shell: pwsh
         run: |
-          function Install-GStreamer([string]$version) {
-            $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc"
-            $files = @(
-              "gstreamer-1.0-msvc-x86_64-$version.msi",
-              "gstreamer-1.0-devel-msvc-x86_64-$version.msi"
-            )
+          # Административная распаковка (/a) вместо установки в систему:
+          # она не трогает систему, не требует подтверждений и не ждёт окон.
+          # Обычная установка строчек в CI вставала и держала сборку.
+          $prepared = $null
+          foreach ($version in $env:GSTREAMER_VERSIONS.Split(',')) {
+            $version = $version.Trim()
+            Write-Host "Пробую GStreamer $version"
 
-            foreach ($file in $files) {
-              # Путь должен быть абсолютным: msiexec ищет файл-пакет
-              # относительно system32 и на относительный путь отвечает
-              # «пакет не найден».
+            $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc"
+            $dest = Join-Path $env:RUNNER_TEMP "gst-$version"
+            $ok = $true
+
+            foreach ($package in @("gstreamer-1.0", "gstreamer-1.0-devel")) {
+              $file = "$package-msvc-x86_64-$version.msi"
               $msi = Join-Path $env:RUNNER_TEMP $file
 
               try {
                 Invoke-WebRequest "$base/$file" -OutFile $msi -ErrorAction Stop
               } catch {
-                # Показываем и адрес, и код ответа: без этого «404»
-                # выглядит как выдумка, а причина остаётся неясной.
-                $status = $_.Exception.Response.StatusCode.value__
-                Write-Host "Не скачался $base/$file (код $status)"
-                return $false
+                Write-Host "Не скачался $base/$file — $($_.Exception.Message)"
+                $ok = $false
+                break
               }
 
               $log = "$msi.log"
-              $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-                "/i", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`""
-              )
+              $process = Start-Process msiexec.exe -PassThru -ArgumentList @(
+                "/a", "`"$msi`"", "/qn", "TARGETDIR=`"$dest`"", "/l*v", "`"$log`"")
 
+              # Таймаут обязателен: зависший установщик означает сорванную
+              # сборку без единой строки в отчёте.
+              if (-not $process.WaitForExit(600000)) {
+                $process.Kill()
+                Write-Host "Распаковка $file не завершилась за 10 минут"
+                $ok = $false
+                break
+              }
               if ($process.ExitCode -ne 0) {
-                Write-Host "--- журнал установки $file ---"
-                Get-Content $log -Tail 40 -ErrorAction SilentlyContinue
-                Write-Host "Установка $file завершилась с кодом $($process.ExitCode)"
-                return $false
+                Write-Host "--- журнал $file ---"
+                Get-Content $log -Tail 30 -ErrorAction SilentlyContinue
+                Write-Host "Распаковка $file вернула код $($process.ExitCode)"
+                $ok = $false
+                break
               }
             }
 
-            return $true
-          }
-
-          $installed = $false
-          foreach ($version in $env:GSTREAMER_VERSIONS.Split(',')) {
-            Write-Host "Пробую GStreamer $version"
-            if (Install-GStreamer $version.Trim()) {
-              $installed = $true
+            if ($ok) {
+              $prepared = $dest
+              "GST_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
               break
             }
-            Write-Host "Версия $version не подошла, пробую следующую"
+            Write-Host "Версия $version не подошла"
           }
 
-          if (-not $installed) {
-            throw "Ни одну из версий GStreamer не удалось установить: $env:GSTREAMER_VERSIONS"
+          if (-not $prepared) {
+            throw "Ни одну из версий GStreamer не удалось подготовить: $env:GSTREAMER_VERSIONS"
           }
 
-          # Путь не угадываем, а ищем по факту: установщик сам выбирает
-          # каталог (обычно C:\gstreamer\1.0\msvc_x86_64), и от версии к
-          # версии это может меняться.
-          $lib = Get-ChildItem C:\gstreamer -Recurse -Filter gstreamer-1.0.lib -ErrorAction SilentlyContinue |
+          # Пути ищем по факту, а не угадываем: распаковка сохраняет
+          # структуру установки, но её вид может отличаться от версии к версии.
+          $lib = Get-ChildItem $prepared -Recurse -Filter gstreamer-1.0.lib -ErrorAction SilentlyContinue |
                  Select-Object -First 1
           if (-not $lib) {
-            Write-Host "Содержимое C:\gstreamer:"
-            Get-ChildItem C:\gstreamer -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+            Write-Host "Содержимое $prepared:"
+            Get-ChildItem $prepared -Recurse -Depth 3 -ErrorAction SilentlyContinue |
               Select-Object -First 30 -ExpandProperty FullName
-            throw "После установки GStreamer не найден gstreamer-1.0.lib в C:\gstreamer"
+            throw "В $prepared не найден gstreamer-1.0.lib"
           }
 
-          # Каталог библиотек — родитель папки lib. В CMake путь пишем
-          # с прямыми слэшами: обратный слэш в нём — escape-символ.
           $root = (Split-Path -Parent (Split-Path -Parent $lib.FullName)) -replace '\\', '/'
+          $bin = "$root/bin"
+          $plugins = "$root/lib/gstreamer-1.0"
+
           Write-Host "GSTREAMER_ROOT=$root"
+          Write-Host "Плагинов найдено: $((Get-ChildItem $plugins -Filter *.dll -ErrorAction SilentlyContinue).Count)"
 
-          # Передаём в последующие шаги через окружение запуска.
           "GSTREAMER_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-          # Заодно печатаем версию: она попадает в отчёт сборки и помогает
-          # понять, что именно собралось, когда что-то ведёт себя странно.
-          & "$root/bin/gst-inspect-1.0.exe" --version
+          # Плагины нужны проверке запуска: без них клиент покажет окно
+          # требования, а нам важно проверить именно рабочий вариант.
+          "GST_PLUGIN_PATH=$plugins" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Собрать
         shell: pwsh
@@ -141,6 +144,10 @@ jobs:
           # сразу. Падение здесь означает проблему с библиотеками или
           # плагинами, и лучше узнать об этом на сборке.
           $env:QT_QPA_PLATFORM = "offscreen"
+          # Окно «нужен GStreamer» в автоматической проверке ждало бы
+          # нажатия и держало сборку до таймаута.
+          $env:NVR_NO_GSTREAMER_PROMPT = "1"
+
           $process = Start-Process client/build/dist/nvr-wall.exe -PassThru
           Start-Sleep -Seconds 8
           if ($process.HasExited) {
