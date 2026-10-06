@@ -51,6 +51,12 @@ if ($files.Count -eq 0) {
 $missing = @{}
 foreach ($file in $files) {
     foreach ($dependency in Get-Dependencies $file.FullName) {
+        # api-ms-win-* и ext-ms-* — не файлы, а контракты Windows (API sets):
+        # их может не быть в System32, зависимости разрешает само ядро.
+        # Считать их отсутствующими значит ругать поставку там, где всё в
+        # порядке, — проверка уже срабатывала так ложно.
+        if ($dependency -match '^(api-ms-|ext-ms-)') { continue }
+
         if (Test-Path (Join-Path $dist $dependency)) { continue }
         if (Test-Path (Join-Path $system32 $dependency)) { continue }
         $missing[$dependency] = $file.Name
