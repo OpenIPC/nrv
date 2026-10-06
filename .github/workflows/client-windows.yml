@@ -21,14 +21,11 @@ jobs:
     runs-on: windows-latest
 
     env:
-      # Версию GStreamer держим здесь: её же использует скрипт установки.
-      # Ветка 1.26 выбрана потому, что для неё ещё выкладывают установщики
-      # MSI: начиная с 1.28 development-пакет собирают только как .exe,
-      # и распаковать его в CI сложнее.
-      #
-      # Каталог установки (GSTREAMER_ROOT) не задаём: его определяет сам
-      # установщик, а шаг установки передаёт найденный путь дальше.
-      GSTREAMER_VERSION: '1.26.5'
+      # Версии GStreamer перебираются по порядку. Так надёжнее, чем
+      # фиксированная одна: для новых веток development-пакет не всегда
+      # выложен (у 1.28 и новее его нет вовсе — только runtime),
+      # а без заголовков и .lib клиент не собрать.
+      GSTREAMER_VERSIONS: '1.26.5,1.24.13'
 
     steps:
       - uses: actions/checkout@v4
@@ -44,30 +41,57 @@ jobs:
       - name: Установить GStreamer
         shell: pwsh
         run: |
-          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GSTREAMER_VERSION/msvc"
-          $runtime = "gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.msi"
-          $devel = "gstreamer-1.0-devel-msvc-x86_64-$env:GSTREAMER_VERSION.msi"
-
-          foreach ($file in @($runtime, $devel)) {
-            Write-Host "Скачиваю $file"
-
-            # Путь должен быть абсолютным: msiexec ищет файл-пакет относительно
-            # system32 и на относительный путь отвечает «пакет не найден».
-            $msi = Join-Path $env:RUNNER_TEMP $file
-            Invoke-WebRequest "$base/$file" -OutFile $msi
-
-            $log = "$msi.log"
-            $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-              "/i", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`""
+          function Install-GStreamer([string]$version) {
+            $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc"
+            $files = @(
+              "gstreamer-1.0-msvc-x86_64-$version.msi",
+              "gstreamer-1.0-devel-msvc-x86_64-$version.msi"
             )
 
-            if ($process.ExitCode -ne 0) {
-              # Показываем хвост журнала установщика: без него причина
-              # остаётся загадкой, а сборка уже упала и не перезапускается.
-              Write-Host "--- журнал установки $file ---"
-              Get-Content $log -Tail 40 -ErrorAction SilentlyContinue
-              throw "Установка $file завершилась с кодом $($process.ExitCode)"
+            foreach ($file in $files) {
+              # Путь должен быть абсолютным: msiexec ищет файл-пакет
+              # относительно system32 и на относительный путь отвечает
+              # «пакет не найден».
+              $msi = Join-Path $env:RUNNER_TEMP $file
+
+              try {
+                Invoke-WebRequest "$base/$file" -OutFile $msi -ErrorAction Stop
+              } catch {
+                # Показываем и адрес, и код ответа: без этого «404»
+                # выглядит как выдумка, а причина остаётся неясной.
+                $status = $_.Exception.Response.StatusCode.value__
+                Write-Host "Не скачался $base/$file (код $status)"
+                return $false
+              }
+
+              $log = "$msi.log"
+              $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+                "/i", "`"$msi`"", "/qn", "/norestart", "/l*v", "`"$log`""
+              )
+
+              if ($process.ExitCode -ne 0) {
+                Write-Host "--- журнал установки $file ---"
+                Get-Content $log -Tail 40 -ErrorAction SilentlyContinue
+                Write-Host "Установка $file завершилась с кодом $($process.ExitCode)"
+                return $false
+              }
             }
+
+            return $true
+          }
+
+          $installed = $false
+          foreach ($version in $env:GSTREAMER_VERSIONS.Split(',')) {
+            Write-Host "Пробую GStreamer $version"
+            if (Install-GStreamer $version.Trim()) {
+              $installed = $true
+              break
+            }
+            Write-Host "Версия $version не подошла, пробую следующую"
+          }
+
+          if (-not $installed) {
+            throw "Ни одну из версий GStreamer не удалось установить: $env:GSTREAMER_VERSIONS"
           }
 
           # Путь не угадываем, а ищем по факту: установщик сам выбирает
@@ -76,6 +100,9 @@ jobs:
           $lib = Get-ChildItem C:\gstreamer -Recurse -Filter gstreamer-1.0.lib -ErrorAction SilentlyContinue |
                  Select-Object -First 1
           if (-not $lib) {
+            Write-Host "Содержимое C:\gstreamer:"
+            Get-ChildItem C:\gstreamer -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+              Select-Object -First 30 -ExpandProperty FullName
             throw "После установки GStreamer не найден gstreamer-1.0.lib в C:\gstreamer"
           }
 
