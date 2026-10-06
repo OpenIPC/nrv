@@ -1,30 +1,33 @@
 #pragma once
 
-#include <QQuickItem>
+#include <QQuickPaintedItem>
 #include <QImage>
 #include <QMutex>
 
 /**
  * Элемент QML, который рисует кадр с камеры.
  *
- * Свой, а не `VideoOutput`: в Qt 6.4 (Debian 12, Astra 1.7) свойство
- * `VideoOutput.videoSink` доступно только для чтения, поэтому подставить
- * в него свой приёмник кадров нельзя. Свой элемент заодно снимает
- * зависимость от Qt Multimedia в рантайме.
+ * Рисуем через QQuickPaintedItem, а не через собственный узел сцены.
+ * Прежний вариант использовал QSGSimpleTextureNode и ронял приложение с
+ * нарушением доступа внутри Qt6Quick.dll: окно закрывалось через пару
+ * секунд после открытия. Ручная работа с узлами сцены требует аккуратности
+ * в мелочах (порядок установки текстуры и фильтрации, пустой кадр, владение
+ * текстурой), а ошибка там приводит не к сообщению, а к исчезновению
+ * процесса — искать её приходится по журналу и коду исключения.
  *
- * Кадр приходит из потока GStreamer, а рисуется в потоке отрисовки, поэтому
- * картинка хранится под замком, а узел сцены обновляется только когда
- * действительно появился новый кадр.
+ * QQuickPaintedItem сам управляет текстурой и очередью отрисовки, поэтому
+ * на первом этапе выбран он: важнее не падать. Быстрый путь (свои узлы
+ * сцены, кадры без лишних копирований) вернём отдельной задачей, когда
+ * сетка заработает на стенде и появятся замеры.
  */
-class VideoItem : public QQuickItem
+class VideoItem : public QQuickPaintedItem
 {
     Q_OBJECT
-    QML_ELEMENT
 
 public:
     explicit VideoItem(QQuickItem *parent = nullptr);
 
-    QSGNode *updatePaintNode(QSGNode *node, UpdatePaintNodeData *data) override;
+    void paint(QPainter *painter) override;
 
 public slots:
     /** Новый кадр. Можно вызывать из любого потока. */
@@ -35,5 +38,4 @@ public slots:
 private:
     QMutex m_mutex;
     QImage m_image;
-    bool m_dirty = false;
 };

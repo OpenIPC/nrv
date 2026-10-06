@@ -1,13 +1,17 @@
 #include "video/VideoItem.h"
 
-#include <QQuickWindow>
-#include <QSGSimpleTextureNode>
+#include <QPainter>
 
 VideoItem::VideoItem(QQuickItem *parent)
-    : QQuickItem(parent)
+    : QQuickPaintedItem(parent)
 {
-    // Без этого элемента сцена не станет вызывать updatePaintNode.
-    setFlag(ItemHasContents, true);
+    // Кэш в изображении: кадры приходят часто, и держать их в текстуре
+    // напрямую дешевле, чем перерисовывать сцену целиком.
+    setRenderTarget(QQuickPaintedItem::Image);
+    setPerformanceHint(QQuickPaintedItem::FastFBOResizing, true);
+    // Сглаживание при уменьшении размывает мелкие детали — а на записи
+    // номеров и лиц они и нужны. Кадр и так растягивается по размеру ячейки.
+    setAntialiasing(false);
 }
 
 void VideoItem::setFrame(const QImage &image)
@@ -15,10 +19,9 @@ void VideoItem::setFrame(const QImage &image)
     {
         QMutexLocker locker(&m_mutex);
         m_image = image;
-        m_dirty = true;
     }
-    // Будим сцену: кадры приходят из потока GStreamer, который ничего не
-    // знает о состоянии отрисовки.
+    // Кадры приходят из потока GStreamer: он ничего не знает о состоянии
+    // отрисовки, поэтому обновление запрашиваем через очередь событий.
     QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
 }
 
@@ -27,58 +30,33 @@ void VideoItem::clearFrame()
     {
         QMutexLocker locker(&m_mutex);
         m_image = QImage();
-        m_dirty = true;
     }
     QMetaObject::invokeMethod(this, "update", Qt::QueuedConnection);
 }
 
-QSGNode *VideoItem::updatePaintNode(QSGNode *node, UpdatePaintNodeData *)
+void VideoItem::paint(QPainter *painter)
 {
     QImage frame;
     {
         QMutexLocker locker(&m_mutex);
-        if (!m_dirty && node) {
-            return node;
-        }
         frame = m_image;
-        m_dirty = false;
-    }
-
-    auto *textureNode = static_cast<QSGSimpleTextureNode *>(node);
-    if (!textureNode) {
-        textureNode = new QSGSimpleTextureNode;
-        // Сглаживание при уменьшении портит мелкие детали на записи
-        // номеров, поэтому выключено.
-        textureNode->setFiltering(QSGTexture::Nearest);
     }
 
     if (frame.isNull()) {
-        textureNode->setTexture(nullptr);
-        return textureNode;
+        return;
     }
-
-    // Текстуру создаём заново на каждый кадр: аппаратные пути (dmabuf и
-    // аналоги) появятся отдельным шагом, а до тех пор иначе кадр не
-    // окажется на экране.
-    QSGTexture *texture = window()->createTextureFromImage(frame);
-    textureNode->setTexture(texture);
-    textureNode->setOwnsTexture(true);
 
     // Вписываем кадр в ячейку с сохранением пропорций: камеры парка отдают
-    // и 16:9, и 4:3, растягивать их нельзя — оператор неверно оценит
-    // расстояние.
-    const QSizeF itemSize = size();
-    const QSizeF frameSize = frame.size();
-    if (frameSize.isEmpty()) {
-        return textureNode;
+    // и 16:9, и 4:3 — растягивание исказило бы расстояния на картинке.
+    const QSizeF target = size();
+    if (target.isEmpty()) {
+        return;
     }
 
-    const qreal scale = qMin(itemSize.width() / frameSize.width(),
-                             itemSize.height() / frameSize.height());
-    const QSizeF scaled(frameSize.width() * scale, frameSize.height() * scale);
-    const QPointF offset((itemSize.width() - scaled.width()) / 2.0,
-                         (itemSize.height() - scaled.height()) / 2.0);
+    const QSizeF scaled = QSizeF(frame.size()).scaled(target, Qt::KeepAspectRatio);
+    const QRectF destination(QPointF((target.width() - scaled.width()) / 2.0,
+                                     (target.height() - scaled.height()) / 2.0),
+                             scaled);
 
-    textureNode->setRect(QRectF(offset, scaled));
-    return textureNode;
+    painter->drawImage(destination, frame);
 }
