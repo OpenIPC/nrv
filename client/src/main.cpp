@@ -1,6 +1,7 @@
 #include <QGuiApplication>
 #include <QCoreApplication>
 #include <QQmlApplicationEngine>
+#include <QQuickWindow>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -183,6 +184,73 @@ void initLogging()
     });
 }
 
+#if defined(NVR_WINDOWS_BUILD)
+/**
+ * Записывает в журнал необработанное исключение Windows.
+ *
+ * Без этого падение в нативном коде не оставляет следов: процесс просто
+ * исчезает, и понять, какая библиотека упала, нельзя. Здесь мы узнаём код
+ * исключения и модуль, в котором оно возникло, — этого достаточно, чтобы
+ * отличить сбой драйвера от ошибки в Qt или в GStreamer.
+ */
+void installCrashLogger()
+{
+    SetUnhandledExceptionFilter([](EXCEPTION_POINTERS *info) -> LONG {
+        const EXCEPTION_RECORD *record = info->ExceptionRecord;
+
+        // Модуль ищем по адресу исключения: полное имя укажет виновника.
+        HMODULE module = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                               | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(record->ExceptionAddress),
+                           &module);
+
+        wchar_t modulePath[MAX_PATH] = {};
+        if (module) {
+            GetModuleFileNameW(module, modulePath, MAX_PATH);
+        }
+
+        qCritical("Необработанное исключение 0x%08lX по адресу %p, модуль: %ls",
+                  static_cast<unsigned long>(record->ExceptionCode),
+                  record->ExceptionAddress,
+                  module ? modulePath : L"неизвестен");
+        return EXCEPTION_EXECUTE_HANDLER;
+    });
+}
+#endif
+
+/**
+ * Сообщает в журнал о состоянии графической сцены.
+ *
+ * Приложение может закрыться сразу после открытия окна — именно на первой
+ * отрисовке. Эти сообщения отделяют «графика не поднялась» от «сцена
+ * работает, упало что-то позже».
+ */
+void watchSceneGraph(QQmlApplicationEngine &engine)
+{
+    if (engine.rootObjects().isEmpty()) {
+        return;
+    }
+
+    auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+    if (!window) {
+        qWarning("Корневой объект интерфейса — не окно: следить за сценой нельзя");
+        return;
+    }
+
+    QObject::connect(window, &QQuickWindow::sceneGraphInitialized, window, [window]() {
+        qInfo("Графическая сцена инициализирована, графическое API: %d",
+              static_cast<int>(window->graphicsApi()));
+    });
+    QObject::connect(window, &QQuickWindow::sceneGraphError, window,
+                     [](QQuickWindow::SceneGraphError, const QString &message) {
+                         qCritical("Ошибка графической сцены: %s", qPrintable(message));
+                     });
+    QObject::connect(window, &QWindow::visibleChanged, window, [](bool visible) {
+        qInfo("Окно %s", visible ? "показано" : "скрыто");
+    });
+}
+
 int main(int argc, char *argv[])
 {
     // Журнал подключаем первой строкой: если приложение падает при
@@ -190,6 +258,10 @@ int main(int argc, char *argv[])
     // в файле, а не исчезнуть вместе с процессом.
     initLogging();
     qInfo("--- запуск клиента ---");
+
+#if defined(NVR_WINDOWS_BUILD)
+    installCrashLogger();
+#endif
 
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("NVR Wall"));
@@ -266,5 +338,6 @@ int main(int argc, char *argv[])
     }
 
     qInfo("Интерфейс загружен, окно открыто");
+    watchSceneGraph(engine);
     return app.exec();
 }
