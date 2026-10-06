@@ -123,8 +123,8 @@ Item {
                         cellIndex: index
                         cameraId: Wall.assignments[index] || ""
                         selected: wall.selectedCell === index
-                        onSelected: wall.selectedCell = (wall.selectedCell === index ? -1 : index)
-                        onCleared: {
+                        onCellClicked: wall.selectedCell = (wall.selectedCell === index ? -1 : index)
+                        onCellDoubleClicked: {
                             Wall.clear(index)
                             if (wall.selectedCell === index) {
                                 wall.selectedCell = -1

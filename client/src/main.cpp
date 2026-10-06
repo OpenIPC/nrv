@@ -72,9 +72,12 @@ void explainMissingGStreamer(const QString &element)
         "Для показа видео нужен GStreamer — компонент, который декодирует "
         "потоки с камер.\n\n"
         "Не найден элемент «%1».\n\n"
-        "Установите GStreamer (пакеты MSVC x86_64: runtime и development) "
-        "с сайта gstreamer.freedesktop.org и запустите клиент заново.\n\n"
-        "Открыть страницу загрузки сейчас?").arg(element);
+        "В клиенте библиотека GStreamer версии %2. Если GStreamer установлен "
+        "в системе, его версия должна совпадать: плагины другой версии не "
+        "подходят, хотя сам компонент стоит.\n\n"
+        "Проще всего взять полную поставку клиента (архив с «full» в имени): "
+        "в ней плагины уже внутри, устанавливать ничего не нужно.\n\n"
+        "Открыть страницу загрузки GStreamer?").arg(element).arg(QString::fromLatin1(gst_version_string()));
 
     const int answer = MessageBoxW(
         nullptr,
@@ -297,9 +300,12 @@ int main(int argc, char *argv[])
     // окно ждёт нажатия и держало бы сборку до таймаута.
     const QString missing = missingGStreamerElement();
     if (!missing.isEmpty()) {
-        if (qEnvironmentVariableIsSet("NVR_NO_GSTREAMER_PROMPT")) {
-            qWarning("GStreamer не готов: отсутствует элемент «%s»", qPrintable(missing));
-        } else {
+        // В журнал пишем всегда: на стенде это единственный след причины,
+        // по которой картинки нет.
+        qWarning("GStreamer не готов: нет элемента «%s». Библиотека версии %s",
+                 qPrintable(missing), gst_version_string());
+
+        if (!qEnvironmentVariableIsSet("NVR_NO_GSTREAMER_PROMPT")) {
             explainMissingGStreamer(missing);
         }
     }

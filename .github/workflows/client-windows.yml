@@ -146,6 +146,20 @@ jobs:
                -BuildDir client/build `
                -GStreamerRoot "$env:GSTREAMER_ROOT"
 
+      - name: Собрать полную поставку
+        shell: pwsh
+        run: |
+          # Вторая поставка — с плагинами GStreamer внутри. Она нужна там,
+          # где на машине нет установленного GStreamer. Тонкая поставка
+          # берёт плагины из системы, но требует совпадения версий:
+          # библиотека в клиенте и системная установка должны быть одной
+          # версии, иначе плагины не подходят и видео не работает.
+          pwsh -File client/deploy/windows/deploy.ps1 `
+               -BuildDir client/build/Release `
+               -GStreamerRoot "$env:GSTREAMER_ROOT" `
+               -OutDir client/build/dist-full `
+               -WithPlugins
+
       - name: Проверить, что в поставке есть все библиотеки
         shell: pwsh
         run: |
@@ -184,4 +198,11 @@ jobs:
         with:
           name: nvr-wall-win64
           path: client/build/dist
+          retention-days: 30
+
+      - name: Выложить полный архив
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvr-wall-win64-full
+          path: client/build/dist-full
           retention-days: 30

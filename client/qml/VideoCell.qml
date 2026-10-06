@@ -14,8 +14,11 @@ Rectangle {
     property string cameraId: ""
     property bool selected: false
 
-    signal selected()
-    signal cleared()
+    // Сигналы названы не так, как свойство: одноимённые свойство и сигнал
+    // конфликтуют — Qt берёт свойство, и вызов «selected()» перестаёт быть
+    // функцией (видели эту ошибку в журнале на стенде).
+    signal cellClicked()
+    signal cellDoubleClicked()
 
     color: "#0d1117"
     border.width: cell.selected ? 2 : 1
@@ -102,7 +105,7 @@ Rectangle {
 
     MouseArea {
         anchors.fill: parent
-        onClicked: cell.selected()
-        onDoubleClicked: cell.cleared()
+        onClicked: cell.cellClicked()
+        onDoubleClicked: cell.cellDoubleClicked()
     }
 }
