@@ -38,6 +38,17 @@ jobs:
           modules: 'qtmultimedia'
           cache: true
 
+      - name: Кэш GStreamer
+        uses: actions/cache@v4
+        with:
+          # Кэшируем распакованный GStreamer: это около 700 МБ загрузки,
+          # и без кэша каждый запуск начинается с неё. Ключ включает
+          # список версий — при его изменении кэш пересобирается.
+          path: |
+            ${{ runner.temp }}/gst-1.26.5
+            ${{ runner.temp }}/gst-1.24.13
+          key: gstreamer-msvc-${{ env.GSTREAMER_VERSIONS }}
+
       - name: Подготовить GStreamer
         shell: pwsh
         run: |
@@ -53,6 +64,13 @@ jobs:
             $dest = Join-Path $env:RUNNER_TEMP "gst-$version"
             $ok = $true
 
+            # Если кэш уже распакован — скачивать и распаковывать нечего.
+            $cached = Get-ChildItem $dest -Recurse -Filter gstreamer-1.0.lib -ErrorAction SilentlyContinue |
+                      Select-Object -First 1
+            if ($cached) {
+              Write-Host "GStreamer $version взят из кэша"
+            }
+            else {
             foreach ($package in @("gstreamer-1.0", "gstreamer-1.0-devel")) {
               $file = "$package-msvc-x86_64-$version.msi"
               $msi = Join-Path $env:RUNNER_TEMP $file
@@ -84,6 +102,7 @@ jobs:
                 $ok = $false
                 break
               }
+            }
             }
 
             if ($ok) {
