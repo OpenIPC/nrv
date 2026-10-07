@@ -112,6 +112,21 @@ Rectangle {
         color: "#4a5768"
     }
 
+    // Причина, по которой камеры нет: чаще всего её удалили на сервере,
+    // а в сохранённой раскладке она осталась. Показываем словами — иначе
+    // ячейка просто чёрная, и непонятно, что делать.
+    Label {
+        anchors.centerIn: parent
+        width: parent.width - 16
+        visible: cell.cameraId.length > 0 && !player.active
+                 && Api.cameraError(cell.cameraId).length > 0
+        text: Api.cameraError(cell.cameraId)
+        color: "#e05252"
+        font.pixelSize: 12
+        wrapMode: Text.WordWrap
+        horizontalAlignment: Text.AlignHCenter
+    }
+
     // Состояние подключения: причина видна словами, а не только по картинке.
     Label {
         anchors.left: parent.left

@@ -16,7 +16,9 @@ ApplicationWindow {
     /** Монитор, на который окно встало фактически (может отличаться от профиля). */
     property int usedMonitorIndex: -1
 
-    visible: true
+    // Размер и положение задаёт place(), поэтому visible не трогаем:
+    // одновременная запись visible и visibility даёт предупреждение
+    // и непредсказуемое поведение.
     title: qsTr("NVR — видеостена")
     color: "#0d1117"
 

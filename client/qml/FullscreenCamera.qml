@@ -250,6 +250,18 @@ Window {
                 wrapMode: Text.WordWrap
             }
 
+            // Микрофона нет вовсе — тогда кнопки звука не показываем,
+            // но говорим об этом прямо: половина камер парка без микрофона,
+            // и «кнопки нет» иначе выглядит как недоработка.
+            Label {
+                width: parent.width
+                visible: Api.cameraAudio.hasMicrophone === false && Api.can("audio.listen")
+                text: qsTr("У камеры нет микрофона")
+                color: "#8a94a2"
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
+
             Label {
                 width: parent.width
                 visible: Api.talkError.length > 0

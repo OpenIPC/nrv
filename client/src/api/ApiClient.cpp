@@ -308,10 +308,20 @@ void ApiClient::prepareStream(const QString &cameraId)
         // умолчанию (он тоже рабочий) либо покажет снимок кадра. А вот
         // текст причины полезен в отчёте, если поток не пойдёт.
         if (reply->error() != QNetworkReply::NoError) {
+            const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            // 404 — камеры на сервере больше нет (её удалили, а в раскладке
+            // она осталась). Пишем это словами: иначе ячейка просто чёрная.
+            m_cameraErrors.insert(cameraId, status == 404
+                                  ? tr("Камера не найдена на сервере")
+                                  : reply->errorString());
+            emit streamsChanged();
             qWarning("Не удалось получить параметры потока камеры %s: %s",
                      qPrintable(cameraId), qPrintable(reply->errorString()));
             return;
         }
+
+        // Камера ответила — прошлые отказы по ней больше неактуальны.
+        m_cameraErrors.remove(cameraId);
 
         const QJsonObject info = QJsonDocument::fromJson(reply->readAll()).object();
         const QString user = info.value(QStringLiteral("username")).toString();
@@ -603,6 +613,11 @@ void ApiClient::talkSendChunk(const QString &cameraId, const QByteArray &pcm)
             qWarning("Порция звука не доставлена: %s", qPrintable(reply->errorString()));
         }
     });
+}
+
+QString ApiClient::cameraError(const QString &cameraId) const
+{
+    return m_cameraErrors.value(cameraId);
 }
 
 QString ApiClient::streamUrl(const QString &cameraId, bool subStream) const

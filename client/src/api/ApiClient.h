@@ -218,6 +218,16 @@ public:
     void talkSendChunk(const QString &cameraId, const QByteArray &pcm);
 
     /**
+     * Причина, по которой камера не открывается.
+     *
+     * Заполняется, когда сервер отказал в параметрах потока: чаще всего
+     * это удалённая камера, оставшаяся в сохранённой раскладке. Без такого
+     * текста ячейка просто оставалась чёрной, а причина виднелась только
+     * в журнале.
+     */
+    Q_INVOKABLE QString cameraError(const QString &cameraId) const;
+
+    /**
      * Запрашивает у сервера параметры потока камеры (адрес медиасервера,
      * пути, учётные данные).
      *
@@ -318,4 +328,6 @@ private:
     QVariantMap m_cameraAudio;
     bool m_talkActive = false;
     QString m_talkError;
+    // Тексты отказов по камерам: идентификатор → причина.
+    QHash<QString, QString> m_cameraErrors;
 };

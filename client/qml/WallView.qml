@@ -226,9 +226,9 @@ Item {
                     textRole: "name"
                     displayText: Api.plans.length === 0
                                  ? qsTr("Планов нет") : currentText
-                    onActivated: (index) => {
+                    onActivated: function (planIndex) {
                         if (wall.screen) {
-                            wall.screen.planId = model[index].id
+                            wall.screen.planId = model[planIndex].id
                         }
                     }
                 }
