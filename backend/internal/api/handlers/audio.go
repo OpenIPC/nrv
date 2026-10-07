@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -45,6 +46,12 @@ func (h *AudioHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 
 	s, err := h.repo.GetSettings(r.Context(), id)
 	if err != nil {
+		// Удалённая камера — не ошибка сервера: клиент по 404 понимает,
+		// что камеру надо назначить заново.
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "камера не найдена"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

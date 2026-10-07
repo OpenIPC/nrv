@@ -58,6 +58,10 @@ Rectangle {
 
     onStreamUrlChanged: {
         if (cell.streamUrl.length > 0) {
+            // Запись в журнал: по ней на дежурной машине видно, дошла ли
+            // до ячейки команда открыть поток, — иначе «нет видео» ничем
+            // не отличается от «камера не назначена».
+            console.log("ячейка", cell.cellIndex, "камера", cell.cameraId, "поток открывается")
             player.start(cell.streamUrl)
         } else {
             player.stop()
@@ -81,6 +85,14 @@ Rectangle {
         target: player
         function onFrameReady(image) {
             video.setFrame(image)
+        }
+        function onStatusChanged() {
+            // Причина отказа должна остаться в журнале: на стенде туда
+            // смотрят, когда в ячейке пусто.
+            if (player.status.length > 0) {
+                console.warn("ячейка", cell.cellIndex, "камера", cell.cameraId,
+                             "поток:", player.status)
+            }
         }
     }
 

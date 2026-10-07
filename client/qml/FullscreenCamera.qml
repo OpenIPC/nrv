@@ -16,7 +16,11 @@ Window {
 
     color: "#000000"
     title: cameraName.length > 0 ? cameraName : qsTr("Камера")
-    visible: false
+    // Видимостью управляем только через visibility. Обращаться сразу
+    // к двум свойствам (visible и visibility) нельзя: Qt выдаёт
+    // «Conflicting properties 'visible' and 'visibility'», и окно может
+    // не показаться (это предупреждение было в журнале на стенде).
+    visibility: Window.Hidden
 
     function open(id, name) {
         cameraId = id
@@ -36,7 +40,6 @@ Window {
         // кнопки звука и разговора для этой камеры.
         Api.refreshCameraAudio(id)
         visibility = Window.FullScreen
-        visible = true
     }
 
     function dismiss() {
@@ -46,7 +49,7 @@ Window {
         player.stop()
         audio.stop()
         Talk.stop()
-        visible = false
+        visibility = Window.Hidden
         cameraId = ""
         cameraName = ""
     }
@@ -81,6 +84,9 @@ Window {
 
     onStreamUrlChanged: {
         if (viewer.streamUrl.length > 0) {
+            // Запись в журнал: на дежурной машине журнал — единственный
+            // след причины, по которой картинки нет.
+            console.log("камера", viewer.cameraId, "поток открывается")
             player.start(viewer.streamUrl)
         } else {
             player.stop()
@@ -110,6 +116,14 @@ Window {
             target: player
             function onFrameReady(image) {
                 video.setFrame(image)
+            }
+            function onStatusChanged() {
+                // Ошибки потока пишем в журнал: без этого «чёрный экран»
+                // в отчёте не отличить от недоступного медиасервера,
+                // неверного адреса или отсутствующей камеры.
+                if (player.status.length > 0) {
+                    console.warn("камера", viewer.cameraId, "поток:", player.status)
+                }
             }
         }
 

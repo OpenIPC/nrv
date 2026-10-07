@@ -79,10 +79,21 @@ void AudioPlayer::onPadAdded(GstElement *, GstPad *pad, gpointer data)
     }();
     gst_caps_unref(caps);
 
-    // Видеодорожку пропускаем: принимать её здесь некому, а именно из-за
-    // неё конвейер падал с «streaming stopped, reason not-linked» —
-    // decodebin отдаёт все дорожки потока, и необработанная рвёт сессию.
+    // Не звук — отправляем заглушке. Оставить дорожку вовсе без
+    // получателя нельзя: decodebin тогда останавливает конвейер с
+    // «streaming stopped, reason not-linked». В обычном случае сюда
+    // ничего не попадает: в разборщик идёт только звук, а видеодорожка
+    // отсеивается раньше (см. onSourcePadAdded).
     if (!structureName.startsWith(QLatin1String("audio/"))) {
+        GstPad *videoPad = self->m_videoSink
+            ? gst_element_get_static_pad(self->m_videoSink, "sink")
+            : nullptr;
+        if (videoPad && !gst_pad_is_linked(videoPad)) {
+            gst_pad_link(pad, videoPad);
+        }
+        if (videoPad) {
+            gst_object_unref(videoPad);
+        }
         return;
     }
 
@@ -96,6 +107,43 @@ void AudioPlayer::onPadAdded(GstElement *, GstPad *pad, gpointer data)
             qInfo("Звук камеры: подключена дорожка %s", qPrintable(structureName));
             self->m_audioLinked = true;
         }
+    }
+    if (sinkPad) {
+        gst_object_unref(sinkPad);
+    }
+}
+
+void AudioPlayer::onSourcePadAdded(GstElement *source, GstPad *pad, gpointer data)
+{
+    Q_UNUSED(source);
+    auto *decoder = static_cast<GstElement *>(data);
+
+    // Приёмник RTSP отдаёт по паду на каждую дорожку потока — видео и звук.
+    // В разборщик берём ТОЛЬКО звук:
+    //  - у decodebin один вход, две дорожки в него не помещаются;
+    //  - видеодорожка здесь не нужна, а её декодирование на 4К отняло бы
+    //    процессор у стены.
+    //
+    // Раньше здесь стояла обычная связка элементов (gst_element_link) —
+    // она соединяет только ПЕРВУЮ появившуюся дорожку. Если первой в
+    // описании сессии шло видео (обычный порядок у камер), звуковая
+    // дорожка оставалась без получателя и звука не было вовсе.
+    GstCaps *caps = gst_pad_query_caps(pad, nullptr);
+    const GstStructure *structure = caps ? gst_caps_get_structure(caps, 0) : nullptr;
+    const gchar *media = structure ? gst_structure_get_string(structure, "media") : nullptr;
+    const bool isAudio = media && g_str_equal(media, "audio");
+    if (caps) {
+        gst_caps_unref(caps);
+    }
+    if (!isAudio) {
+        return;
+    }
+
+    // Вход у decodebin есть всегда: подключать дорожку было бы некуда,
+    // если бы его не было.
+    GstPad *sinkPad = gst_element_get_static_pad(decoder, "sink");
+    if (sinkPad && !gst_pad_is_linked(sinkPad)) {
+        gst_pad_link(pad, sinkPad);
     }
     if (sinkPad) {
         gst_object_unref(sinkPad);
@@ -121,12 +169,35 @@ bool AudioPlayer::buildPipeline(const QString &url)
     }
     GstElement *sink = gst_element_factory_make(sinkName.constData(), "out");
 
-    if (!source || !decoder || !m_convert || !resample || !m_volumeElement || !sink) {
-        // Чаще всего не хватает плагина вывода звука: в тонкой поставке
-        // он берётся из системы, и без установленного GStreamer звука
-        // не будет, хотя видео работает.
-        setStatus(tr("Звук недоступен: не хватает элементов GStreamer"));
-        return false;
+    // Заглушка на случай, если разборщик всё же отдаст не звук: дорожка
+    // без получателя останавливает весь конвейер. Обычно сюда ничего не
+    // попадает — видеодорожка отсеивается ещё до разборщика, потому что
+    // у decodebin один вход (см. onSourcePadAdded).
+    m_videoSink = gst_element_factory_make("fakesink", "video");
+
+    GstElement *elements[] = {source, decoder, m_convert, resample,
+                              m_volumeElement, sink, m_videoSink};
+    for (GstElement *element : elements) {
+        if (!element) {
+            // Не хватает плагина. Чаще всего это устройство вывода звука:
+            // в тонкой поставке элементы берутся из системы, и без
+            // установленного GStreamer звука не будет, хотя видео работает.
+            //
+            // Освобождаем всё созданное: до добавления в конвейер элементы
+            // ещё никому не принадлежат, и без этого они остались бы висеть.
+            for (GstElement *created : elements) {
+                if (created) {
+                    gst_object_unref(created);
+                }
+            }
+            gst_object_unref(m_pipeline);
+            m_pipeline = nullptr;
+            m_convert = nullptr;
+            m_volumeElement = nullptr;
+            m_videoSink = nullptr;
+            setStatus(tr("Звук недоступен: не хватает элементов GStreamer"));
+            return false;
+        }
     }
 
     // Протокол TCP: по UDP в сети с камерами часть пакетов теряется,
@@ -138,7 +209,7 @@ bool AudioPlayer::buildPipeline(const QString &url)
                  nullptr);
 
     gst_bin_add_many(GST_BIN(m_pipeline), source, decoder, m_convert, resample,
-                     m_volumeElement, sink, nullptr);
+                     m_volumeElement, sink, m_videoSink, nullptr);
 
     // Звуковая ветка собирается заранее, а к decodebin её подключает
     // обработчик падов: кодек заранее неизвестен — в парке встречаются
@@ -147,10 +218,12 @@ bool AudioPlayer::buildPipeline(const QString &url)
         setStatus(tr("Не удалось собрать звуковую ветку конвейера"));
         return false;
     }
-    if (!gst_element_link(source, decoder)) {
-        setStatus(tr("Не удалось подключить приёмник RTSP"));
-        return false;
-    }
+
+    // Приёмник RTSP соединяем с разборщиком по сигналу, а не напрямую:
+    // прямой связкой элементов соединилась бы только первая дорожка потока
+    // (а нужна именно звуковая). Разбор и выбор дорожки — в обработчике.
+    g_signal_connect(source, "pad-added", G_CALLBACK(&AudioPlayer::onSourcePadAdded),
+                     decoder);
     g_signal_connect(decoder, "pad-added", G_CALLBACK(&AudioPlayer::onPadAdded), this);
 
     applyVolume();
@@ -205,12 +278,15 @@ void AudioPlayer::start(const QString &url)
         return;
     }
 
-    stop();
+    destroyPipeline();
 
     m_url = url;
     m_audioLinked = false;
+    // Неудачную сборку НЕ затираем через stop(): там текст состояния
+    // сбрасывается, и причина «нет звука» исчезла бы до того, как её
+    // кто-нибудь прочитает.
     if (!buildPipeline(url)) {
-        stop();
+        destroyPipeline();
         return;
     }
 
@@ -228,7 +304,7 @@ void AudioPlayer::start(const QString &url)
     emit activeChanged();
 }
 
-void AudioPlayer::stop()
+void AudioPlayer::destroyPipeline()
 {
     if (!m_pipeline) {
         return;
@@ -245,8 +321,15 @@ void AudioPlayer::stop()
     // обнуляем только указатели, чтобы ими не пользовались после остановки.
     m_convert = nullptr;
     m_volumeElement = nullptr;
+    m_videoSink = nullptr;
 
     m_url.clear();
-    setStatus(QString());
+    m_audioLinked = false;
     emit activeChanged();
+}
+
+void AudioPlayer::stop()
+{
+    destroyPipeline();
+    setStatus(QString());
 }

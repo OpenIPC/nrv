@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nvr/backend/internal/domain"
 )
@@ -38,6 +39,15 @@ func (r *AudioRepo) GetSettings(ctx context.Context, cameraID uuid.UUID) (*domai
 		&s.SpeakerEnabled, &s.SpeakerCodec, &s.UpdatedAt,
 	)
 	if err != nil {
+		// Камеры нет: вставка строки настроек нарушает ссылочную целостность.
+		// Это не сбой сервера, а обычная ситуация — в раскладке нативного
+		// клиента могла остаться удалённая камера. Возвращаем признак «не
+		// найдено», чтобы обработчик ответил 404, а не 500: иначе клиент
+		// видит «Internal Server Error» и не понимает причины.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return nil, ErrNotFound
+		}
 		return nil, fmt.Errorf("get audio settings: %w", err)
 	}
 	if s.AudioEvents == nil {

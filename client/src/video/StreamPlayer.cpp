@@ -9,16 +9,50 @@
 namespace {
 
 /**
- * Собирает описание конвейера.
+ * Предпочитаемый аппаратный декодер для этой системы.
  *
- * Декодер выбирается по системе:
- * — Windows: d3d11h264dec из gst-plugins-bad, декодирование на видеокарте;
- * — Linux: vaapidecodebin (Astra, Debian, Ubuntu), тоже аппаратный;
- * — если ни того, ни другого нет, остаётся avdec_h264 — программный.
+ * Windows: d3d11h264dec из gst-plugins-bad, декодирование на видеокарте;
+ * Linux: vaapidecodebin (Astra, Debian, Ubuntu).
  *
- * Порядок такой не случаен: 16 потоков 704×576 программным декодером
- * кладут процессор, а стена как раз для 16 ячеек и делается. Программный
- * вариант оставлен как запас, когда аппаратного ускорения нет.
+ * Аппаратный вперёд не для красоты: 16 потоков 704×576 программным
+ * декодером кладут процессор, а стена как раз для 16 ячеек и делается.
+ */
+QString preferredHardwareDecoder()
+{
+#if defined(Q_OS_WIN)
+    return QStringLiteral("d3d11h264dec");
+#elif defined(Q_OS_LINUX)
+    return QStringLiteral("vaapidecodebin");
+#else
+    return QString();
+#endif
+}
+
+/** Программный декодер: работает везде, где есть gst-plugins-libav. */
+QString softwareDecoder()
+{
+    return QStringLiteral("avdec_h264");
+}
+
+/**
+ * Декодер с проверкой наличия.
+ *
+ * Конвейер с отсутствующим элементом не собирается вообще, и выясняется это
+ * только по тексту ошибки в интерфейсе. Так уже было на Linux: элемент
+ * vaapidecodebin оказывается собран не во всех сборках, а клиент выбирал
+ * его безусловно — ни одна ячейка не открывалась при живом потоке.
+ */
+QString chooseDecoder()
+{
+    const QString preferred = preferredHardwareDecoder();
+    if (!preferred.isEmpty() && gst_element_factory_find(preferred.toUtf8().constData())) {
+        return preferred;
+    }
+    return softwareDecoder();
+}
+
+/**
+ * Собирает описание конвейера с указанным декодером.
  *
  * appsink настроен на два буфера с отбрасыванием: лучше потерять кадр,
  * чем копить задержку, если сцена не успевает рисовать.
@@ -27,21 +61,8 @@ namespace {
  * изображение. Конвертацию делает GStreamer, а не Qt: она у него
  * векторизована, и на шестнадцати потоках это заметно.
  */
-QString buildPipelineDescription(const QString &url, QString *decoderName)
+QString buildPipelineDescription(const QString &url, const QString &decoder)
 {
-    QString decoder;
-#if defined(Q_OS_WIN)
-    decoder = QStringLiteral("d3d11h264dec");
-#elif defined(Q_OS_LINUX)
-    decoder = QStringLiteral("vaapidecodebin");
-#else
-    decoder = QStringLiteral("avdec_h264");
-#endif
-
-    if (decoderName) {
-        *decoderName = decoder;
-    }
-
     return QStringLiteral(
         "rtspsrc location=\"%1\" latency=200 protocols=tcp "
         "! rtph264depay ! h264parse ! %2 "
@@ -76,10 +97,31 @@ void StreamPlayer::queueStatus(const QString &value)
     QMetaObject::invokeMethod(this, [this, value]() { setStatus(value); }, Qt::QueuedConnection);
 }
 
+void StreamPlayer::scheduleSoftwareFallback()
+{
+    // Перезапуск делается в главном потоке: конвейер собирается и
+    // разрушается там же, а сообщение об ошибке пришло из потока GStreamer.
+    if (m_url.isEmpty() || m_softwareForUrl == m_url) {
+        return;
+    }
+    m_softwareForUrl = m_url;
+    const QString url = m_url;
+    QMetaObject::invokeMethod(this, [this, url]() {
+        // Адрес мог смениться, пока сообщение шло до главного потока.
+        if (m_url != url) {
+            return;
+        }
+        stop();
+        start(url);
+    }, Qt::QueuedConnection);
+}
+
 bool StreamPlayer::buildPipeline(const QString &url)
 {
-    QString decoder;
-    const QString description = buildPipelineDescription(url, &decoder);
+    // Декодер выбираем при сборке: аппаратный может отсутствовать в сборке
+    // GStreamer, и тогда берём программный (см. chooseDecoder).
+    m_decoder = (m_softwareForUrl == url) ? softwareDecoder() : chooseDecoder();
+    const QString description = buildPipelineDescription(url, m_decoder);
 
     GError *error = nullptr;
     m_pipeline = gst_parse_launch(description.toUtf8().constData(), &error);
@@ -121,6 +163,10 @@ bool StreamPlayer::buildPipeline(const QString &url)
             }
             g_free(debug);
             self->queueStatus(text);
+            // Аппаратный декодер мог не подняться (нет устройства VAAPI,
+            // драйвер видеокарты, удалённый рабочий стол). Пробуем ещё раз
+            // программным — иначе ячейка осталась бы пустой, хотя поток есть.
+            self->scheduleSoftwareFallback();
             break;
         }
         case GST_MESSAGE_STATE_CHANGED: {
@@ -152,6 +198,8 @@ void StreamPlayer::start(const QString &url)
         stop();
         return;
     }
+    // Признак «для этого адреса уже перешли на программный декодер»
+    // привязан к адресу: при смене камеры аппаратный пробуется снова.
     if (m_pipeline && m_url == url) {
         return;
     }
@@ -167,6 +215,10 @@ void StreamPlayer::start(const QString &url)
 
     m_url = url;
     gst_element_set_state(m_pipeline, GST_STATE_PLAYING);
+    // Пишем выбранный декодер: без этой строки в журнале не отличить
+    // «поток не идёт» от «декодер не поднялся» — на стенде это разные
+    // поломки с разным лечением.
+    qInfo("Поток открыт, декодер %s", qPrintable(m_decoder));
     setStatus(tr("Подключение…"));
     emit activeChanged();
 }

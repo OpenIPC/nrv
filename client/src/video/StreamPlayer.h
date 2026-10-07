@@ -64,8 +64,22 @@ private:
     /** Обработчик нового кадра: вызывается из потока GStreamer. */
     static GstFlowReturn onNewSample(GstAppSink *sink, gpointer userData);
     void deliverSample(GstSample *sample);
+    /**
+     * Перезапускает поток программным декодером.
+     *
+     * Нужно, когда аппаратный декодер есть в сборке, но не поднимается
+     * (нет устройства VAAPI, драйвер видеокарты, удалённый рабочий стол).
+     * Без запасной попытки ячейка оставалась бы пустой, хотя поток есть.
+     * Вызывается из потока GStreamer, поэтому перезапуск откладывается
+     * в главный поток.
+     */
+    void scheduleSoftwareFallback();
 
     GstElement *m_pipeline = nullptr;
     QString m_url;
     QString m_status;
+    /** Декодер, с которым собран текущий конвейер: виден в журнале. */
+    QString m_decoder;
+    /** Адрес, для которого уже перешли на программный декодер. */
+    QString m_softwareForUrl;
 };
