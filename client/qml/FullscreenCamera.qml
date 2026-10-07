@@ -180,9 +180,13 @@ Window {
             onClicked: viewer.dismiss()
         }
 
-        // Панель звука — под кнопкой закрытия. Кнопки появляются только
-        // там, где они что-то дают: у части камер микрофона нет, а у
-        // части нет динамика. Показывать нерабочее — вводить в заблуждение.
+        // Панель звука — под кнопкой закрытия. Кнопки показываются по
+        // праву, а НЕ по серверным пометкам «есть микрофон» и «включён»:
+        // проверено на камере канала 1 — в её настройках стоит «звук
+        // выключен», а поток при этом несёт дорожку pcm_alaw. Пометки
+        // описывают обработку звука на сервере и о содержимом потока
+        // ничего не говорят, а скрытая кнопка лишала оператора
+        // возможности просто попробовать.
         Column {
             anchors.right: parent.right
             anchors.top: parent.top
@@ -193,7 +197,7 @@ Window {
 
             Button {
                 width: parent.width
-                visible: Api.cameraAudio.hasMicrophone === true && Api.can("audio.listen")
+                visible: Api.can("audio.listen")
                 checkable: true
                 checked: audio.active
                 text: audio.active ? qsTr("Звук включён") : qsTr("Включить звук")
@@ -210,7 +214,7 @@ Window {
 
             Slider {
                 width: parent.width
-                visible: Api.cameraAudio.hasMicrophone === true && Api.can("audio.listen")
+                visible: Api.can("audio.listen")
                 from: 0
                 to: 1
                 value: audio.volume
@@ -222,7 +226,7 @@ Window {
             // что происходит в диспетчерской.
             Button {
                 width: parent.width
-                visible: Api.cameraAudio.speakerEnabled === true && Api.can("audio.talk")
+                visible: Api.can("audio.talk")
                 text: Talk.active ? qsTr("Говорить… (отпустить — стоп)") : qsTr("Удерживать для разговора")
                 onPressed: Talk.start(viewer.cameraId)
                 onReleased: Talk.stop()
@@ -237,31 +241,9 @@ Window {
                 wrapMode: Text.WordWrap
             }
 
-            // Микрофон у камеры есть, но выключен в настройках: в потоке
-            // звука не будет, и без этой подсказки тишина выглядит как
-            // поломка клиента.
-            Label {
-                width: parent.width
-                visible: Api.cameraAudio.hasMicrophone === true
-                         && Api.cameraAudio.micEnabled === false
-                text: qsTr("Микрофон камеры выключен в её настройках")
-                color: "#8a94a2"
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
-            }
-
-            // Микрофона нет вовсе — тогда кнопки звука не показываем,
-            // но говорим об этом прямо: половина камер парка без микрофона,
-            // и «кнопки нет» иначе выглядит как недоработка.
-            Label {
-                width: parent.width
-                visible: Api.cameraAudio.hasMicrophone === false && Api.can("audio.listen")
-                text: qsTr("У камеры нет микрофона")
-                color: "#8a94a2"
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
-            }
-
+            // Факт, а не догадка: дорожки в потоке нет — клиент это проверил
+            // сам (см. AudioPlayer, проверка через пять секунд). Пометки
+            // сервера тут не при чём, поэтому и не показываем их.
             Label {
                 width: parent.width
                 visible: Api.talkError.length > 0
