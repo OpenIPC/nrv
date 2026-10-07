@@ -223,6 +223,19 @@ Window {
                 wrapMode: Text.WordWrap
             }
 
+            // Микрофон у камеры есть, но выключен в настройках: в потоке
+            // звука не будет, и без этой подсказки тишина выглядит как
+            // поломка клиента.
+            Label {
+                width: parent.width
+                visible: Api.cameraAudio.hasMicrophone === true
+                         && Api.cameraAudio.micEnabled === false
+                text: qsTr("Микрофон камеры выключен в её настройках")
+                color: "#8a94a2"
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
+
             Label {
                 width: parent.width
                 visible: Api.talkError.length > 0

@@ -2,6 +2,7 @@
 
 #include <QDebug>
 #include <QMetaObject>
+#include <QTimer>
 
 AudioPlayer::AudioPlayer(QObject *parent)
     : QObject(parent)
@@ -63,19 +64,25 @@ void AudioPlayer::onPadAdded(GstElement *, GstPad *pad, gpointer data)
 {
     auto *self = static_cast<AudioPlayer *>(data);
 
-    GstCaps *caps = gst_pad_get_current_caps(pad);
+    // Спрашиваем возможные caps пада, а не только текущие: в момент
+    // подключения дорожки текущие могут быть ещё не согласованы, и по ним
+    // аудиодорожка выглядела бы как неизвестная — тогда звук молча
+    // не включался бы (на стенде это выглядело как «звука нет», без
+    // ошибки в журнале).
+    GstCaps *caps = gst_pad_query_caps(pad, nullptr);
     if (!caps) {
         return;
     }
-    const GstStructure *structure = gst_caps_get_structure(caps, 0);
-    const gchar *name = structure ? gst_structure_get_name(structure) : nullptr;
-    const bool isAudio = name && g_str_has_prefix(name, "audio/");
+    const QString structureName = [caps]() {
+        const GstStructure *structure = gst_caps_get_structure(caps, 0);
+        return structure ? QString::fromUtf8(gst_structure_get_name(structure)) : QString();
+    }();
     gst_caps_unref(caps);
 
     // Видеодорожку пропускаем: принимать её здесь некому, а именно из-за
     // неё конвейер падал с «streaming stopped, reason not-linked» —
     // decodebin отдаёт все дорожки потока, и необработанная рвёт сессию.
-    if (!isAudio) {
+    if (!structureName.startsWith(QLatin1String("audio/"))) {
         return;
     }
 
@@ -83,6 +90,11 @@ void AudioPlayer::onPadAdded(GstElement *, GstPad *pad, gpointer data)
     if (sinkPad && !gst_pad_is_linked(sinkPad)) {
         if (gst_pad_link(pad, sinkPad) != GST_PAD_LINK_OK) {
             self->queueStatus(tr("Не удалось подключить звуковую дорожку"));
+        } else {
+            // Запись в журнал: по ней на стенде видно, что дорожка нашлась
+            // и в каком она кодеке.
+            qInfo("Звук камеры: подключена дорожка %s", qPrintable(structureName));
+            self->m_audioLinked = true;
         }
     }
     if (sinkPad) {
@@ -196,12 +208,23 @@ void AudioPlayer::start(const QString &url)
     stop();
 
     m_url = url;
+    m_audioLinked = false;
     if (!buildPipeline(url)) {
         stop();
         return;
     }
 
     gst_element_set_state(m_pipeline, GST_STATE_PLAYING);
+
+    // Проверяем, нашлась ли звуковая дорожка вообще. Без этой проверки
+    // тишина объяснялась бы одинаково и при выключенном микрофоне камеры,
+    // и при ошибке на нашей стороне — на стенде это важное различие.
+    QTimer::singleShot(5000, this, [this]() {
+        if (m_pipeline && !m_audioLinked) {
+            setStatus(tr("У камеры нет звуковой дорожки"));
+        }
+    });
+
     emit activeChanged();
 }
 

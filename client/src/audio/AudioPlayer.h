@@ -79,4 +79,6 @@ private:
     QString m_status;
     bool m_muted = false;
     double m_volume = 1.0;
+    /** Нашлась ли звуковая дорожка в потоке камеры. */
+    bool m_audioLinked = false;
 };
