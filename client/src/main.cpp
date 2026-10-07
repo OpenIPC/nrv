@@ -370,7 +370,11 @@ int main(int argc, char *argv[])
     // звук до клиента вообще и в каком он кодеке. Второй вариант проверки —
     // NVR_AUDIO_SINK=fakesink, когда звуковой карты на машине нет.
     if (!qEnvironmentVariableIsEmpty("NVR_AUDIO_TEST_URL")) {
-        static AudioPlayer *probe = new AudioPlayer(&app);
+        // Указатель — обычная локальная переменная, а не static: захват
+        // static-переменной в лямбду MSVC отвергает (error C3495),
+        // а GCC пропускал незамеченным. Объект принадлежит приложению,
+        // поэтому живёт до выхода.
+        auto *probe = new AudioPlayer(&app);
         probe->start(qEnvironmentVariable("NVR_AUDIO_TEST_URL"));
         QTimer::singleShot(15000, &app, [probe]() {
             qInfo("Проверка звука: подключился=%s, состояние «%s»",
