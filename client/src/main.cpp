@@ -8,6 +8,7 @@
 #include <QLibraryInfo>
 #include <QDateTime>
 #include <QDebug>
+#include <QTimer>
 
 #include <gst/gst.h>
 
@@ -360,6 +361,23 @@ int main(int argc, char *argv[])
     // камеру за раз, и второй открытый микрофон был бы ошибкой.
     TalkSession talk(&api);
     qmlRegisterSingletonInstance("Nvr", 1, 0, "Talk", &talk);
+
+    // Проверка звука без оператора.
+    //
+    // Если задана переменная окружения NVR_AUDIO_TEST_URL, клиент сразу
+    // открывает звук указанного потока, пишет результат в журнал и выходит.
+    // Нужно для стенда: оператора за пультом нет, а понять надо, доходит ли
+    // звук до клиента вообще и в каком он кодеке. Второй вариант проверки —
+    // NVR_AUDIO_SINK=fakesink, когда звуковой карты на машине нет.
+    if (!qEnvironmentVariableIsEmpty("NVR_AUDIO_TEST_URL")) {
+        static AudioPlayer *probe = new AudioPlayer(&app);
+        probe->start(qEnvironmentVariable("NVR_AUDIO_TEST_URL"));
+        QTimer::singleShot(15000, &app, [probe]() {
+            qInfo("Проверка звука: подключился=%s, состояние «%s»",
+                  probe->active() ? "да" : "нет", qPrintable(probe->status()));
+            QCoreApplication::quit();
+        });
+    }
 
     // Прослушивание звука создаётся по одному на окно просмотра: звук
     // включают для конкретной камеры, и он должен исчезнуть вместе

@@ -511,12 +511,16 @@ void ApiClient::refreshCameraAudio(const QString &cameraId)
         m_cameraAudio.clear();
 
         if (reply->error() != QNetworkReply::NoError) {
-            // Нет настроек — не ошибка: кнопки просто не появятся, а в
-            // журнале останется причина.
+            const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            m_audioError = status == 404
+                ? tr("Камера не найдена на сервере")
+                : tr("Настройки звука недоступны (код %1)").arg(status);
             qWarning("Не удалось прочитать настройки звука: %s", qPrintable(reply->errorString()));
             emit cameraAudioChanged();
             return;
         }
+
+        m_audioError.clear();
 
         const QJsonObject object = QJsonDocument::fromJson(reply->readAll()).object();
         m_cameraAudio.insert(QStringLiteral("hasMicrophone"),

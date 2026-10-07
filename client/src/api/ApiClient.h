@@ -188,12 +188,22 @@ public:
     Q_PROPERTY(QVariantMap cameraAudio READ cameraAudio NOTIFY cameraAudioChanged)
     /** Идёт ли передача звука оператора на камеру. */
     Q_PROPERTY(bool talkActive READ talkActive NOTIFY talkChanged)
+    /**
+     * Причина отказа чтения настроек звука.
+     *
+     * Отдельно от lastError: тот про вход. Без этого текста отсутствие
+     * кнопок звука объяснить было нечем — в журнале причина была, а в окне
+     * выглядело как недоработка.
+     */
+    Q_PROPERTY(QString audioError READ audioError NOTIFY cameraAudioChanged)
     /** Причина отказа разговора: «нет права», «камера не принимает звук». */
     Q_PROPERTY(QString talkError READ talkError NOTIFY talkChanged)
 
     QVariantMap cameraAudio() const { return m_cameraAudio; }
     bool talkActive() const { return m_talkActive; }
     QString talkError() const { return m_talkError; }
+    /** Причина, по которой не удалось прочитать настройки звука. */
+    QString audioError() const { return m_audioError; }
 
     /** Перечитывает сведения о звуке камеры. */
     Q_INVOKABLE void refreshCameraAudio(const QString &cameraId);
@@ -328,6 +338,8 @@ private:
     QVariantMap m_cameraAudio;
     bool m_talkActive = false;
     QString m_talkError;
+    /** Текст отказа при чтении настроек звука — показывается в окне камеры. */
+    QString m_audioError;
     // Тексты отказов по камерам: идентификатор → причина.
     QHash<QString, QString> m_cameraErrors;
 };

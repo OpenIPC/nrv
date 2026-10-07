@@ -270,6 +270,17 @@ Window {
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
             }
+
+            // Сервер не отдал настройки звука: без этого текста отсутствие
+            // кнопок звука выглядело как недоработка клиента.
+            Label {
+                width: parent.width
+                visible: Api.audioError.length > 0
+                text: Api.audioError
+                color: "#ff8a80"
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
         }
 
         // Звук — отдельным конвейером от видео.
