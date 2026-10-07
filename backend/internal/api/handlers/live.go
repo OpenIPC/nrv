@@ -77,6 +77,17 @@ func (h *LiveHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	// «сервер не умеет отдавать поток» на вполне обычном ответе.
 	controller := http.NewResponseController(w)
 
+	// Снимаем срок записи для этого ответа. У сервера WriteTimeout 30 секунд
+	// — защита от зависших запросов, — но поток событий живёт часами и
+	// обрывался бы каждые полминуты; в журнале клиента это выглядело как
+	// постоянные «Соединение закрыто», а тревоги приходили только между
+	// переподключениями.
+	if err := controller.SetWriteDeadline(time.Time{}); err != nil {
+		// Не отказ: если снять срок не удалось (старая обёртка без Unwrap),
+		// поток всё равно работает — просто будет переподключаться.
+		log.Warn().Err(err).Msg("поток событий: не удалось снять срок записи")
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
