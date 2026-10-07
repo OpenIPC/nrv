@@ -354,8 +354,17 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
 
-    // Интерфейс лежит рядом с исполняемым файлом (см. CMakeLists.txt).
-    const QString qmlDir = QCoreApplication::applicationDirPath() + QStringLiteral("/qml");
+    // Интерфейс ищем в двух местах: рядом с исполняемым файлом (переносимая
+    // поставка — каталог можно просто скопировать) и в каталоге данных
+    // (пакет .deb: держать данные в /usr/bin нельзя, там только программы).
+    // Порядок именно такой: рядом лежащий интерфейс главнее, иначе
+    // распакованную сборку на машине с установленным пакетом было бы
+    // не запустить по-своему.
+    QString qmlDir = QCoreApplication::applicationDirPath() + QStringLiteral("/qml");
+    if (!QFileInfo::exists(qmlDir + QStringLiteral("/main.qml"))) {
+        qmlDir = QStringLiteral("/usr/share/nvr-wall/qml");
+    }
+
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
                      []() { QCoreApplication::exit(1); }, Qt::QueuedConnection);
 

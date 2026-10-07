@@ -1,0 +1,72 @@
+name: Сборка клиента (Debian 13)
+
+# Сборка нативного клиента под Debian 13 (amd64) и упаковка в .deb.
+#
+# Сборка идёт в контейнере Debian 13, а не на самом раннере: версии Qt и
+# GStreamer в контейнере — те же, что у целевой системы. Сборка «где попало»
+# давала бы клиент, проверенный на других библиотеках, — а расхождение
+# версий GStreamer в этом проекте уже приводило к «звука нет, хотя всё
+# установлено».
+#
+# Запускается при изменениях в клиенте и вручную.
+
+on:
+  push:
+    paths:
+      - 'client/**'
+      - '.github/workflows/client-linux.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Получить исходники
+        uses: actions/checkout@v4
+
+      - name: Собрать образ Debian 13
+        run: docker build -f client/deploy/Dockerfile.debian13 -t nvr-wall-debian13 client
+
+      - name: Собрать клиент
+        run: docker run --rm nvr-wall-debian13 test -x ./build/nvr-wall
+
+      - name: Проверить, что интерфейс загружается
+        run: |
+          docker run --rm -e QT_QPA_PLATFORM=offscreen -e NVR_NO_GSTREAMER_PROMPT=1 \
+            nvr-wall-debian13 timeout 15 ./build/nvr-wall > run.log 2>&1 || true
+          cat run.log
+          # Проверяем содержание, а не код возврата: приложение работает
+          # до закрытия по таймауту, и код возврата всегда «не ноль».
+          grep -q "Интерфейс загружен" run.log
+          if grep -qiE "ReferenceError|TypeError|is not defined" run.log; then
+            echo "В журнале есть ошибки QML — см. вывод выше" >&2
+            exit 1
+          fi
+
+      - name: Собрать поставку (.deb и tar.gz)
+        run: |
+          mkdir -p client/build-dist
+          docker run --rm -v "$PWD/client/build-dist:/out" nvr-wall-debian13 \
+            bash -lc 'bash deploy/linux/deploy.sh -b build -o /out --version 0.1'
+
+      - name: Проверить установку пакета в чистой Debian 13
+        run: |
+          # Настоящая проверка поставки: пакет ставится в пустую систему
+          # со своими зависимостями и запускается — так ловятся и неверные
+          # имена пакетов в Depends, и потерянный интерфейс.
+          docker run --rm -v "$PWD/client/build-dist:/pkg" debian:trixie bash -lc '
+            apt-get update -qq &&
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq /pkg/nvr-wall_*.deb > /tmp/install.log 2>&1 &&
+            QT_QPA_PLATFORM=offscreen NVR_NO_GSTREAMER_PROMPT=1 timeout 15 nvr-wall > /tmp/run.log 2>&1 || true
+            cat /tmp/run.log
+            grep -q "Интерфейс загружен" /tmp/run.log
+          '
+
+      - name: Выложить пакет
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvr-wall-debian13-amd64
+          path: |
+            client/build-dist/*.deb
+            client/build-dist/*.tar.gz
+          if-no-files-found: error

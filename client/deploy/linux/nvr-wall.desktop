@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=NVR Wall
+Name[ru]=NVR — видеостена
+Comment=Рабочее место оператора: видеостена, планы, тревоги
+Comment[en]=Operator workstation: video wall, plans, alarms
+Exec=nvr-wall
+Terminal=false
+Categories=AudioVideo;Video;Monitor;
+# Значок не задаём: в поставке своего набора нет, а имя несуществующего
+# значка в системе выглядит как сломанный ярлык. Подставится общий
+# значок приложения — это честнее выдуманного.
+StartupNotify=true

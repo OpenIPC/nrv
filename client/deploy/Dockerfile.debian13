@@ -1,0 +1,55 @@
+# Сборка нативного клиента под Debian 13 (trixie), amd64.
+#
+# Отдельный файл от Dockerfile.build (Debian 12) не из-за вкуса: в Debian 13
+# другие версии Qt (6.8) и GStreamer (1.26), и сборка под неё должна
+# проверяться именно на ней — иначе клиент окажется проверенным на одних
+# библиотеках, а работать будет на других.
+#
+# Запуск:
+#   docker build -f deploy/Dockerfile.debian13 -t nvr-wall-debian13 .
+#   docker run --rm -e QT_QPA_PLATFORM=offscreen nvr-wall-debian13 timeout 8 ./build/nvr-wall
+
+FROM debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        ninja-build \
+        pkg-config \
+        # Qt: окна, QML, инструменты разработки.
+        qt6-base-dev \
+        qt6-declarative-dev \
+        qt6-tools-dev \
+        # Модули QML, которые нужны интерфейсу: без них приложение
+        # собирается, но падает при загрузке QML.
+        qml6-module-qtquick \
+        qml6-module-qtquick-controls \
+        qml6-module-qtquick-layouts \
+        qml6-module-qtquick-templates \
+        qml6-module-qtquick-window \
+        qml6-module-qtqml-workerscript \
+        qml6-module-qtqml-models \
+        # GStreamer: библиотеки разработки для сборки и плагины для проверки
+        # в контейнере (rtspsrc для RTSP, opus для звука камер, vaapi для
+        # аппаратного декодирования).
+        libgstreamer1.0-dev \
+        libgstreamer-plugins-base1.0-dev \
+        gstreamer1.0-tools \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        gstreamer1.0-plugins-bad \
+        gstreamer1.0-libav \
+        gstreamer1.0-vaapi \
+        # Упаковка поставки в .deb (см. deploy/linux/deploy.sh).
+        dpkg-dev \
+        fakeroot \
+        file \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build -j2
