@@ -13,20 +13,59 @@ Item {
 
     Component.onCompleted: console.log("стена создана, ячеек:", columns * rows)
 
-    // Раскладка и назначения живут в профиле (WallProfile): стена должна
-    // восстанавливаться при следующем запуске — дежурный собирает её под
-    // свою смену, и терять эту работу нельзя.
-    readonly property int columns: Wall.columns
-    readonly property int rows: Wall.rows
+    /**
+     * Экран, который показывает это окно.
+     *
+     * Окно создаётся по одному на экран (см. WallWindow), и все настройки
+     * берутся у него: два окна не должны делить одну раскладку.
+     */
+    property var screen: null
+
+    /**
+     * Главный экран рабочего места.
+     *
+     * Тревоги по камерам, которых нет ни в одной раскладке, показывает
+     * только он: иначе событие осталось бы незамеченным.
+     */
+    property bool primary: false
+
+    // Раскладка и назначения живут в профиле (WallProfile), а он передаёт
+    // их сюда экраном: стена должна восстанавливаться при следующем
+    // запуске — дежурный собирает её под свою смену, и терять эту работу
+    // нельзя.
+    readonly property int columns: screen ? screen.columns : 4
+    readonly property int rows: screen ? screen.rows : 4
 
     /** Вид содержимого стены: «grid» — сетка камер, «plan» — план этажа. */
-    readonly property string content: Wall.content
+    readonly property string content: screen ? screen.content : "grid"
 
     property int selectedCell: -1
 
     /** Текущая тревога: событие из потока и камера, в которой она видна. */
     property var alarmEvent: null
     property string alarmCameraId: ""
+
+    /** Ячейка, для которой открыто меню действий. */
+    property int menuCellIndex: -1
+
+    /** Камера этой ячейки; пустая строка — ячейка свободна. */
+    function cellCamera(index) {
+        return (wall.screen && wall.screen.assignments[index]) || ""
+    }
+
+    /**
+     * Камера на весь экран.
+     *
+     * Именно основной поток, а не субпоток из сетки: раз картинка одна,
+     * качество важнее числа одновременных потоков. Выбором потока
+     * занимается окно просмотра.
+     */
+    function openCamera(cameraId) {
+        if (!cameraId || cameraId.length === 0) {
+            return
+        }
+        viewer.open(cameraId, Api.cameraName(cameraId))
+    }
 
     // Тревогу снимаем по времени, а не только по нажатию: дежурный может
     // быть занят, а подсветка, висящая полчаса, перестаёт что-либо значить.
@@ -47,9 +86,31 @@ Item {
         // Отметка в журнале: по ней на стенде видно, дошло ли событие
         // до клиента, и с какими полями.
         console.log("тревога:", event.type, event.camera_name || "", event.object_class || "")
+
+        // Карточка показывается на том экране, где эта камера выведена:
+        // при нескольких мониторах одно и то же событие на всех сразу
+        // выглядело бы как несколько тревог.
+        if (!wall.screenShowsCamera(event.camera_id) && !wall.primary) {
+            return
+        }
+
         wall.alarmEvent = event
         wall.alarmCameraId = event.camera_id ? event.camera_id : ""
         alarmTimer.restart()
+    }
+
+    /** Есть ли камера в раскладке этого экрана. */
+    function screenShowsCamera(cameraId) {
+        if (!wall.screen || !cameraId || cameraId.length === 0) {
+            return false
+        }
+        const keys = Object.keys(wall.screen.assignments)
+        for (let i = 0; i < keys.length; ++i) {
+            if (wall.screen.assignments[keys[i]] === cameraId) {
+                return true
+            }
+        }
+        return false
     }
 
     // События приходят из потока (см. LiveEvents). Разбор полей — в QML,
@@ -107,7 +168,7 @@ Item {
                 Label {
                     text: wall.selectedCell >= 0
                           ? qsTr("Выберите камеру для ячейки %1").arg(wall.selectedCell + 1)
-                          : qsTr("Нажмите ячейку, затем камеру в списке")
+                          : qsTr("Ячейка → камера в списке. Двойное нажатие — на весь экран, правая кнопка — действия")
                     color: "#666"
                     Layout.fillWidth: true
                 }
@@ -119,10 +180,13 @@ Item {
                     delegate: Button {
                         text: modelData[0] + "×" + modelData[1]
                         checkable: true
-                        checked: Wall.columns === modelData[0] && Wall.rows === modelData[1]
+                        checked: wall.screen !== null && wall.screen.columns === modelData[0]
+                                 && wall.screen.rows === modelData[1]
                         onClicked: {
-                            Wall.columns = modelData[0]
-                            Wall.rows = modelData[1]
+                            if (wall.screen) {
+                                wall.screen.columns = modelData[0]
+                                wall.screen.rows = modelData[1]
+                            }
                         }
                     }
                 }
@@ -134,7 +198,11 @@ Item {
                     text: qsTr("Сетка")
                     checkable: true
                     checked: wall.content !== "plan"
-                    onClicked: Wall.content = "grid"
+                    onClicked: {
+                        if (wall.screen) {
+                            wall.screen.content = "grid"
+                        }
+                    }
                 }
 
                 Button {
@@ -142,7 +210,11 @@ Item {
                     text: qsTr("План")
                     checkable: true
                     checked: wall.content === "plan"
-                    onClicked: Wall.content = "plan"
+                    onClicked: {
+                        if (wall.screen) {
+                            wall.screen.content = "plan"
+                        }
+                    }
                 }
 
                 ComboBox {
@@ -154,7 +226,11 @@ Item {
                     textRole: "name"
                     displayText: Api.plans.length === 0
                                  ? qsTr("Планов нет") : currentText
-                    onActivated: Wall.planId = model[index].id
+                    onActivated: {
+                        if (wall.screen) {
+                            wall.screen.planId = model[index].id
+                        }
+                    }
                 }
 
                 Button {
@@ -194,7 +270,11 @@ Item {
                         text: modelData.name && modelData.name.length > 0
                               ? modelData.name
                               : modelData.ip
-                        onClicked: Wall.assign(wall.selectedCell, modelData.id)
+                        onClicked: {
+                            if (wall.screen) {
+                                wall.screen.assign(wall.selectedCell, modelData.id)
+                            }
+                        }
                     }
 
                     Label {
@@ -234,18 +314,21 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     cellIndex: index
-                    cameraId: Wall.assignments[index] || ""
+                    cameraId: wall.cellCamera(index)
                     selected: wall.selectedCell === index
                     // Тревога привязана к камере, а не к ячейке: раскладку
                     // могли поменять уже после события.
                     alarmed: wall.alarmCameraId.length > 0
                              && wall.alarmCameraId === cameraId
                     onCellClicked: wall.selectedCell = (wall.selectedCell === index ? -1 : index)
-                    onCellDoubleClicked: {
-                        Wall.clear(index)
-                        if (wall.selectedCell === index) {
-                            wall.selectedCell = -1
-                        }
+                    // Двойное нажатие разворачивает камеру основным потоком.
+                    // Раньше оно очищало ячейку — от этой привычки пришлось
+                    // отказаться: очистка рядом с просмотром приводила
+                    // к тому, что раскладку теряли по неосторожности.
+                    onCellDoubleClicked: wall.openCamera(wall.cellCamera(index))
+                    onCellMenuRequested: {
+                        wall.menuCellIndex = index
+                        cellMenu.popup()
                     }
                 }
             }
@@ -256,6 +339,8 @@ Item {
         id: planComponent
 
         PlanView {
+            // План берём у экрана: у каждого монитора может быть свой этаж.
+            planId: wall.screen ? wall.screen.planId : ""
             onCameraActivated: function (cameraId, cameraName) {
                 viewer.open(cameraId, cameraName)
             }
@@ -267,6 +352,30 @@ Item {
     // тянуть несколько потоков сразу.
     FullscreenCamera {
         id: viewer
+    }
+
+    // Действия с ячейкой по правой кнопке.
+    //
+    // Меню, а не мгновенная очистка: раскладку собирают под смену, и
+    // случайно стереть ячейку при просмотре было бы досадно.
+    Menu {
+        id: cellMenu
+
+        MenuItem {
+            text: qsTr("Открыть на весь экран")
+            enabled: wall.cellCamera(wall.menuCellIndex).length > 0
+            onTriggered: wall.openCamera(wall.cellCamera(wall.menuCellIndex))
+        }
+
+        MenuItem {
+            text: qsTr("Очистить ячейку")
+            enabled: wall.cellCamera(wall.menuCellIndex).length > 0
+            onTriggered: {
+                if (wall.screen) {
+                    wall.screen.clear(wall.menuCellIndex)
+                }
+            }
+        }
     }
 
     // Карточка тревоги — последней в дереве: она должна быть поверх
@@ -290,7 +399,7 @@ Item {
         target: Api
         function onPlansChanged() {
             for (var i = 0; i < Api.plans.length; ++i) {
-                if (Api.plans[i].id === Wall.planId) {
+                if (wall.screen && Api.plans[i].id === wall.screen.planId) {
                     planCombo.currentIndex = i
                     return
                 }

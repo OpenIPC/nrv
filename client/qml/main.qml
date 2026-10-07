@@ -2,70 +2,62 @@ import QtQuick
 import QtQuick.Controls.Basic
 import Nvr 1.0
 
-// Корневое окно. Пока вход не выполнен, показываем форму: стена без данных
-// смысла не имеет, а список камер приходит сразу после входа.
+// Главное окно: вход и настройки рабочих мест.
+//
+// Стена живёт в отдельных окнах — по одному на экран (см. WallWindow).
+// Дежурный смотрит полноэкранные окна стен, а сюда заходит за настройками
+// и входом: смешивать это в одном окне значило бы занимать экран стены
+// административными кнопками.
 ApplicationWindow {
-    id: root
+    id: mainWindow
 
     visible: true
-    width: 1440
-    height: 900
-    title: qsTr("NVR — видеостена")
+    width: 760
+    height: 560
+    title: qsTr("NVR — рабочие места")
+
+    /** Окна стен: нужны, чтобы закрыть их при выходе и пересобрать при правке профиля. */
+    property var wallWindows: []
+
+    function closeWalls() {
+        for (var i = 0; i < wallWindows.length; ++i) {
+            wallWindows[i].close()
+            wallWindows[i].destroy()
+        }
+        wallWindows = []
+    }
 
     /**
-     * Восстанавливает положение окна с прошлого запуска.
+     * Открывает по окну на каждый экран профиля.
      *
-     * Проверяем, что сохранённая позиция попадает на подключённый экран:
-     * если монитор отключили, абсолютные координаты остались бы за
-     * пределами рабочего стола, и окно оказалось бы недоступным —
-     * оператор увидел бы только значок в панели задач.
+     * Окна пересоздаются, а не переносятся: окно привязано к монитору, а
+     * живое окно с конвейерами переносить между экранами — это лишний риск
+     * получить чёрные ячейки.
      */
-    function restoreWindow() {
-        var state = Wall.windowState()
-        if (!state.width) {
+    function openWalls() {
+        closeWalls()
+        if (!Api.authenticated) {
             return
         }
 
-        width = state.width
-        height = state.height
-
-        if (state.x !== undefined) {
-            var onScreen = Qt.application.screens.some(function (screen) {
-                return state.x >= screen.virtualX
-                    && state.x < screen.virtualX + screen.width
-                    && state.y >= screen.virtualY
-                    && state.y < screen.virtualY + screen.height
-            })
-            if (onScreen) {
-                x = state.x
-                y = state.y
+        for (var i = 0; i < Wall.count; ++i) {
+            var screen = Wall.screen(i)
+            if (!screen) {
+                continue
             }
+            var window = wallWindowComponent.createObject(null, {"wallScreen": screen})
+            if (!window) {
+                console.log("не удалось создать окно стены", i)
+                continue
+            }
+            wallWindows.push(window)
         }
-
-        if (state.maximized) {
-            visibility = Window.Maximized
-        }
+        console.log("открыто окон стены:", wallWindows.length)
     }
 
-    Component.onCompleted: {
-        // Отметки в журнале: по ним видно, докуда дошла отрисовка, если
-        // окно закрывается сразу после открытия.
-        console.log("окно создано")
-        restoreWindow()
-        console.log("положение окна восстановлено")
-    }
-
-    onClosing: {
-        // Номер экрана пишем вместе с координатами: по нему потом видно,
-        // что окно уводили на другой монитор.
-        var screenIndex = screen ? screen.index : 0
-        Wall.saveWindowState(x, y, width, height, screenIndex,
-                             visibility === Window.Maximized)
-    }
-
-    Loader {
-        anchors.fill: parent
-        sourceComponent: Api.authenticated ? wallComponent : loginComponent
+    Component {
+        id: wallWindowComponent
+        WallWindow {}
     }
 
     Component {
@@ -74,7 +66,42 @@ ApplicationWindow {
     }
 
     Component {
-        id: wallComponent
-        WallView {}
+        id: settingsComponent
+        ScreenSettings {
+            onWallsChanged: mainWindow.openWalls()
+        }
+    }
+
+    Loader {
+        anchors.fill: parent
+        sourceComponent: Api.authenticated ? settingsComponent : loginComponent
+    }
+
+    Connections {
+        target: Api
+        function onAuthenticatedChanged() {
+            // Вход открывает окна стен, выход — закрывает: чужие камеры
+            // на экране после смены пользователя остаться не должны.
+            if (Api.authenticated) {
+                mainWindow.openWalls()
+            } else {
+                mainWindow.closeWalls()
+            }
+        }
+    }
+
+    onClosing: {
+        // Без этого приложение осталось бы в памяти: окна стен живут
+        // отдельно и сами не закроются вместе с настройками.
+        closeWalls()
+    }
+
+    Component.onCompleted: {
+        // Отметка в журнале: по ней видно, докуда дошла отрисовка, если
+        // окно закрывается сразу после открытия.
+        console.log("окно создано")
+        if (Api.authenticated) {
+            openWalls()
+        }
     }
 }

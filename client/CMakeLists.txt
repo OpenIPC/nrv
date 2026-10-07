@@ -68,10 +68,13 @@ endif()
 qt_add_executable(nvr-wall
     src/main.cpp
     src/api/ApiClient.cpp
+    src/audio/AudioPlayer.cpp
+    src/audio/TalkSession.cpp
     src/live/LiveEvents.cpp
     src/video/StreamPlayer.cpp
     src/video/VideoItem.cpp
     src/wall/WallProfile.cpp
+    src/wall/WallScreen.cpp
 )
 
 # Пометка для кода: по ней приложение выставит пути к плагинам рядом

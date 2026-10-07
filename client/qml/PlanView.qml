@@ -1,8 +1,8 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
-// Модуль Nvr нужен для синглтонов Api (связь с сервером) и Wall (профиль
-// стены): без него QML их не видит и падает на каждом обращении.
+// Модуль Nvr нужен для синглтона Api (связь с сервером): без него QML
+// не видит его и падает на каждом обращении.
 import Nvr 1.0
 
 // План помещения: подложка этажа и метки устройств.
@@ -27,7 +27,7 @@ Item {
     signal cameraActivated(string cameraId, string cameraName)
 
     /** Открытая схема этажа. Пусто — план ещё не выбран. */
-    property string planId: Wall.planId
+    property string planId
 
     /** Выбранная метка: по нажатию показываем карточку с состоянием. */
     property var selectedPoint: null

@@ -187,6 +187,11 @@ void ApiClient::logout()
     m_planHasImage = false;
     m_planError.clear();
 
+    // Пульт PTZ тоже закрываем: управлять камерой может не каждый, у кого
+    // открыт просмотр, а пресеты принадлежат учётной записи.
+    m_ptzPresets.clear();
+    m_ptzError.clear();
+
     QSettings settings;
     settings.remove(QStringLiteral("auth/token"));
 
@@ -196,6 +201,7 @@ void ApiClient::logout()
     emit streamsChanged();
     emit plansChanged();
     emit planChanged();
+    emit ptzChanged();
 }
 
 void ApiClient::handleReply(QNetworkReply *reply, const std::function<void(const QJsonDocument &)> &done)
@@ -479,6 +485,126 @@ QString ApiClient::planImageUrl(const QString &planId) const
         .arg(m_serverUrl, planId, m_token);
 }
 
+void ApiClient::refreshCameraAudio(const QString &cameraId)
+{
+    if (cameraId.isEmpty() || m_token.isEmpty() || m_serverUrl.isEmpty()) {
+        return;
+    }
+
+    QNetworkRequest request(QUrl(m_serverUrl + QStringLiteral("/api/v1/cameras/")
+                                + cameraId + QStringLiteral("/audio")));
+    request.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+
+    QNetworkReply *reply = m_net.get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        m_cameraAudio.clear();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            // Нет настроек — не ошибка: кнопки просто не появятся, а в
+            // журнале останется причина.
+            qWarning("Не удалось прочитать настройки звука: %s", qPrintable(reply->errorString()));
+            emit cameraAudioChanged();
+            return;
+        }
+
+        const QJsonObject object = QJsonDocument::fromJson(reply->readAll()).object();
+        m_cameraAudio.insert(QStringLiteral("hasMicrophone"),
+                             object.value(QStringLiteral("has_microphone")).toBool());
+        m_cameraAudio.insert(QStringLiteral("micEnabled"),
+                             object.value(QStringLiteral("enabled")).toBool());
+        m_cameraAudio.insert(QStringLiteral("speakerEnabled"),
+                             object.value(QStringLiteral("speaker_enabled")).toBool());
+        emit cameraAudioChanged();
+    });
+}
+
+void ApiClient::talkStart(const QString &cameraId)
+{
+    if (cameraId.isEmpty() || m_token.isEmpty() || m_serverUrl.isEmpty()) {
+        return;
+    }
+
+    QNetworkRequest request(QUrl(m_serverUrl + QStringLiteral("/api/v1/cameras/")
+                                + cameraId + QStringLiteral("/audio/talk/start")));
+    request.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+
+    // 8 кГц и G.711 — то, что камеры принимают в обратном канале. Сервер
+    // сам кодирует PCM в выбранный кодек, клиент отдаёт сырой поток.
+    const QJsonObject body{
+        {QStringLiteral("sample_rate"), 8000},
+        {QStringLiteral("codec"), QStringLiteral("g711")},
+    };
+
+    QNetworkReply *reply = m_net.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            const QJsonObject object = QJsonDocument::fromJson(reply->readAll()).object();
+            const QString message = object.value(QStringLiteral("error")).toString();
+            m_talkActive = false;
+            m_talkError = message.isEmpty() ? reply->errorString() : message;
+            emit talkChanged();
+            return;
+        }
+
+        m_talkActive = true;
+        m_talkError.clear();
+        emit talkChanged();
+    });
+}
+
+void ApiClient::talkStop(const QString &cameraId)
+{
+    if (cameraId.isEmpty() || m_token.isEmpty() || m_serverUrl.isEmpty()) {
+        return;
+    }
+
+    m_talkActive = false;
+    emit talkChanged();
+
+    QNetworkRequest request(QUrl(m_serverUrl + QStringLiteral("/api/v1/cameras/")
+                                + cameraId + QStringLiteral("/audio/talk/stop")));
+    request.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+
+    // Ответ ждём только для журнала: остановка разговора важна сама по
+    // себе, и ждать её окончания перед закрытием микрофона незачем.
+    QNetworkReply *reply = m_net.post(request, QByteArrayLiteral("{}"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning("Не удалось завершить разговор: %s", qPrintable(reply->errorString()));
+        }
+    });
+}
+
+void ApiClient::talkSendChunk(const QString &cameraId, const QByteArray &pcm)
+{
+    if (!m_talkActive || cameraId.isEmpty() || pcm.isEmpty() || m_token.isEmpty()) {
+        return;
+    }
+
+    QNetworkRequest request(QUrl(m_serverUrl + QStringLiteral("/api/v1/cameras/")
+                                + cameraId + QStringLiteral("/audio/talk/chunk")));
+    request.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+    request.setHeader(QNetworkRequest::ContentTypeHeader,
+                      QStringLiteral("application/octet-stream"));
+
+    // Чанк уходит и забывается: звук — поток, ждать ответа на каждую порцию
+    // значило бы накапливать задержку. Отказ виден по прекращению звука
+    // на камере, а причина остаётся в журнале.
+    QNetworkReply *reply = m_net.post(request, pcm);
+    connect(reply, &QNetworkReply::finished, this, [reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning("Порция звука не доставлена: %s", qPrintable(reply->errorString()));
+        }
+    });
+}
+
 QString ApiClient::streamUrl(const QString &cameraId, bool subStream) const
 {
     if (cameraId.isEmpty()) {
@@ -548,4 +674,156 @@ QString ApiClient::liveStreamUrl() const
         return QString();
     }
     return QStringLiteral("%1/api/v1/events/stream?token=%2").arg(m_serverUrl, m_token);
+}
+
+QVariantMap ApiClient::camera(const QString &cameraId) const
+{
+    if (cameraId.isEmpty()) {
+        return {};
+    }
+    for (const QVariant &value : m_cameras) {
+        const QVariantMap item = value.toMap();
+        if (item.value(QStringLiteral("id")).toString() == cameraId) {
+            return item;
+        }
+    }
+    return {};
+}
+
+bool ApiClient::cameraPtz(const QString &cameraId) const
+{
+    // Признак ставит оператор в карточке камеры: «поворотная». Угадывать
+    // по производителю нельзя — в парке есть поворотные камеры разных
+    // марок и стационарные того же производителя.
+    return camera(cameraId).value(QStringLiteral("ptz")).toBool();
+}
+
+QString ApiClient::cameraName(const QString &cameraId) const
+{
+    const QVariantMap item = camera(cameraId);
+    const QString name = item.value(QStringLiteral("name")).toString();
+    // Безымянные камеры показываем адресом: пустой заголовок окна
+    // оператор не свяжет с конкретным устройством.
+    return name.isEmpty() ? item.value(QStringLiteral("ip")).toString() : name;
+}
+
+void ApiClient::setPtzBusy(bool value)
+{
+    if (m_ptzBusy == value) {
+        return;
+    }
+    m_ptzBusy = value;
+    emit ptzChanged();
+}
+
+void ApiClient::setPtzError(const QString &message)
+{
+    if (m_ptzError == message) {
+        return;
+    }
+    m_ptzError = message;
+    emit ptzChanged();
+}
+
+void ApiClient::ptzRequest(const QString &cameraId, const QString &path, const QByteArray &body)
+{
+    if (cameraId.isEmpty() || m_token.isEmpty() || m_serverUrl.isEmpty()) {
+        return;
+    }
+
+    setPtzBusy(true);
+
+    QNetworkRequest request(QUrl(m_serverUrl + QStringLiteral("/api/v1/cameras/")
+                                + cameraId + path));
+    request.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+
+    QNetworkReply *reply = m_net.post(request, body);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        setPtzBusy(false);
+
+        if (reply->error() != QNetworkReply::NoError) {
+            // Сервер отвечает причиной («нет права», «камера не ответила»)
+            // и подробностью от самой камеры. Показываем обе: без
+            // подробности на стенде трудно понять, что именно отказало.
+            const QJsonObject object = QJsonDocument::fromJson(reply->readAll()).object();
+            QString message = object.value(QStringLiteral("error")).toString();
+            const QString details = object.value(QStringLiteral("details")).toString();
+            if (!details.isEmpty()) {
+                message += QStringLiteral(": ") + details;
+            }
+            setPtzError(message.isEmpty() ? reply->errorString() : message);
+            return;
+        }
+        setPtzError(QString());
+    });
+}
+
+void ApiClient::ptzMove(const QString &cameraId, double pan, double tilt,
+                        double zoom, int durationMs)
+{
+    const QJsonObject body{
+        {QStringLiteral("pan"), pan},
+        {QStringLiteral("tilt"), tilt},
+        {QStringLiteral("zoom"), zoom},
+        {QStringLiteral("duration_ms"), durationMs},
+    };
+    ptzRequest(cameraId, QStringLiteral("/ptz/move"),
+               QJsonDocument(body).toJson(QJsonDocument::Compact));
+}
+
+void ApiClient::ptzStop(const QString &cameraId)
+{
+    ptzRequest(cameraId, QStringLiteral("/ptz/stop"), QByteArrayLiteral("{}"));
+}
+
+void ApiClient::ptzGotoPreset(const QString &cameraId, const QString &token)
+{
+    const QJsonObject body{{QStringLiteral("token"), token}};
+    ptzRequest(cameraId, QStringLiteral("/ptz/presets/goto"),
+               QJsonDocument(body).toJson(QJsonDocument::Compact));
+}
+
+void ApiClient::refreshPtzPresets(const QString &cameraId)
+{
+    if (cameraId.isEmpty() || m_token.isEmpty() || m_serverUrl.isEmpty()) {
+        return;
+    }
+
+    QNetworkRequest request(QUrl(m_serverUrl + QStringLiteral("/api/v1/cameras/")
+                                + cameraId + QStringLiteral("/ptz/presets")));
+    request.setRawHeader("Authorization", "Bearer " + m_token.toUtf8());
+
+    QNetworkReply *reply = m_net.get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+
+        // Отсутствие пресетов — не ошибка: сервер возвращает пустой список
+        // и когда их не сохранили, и когда камера их не поддерживает.
+        // Ошибку запроса тоже не показываем: пульт без пресетов рабочий.
+        if (reply->error() != QNetworkReply::NoError) {
+            m_ptzPresets.clear();
+            emit ptzChanged();
+            return;
+        }
+
+        const QJsonArray list = QJsonDocument::fromJson(reply->readAll()).array();
+        m_ptzPresets.clear();
+        for (const QJsonValue &value : list) {
+            const QJsonObject preset = value.toObject();
+            QVariantMap item;
+            item.insert(QStringLiteral("token"), preset.value(QStringLiteral("token")).toString());
+            item.insert(QStringLiteral("name"), preset.value(QStringLiteral("name")).toString());
+            // Подпись для списка: у камер нашего парка позиции часто без
+            // имени, и пустая строка в списке выглядела бы как сбой.
+            const QString name = item.value(QStringLiteral("name")).toString();
+            item.insert(QStringLiteral("title"),
+                        name.isEmpty()
+                            ? tr("Позиция %1").arg(item.value(QStringLiteral("token")).toString())
+                            : name);
+            m_ptzPresets.append(item);
+        }
+        emit ptzChanged();
+    });
 }

@@ -140,6 +140,84 @@ public:
     Q_INVOKABLE QString liveStreamUrl() const;
 
     /**
+     * Сведения о камере из списка (имя, адрес, поддержка PTZ).
+     *
+     * Пустая карта означает, что камеры нет в списке: например, её
+     * удалили, пока клиент работал.
+     */
+    Q_INVOKABLE QVariantMap camera(const QString &cameraId) const;
+    /** Поддерживает ли камера поворот: по этому признаку показываем пульт. */
+    Q_INVOKABLE bool cameraPtz(const QString &cameraId) const;
+    /** Имя камеры для заголовков окон; пусто, если камеры нет. */
+    Q_INVOKABLE QString cameraName(const QString &cameraId) const;
+
+    /** Сохранённые позиции выбранной камеры. */
+    Q_PROPERTY(QVariantList ptzPresets READ ptzPresets NOTIFY ptzChanged)
+    /** Причина отказа камеры: «нет права», «камера не ответила». */
+    Q_PROPERTY(QString ptzError READ ptzError NOTIFY ptzChanged)
+    /** Идёт запрос к камере — интерфейс блокирует кнопки на это время. */
+    Q_PROPERTY(bool ptzBusy READ ptzBusy NOTIFY ptzChanged)
+
+    /**
+     * Движение камеры.
+     *
+     * Скорости по осям в диапазоне -1..1 (0 — не двигаться по этой оси),
+     * длительность — сколько миллисекунд камера движется. Камера сама
+     * остановится, поэтому клиенту не нужно посылать остановку после
+     * каждого нажатия; явная остановка нужна для возврата и аварий.
+     */
+    Q_INVOKABLE void ptzMove(const QString &cameraId, double pan, double tilt,
+                             double zoom, int durationMs);
+    Q_INVOKABLE void ptzStop(const QString &cameraId);
+    /** Перечитывает список сохранённых позиций камеры. */
+    Q_INVOKABLE void refreshPtzPresets(const QString &cameraId);
+    /** Переход к сохранённой позиции по её метке. */
+    Q_INVOKABLE void ptzGotoPreset(const QString &cameraId, const QString &token);
+
+    QVariantList ptzPresets() const { return m_ptzPresets; }
+    QString ptzError() const { return m_ptzError; }
+    bool ptzBusy() const { return m_ptzBusy; }
+
+    /**
+     * Сведения о звуке камеры: есть ли микрофон и включён ли динамик.
+     *
+     * Нужны, чтобы не показывать кнопки там, где звука нет вовсе: в парке
+     * есть камеры без микрофона, и кнопка «Звук» на них только сбивала бы
+     * с толку. Поля: has_microphone, enabled, speaker_enabled.
+     */
+    Q_PROPERTY(QVariantMap cameraAudio READ cameraAudio NOTIFY cameraAudioChanged)
+    /** Идёт ли передача звука оператора на камеру. */
+    Q_PROPERTY(bool talkActive READ talkActive NOTIFY talkChanged)
+    /** Причина отказа разговора: «нет права», «камера не принимает звук». */
+    Q_PROPERTY(QString talkError READ talkError NOTIFY talkChanged)
+
+    QVariantMap cameraAudio() const { return m_cameraAudio; }
+    bool talkActive() const { return m_talkActive; }
+    QString talkError() const { return m_talkError; }
+
+    /** Перечитывает сведения о звуке камеры. */
+    Q_INVOKABLE void refreshCameraAudio(const QString &cameraId);
+
+    /**
+     * Начинает передачу звука оператора на динамик камеры.
+     *
+     * Сервер поднимает ffmpeg, который читает сырой PCM и публикует его
+     * в поток камеры через обратный канал (ONVIF/RTSP backchannel).
+     * Клиент кодированием не занимается: это работа сервера.
+     */
+    Q_INVOKABLE void talkStart(const QString &cameraId);
+    Q_INVOKABLE void talkStop(const QString &cameraId);
+
+    /**
+     * Отправляет порцию звука оператора.
+     *
+     * Тело — сырые PCM s16le с частотой из talkStart; это поток байт,
+     * а не структура, поэтому Content-Type октетный. Вызывается из
+     * C++ (см. TalkSession), в QML байты не гоняем.
+     */
+    void talkSendChunk(const QString &cameraId, const QByteArray &pcm);
+
+    /**
      * Запрашивает у сервера параметры потока камеры (адрес медиасервера,
      * пути, учётные данные).
      *
@@ -188,6 +266,10 @@ signals:
     void plansChanged();
     void planChanged();
     void planBusyChanged();
+    /** Изменилось состояние пульта PTZ (пресеты, ошибка, занятость). */
+    void ptzChanged();
+    void cameraAudioChanged();
+    void talkChanged();
 
 private:
     void setBusy(bool value);
@@ -195,6 +277,10 @@ private:
     void loadProfile();
     void loadCameras();
     void setPlanBusy(bool value);
+    void setPtzBusy(bool value);
+    void setPtzError(const QString &message);
+    /** Отправляет запрос к PTZ и разбирает ответ единообразно. */
+    void ptzRequest(const QString &cameraId, const QString &path, const QByteArray &body);
     void handleReply(QNetworkReply *reply, const std::function<void(const QJsonDocument &)> &done);
     QNetworkAccessManager m_net;
     QString m_serverUrl;      // без завершающего слэша, например http://192.168.1.111:3000
@@ -222,4 +308,14 @@ private:
     QVariantList m_planPoints;
     bool m_planBusy = false;
     QString m_planError;
+
+    // Пульт PTZ относится к одной камере: список пресетов перезаписывается
+    // при открытии другой камеры — держать их все в памяти незачем.
+    QVariantList m_ptzPresets;
+    QString m_ptzError;
+    bool m_ptzBusy = false;
+
+    QVariantMap m_cameraAudio;
+    bool m_talkActive = false;
+    QString m_talkError;
 };

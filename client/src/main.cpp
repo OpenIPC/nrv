@@ -17,10 +17,13 @@
 #endif
 
 #include "api/ApiClient.h"
+#include "audio/AudioPlayer.h"
+#include "audio/TalkSession.h"
 #include "live/LiveEvents.h"
 #include "video/StreamPlayer.h"
 #include "video/VideoItem.h"
 #include "wall/WallProfile.h"
+#include "wall/WallScreen.h"
 
 namespace {
 
@@ -316,10 +319,14 @@ int main(int argc, char *argv[])
     ApiClient api;
     qmlRegisterSingletonInstance("Nvr", 1, 0, "Api", &api);
 
-    // Раскладка стены — один объект на приложение: её читает окно стены,
+    // Раскладка стен — один объект на приложение: её читает окно стены,
     // а сохраняется она в настройках рабочего места (см. WallProfile).
     WallProfile wall;
     qmlRegisterSingletonInstance("Nvr", 1, 0, "Wall", &wall);
+    // Экран стены создаётся профилем и передаётся в окно: из QML его
+    // только читают, поэтому тип объявляем не создаваемым.
+    qmlRegisterUncreatableType<WallScreen>("Nvr", 1, 0, "WallScreen",
+                                           QStringLiteral("Экран создаётся профилем стены"));
 
     // Поток тревог. Разбор приходится делать в C++: данные идут кусками
     // по долгоживущему соединению, а QML-код не умеет читать такой поток.
@@ -328,6 +335,16 @@ int main(int argc, char *argv[])
     // Соединение открываем сразу: если вход сохранён с прошлого запуска,
     // тревоги должны приниматься без захода в окно входа.
     live.start();
+
+    // Разговор с камерой — один на приложение: оператор говорит в одну
+    // камеру за раз, и второй открытый микрофон был бы ошибкой.
+    TalkSession talk(&api);
+    qmlRegisterSingletonInstance("Nvr", 1, 0, "Talk", &talk);
+
+    // Прослушивание звука создаётся по одному на окно просмотра: звук
+    // включают для конкретной камеры, и он должен исчезнуть вместе
+    // с окном.
+    qmlRegisterType<AudioPlayer>("Nvr", 1, 0, "AudioPlayer");
 
     // Проигрыватель создаётся по одному на ячейку стены.
     qmlRegisterType<StreamPlayer>("Nvr", 1, 0, "StreamPlayer");

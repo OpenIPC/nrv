@@ -20,24 +20,53 @@ Window {
 
     function open(id, name) {
         cameraId = id
-        cameraName = name
+        // Имя берём у сервера, а не только из переданного: из плана или
+        // ячейки оно может прийти пустым (камера без имени — тогда нужен
+        // хотя бы адрес устройства).
+        cameraName = name.length > 0 ? name : Api.cameraName(id)
         // Адрес потока выдаёт сервер: он знает внешний номер канала камеры
         // и проверяет право на просмотр именно этой камеры.
         Api.prepareStream(id)
+        if (canControlPtz) {
+            // Пресеты вытягиваем при открытии: они нужны сразу, а после
+            // движения камеры список не меняется.
+            Api.refreshPtzPresets(id)
+        }
+        // Сведения о звуке — оттуда же: по ним решается, показывать ли
+        // кнопки звука и разговора для этой камеры.
+        Api.refreshCameraAudio(id)
         visibility = Window.FullScreen
         visible = true
     }
 
     function dismiss() {
-        // Останавливаем конвейер до скрытия окна: иначе декодер остаётся
-        // занятым, хотя картинки уже никто не видит.
+        // Останавливаем конвейеры до скрытия окна: иначе декодер и
+        // устройство вывода остаются занятыми, хотя картинки и звука
+        // уже никто не слышит.
         player.stop()
+        audio.stop()
+        Talk.stop()
         visible = false
         cameraId = ""
         cameraName = ""
     }
 
-    onClosing: player.stop()
+    onClosing: {
+        player.stop()
+        audio.stop()
+        Talk.stop()
+    }
+
+    /**
+     * Можно ли управлять поворотом этой камеры.
+     *
+     * Три условия: известно, что камера поворотная; у вошедшего есть
+     * право на управление; камера открыта. Право проверяет сервер —
+     * здесь мы лишь не показываем заведомо недоступное.
+     */
+    readonly property bool canControlPtz: viewer.cameraId.length > 0
+                                          && Api.cameraPtz(viewer.cameraId)
+                                          && Api.can("ptz.control")
 
     StreamPlayer {
         id: player
@@ -135,6 +164,92 @@ Window {
             anchors.margins: 16
             text: qsTr("Закрыть (Esc)")
             onClicked: viewer.dismiss()
+        }
+
+        // Панель звука — под кнопкой закрытия. Кнопки появляются только
+        // там, где они что-то дают: у части камер микрофона нет, а у
+        // части нет динамика. Показывать нерабочее — вводить в заблуждение.
+        Column {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.topMargin: 64
+            anchors.margins: 16
+            spacing: 8
+            width: 200
+
+            Button {
+                width: parent.width
+                visible: Api.cameraAudio.hasMicrophone === true && Api.can("audio.listen")
+                checkable: true
+                checked: audio.active
+                text: audio.active ? qsTr("Звук включён") : qsTr("Включить звук")
+                onClicked: {
+                    if (audio.active) {
+                        audio.stop()
+                    } else {
+                        // Основной поток: в нём аудиодорожка есть у большего
+                        // числа камер, чем в субпотоке сетки.
+                        audio.start(Api.streamUrl(viewer.cameraId, false))
+                    }
+                }
+            }
+
+            Slider {
+                width: parent.width
+                visible: Api.cameraAudio.hasMicrophone === true && Api.can("audio.listen")
+                from: 0
+                to: 1
+                value: audio.volume
+                onMoved: audio.volume = value
+            }
+
+            // Разговор: нажал — говоришь. Кнопка не «залипающая», потому
+            // что открытый микрофон без присмотра — это запись всего,
+            // что происходит в диспетчерской.
+            Button {
+                width: parent.width
+                visible: Api.cameraAudio.speakerEnabled === true && Api.can("audio.talk")
+                text: Talk.active ? qsTr("Говорить… (отпустить — стоп)") : qsTr("Удерживать для разговора")
+                onPressed: Talk.start(viewer.cameraId)
+                onReleased: Talk.stop()
+            }
+
+            Label {
+                width: parent.width
+                visible: text.length > 0
+                text: audio.status.length > 0 ? audio.status : Talk.status
+                color: "#ffb300"
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
+
+            Label {
+                width: parent.width
+                visible: Api.talkError.length > 0
+                text: Api.talkError
+                color: "#ff8a80"
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        // Звук — отдельным конвейером от видео.
+        //
+        // Камера может отдавать только картинку, и тогда неудача со звуком
+        // не должна уносить видео. И наоборот: для звука хватает канала
+        // пониже, а видео в полноэкранном режиме хочется лучшим.
+        AudioPlayer {
+            id: audio
+        }
+
+        // Пульт поворота — в правом нижнем углу: он не закрывает картинку
+        // в центре, а под рукой он нужен именно тогда, когда смотришь поток.
+        PtzPanel {
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.margins: 16
+            visible: viewer.canControlPtz
+            cameraId: viewer.cameraId
         }
     }
 }

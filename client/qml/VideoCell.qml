@@ -27,6 +27,8 @@ Rectangle {
     // функцией (видели эту ошибку в журнале на стенде).
     signal cellClicked()
     signal cellDoubleClicked()
+    /** Правая кнопка: меню действий с ячейкой (открыть на весь экран, очистить). */
+    signal cellMenuRequested()
 
     color: "#0d1117"
     border.width: cell.alarmed ? 3 : (cell.selected ? 2 : 1)
@@ -150,7 +152,17 @@ Rectangle {
 
     MouseArea {
         anchors.fill: parent
-        onClicked: cell.cellClicked()
+        // Правую кнопку принимаем здесь же: очистка ячейки должна быть
+        // осознанным действием через меню, а не тем же нажатием, что
+        // и открытие камеры на весь экран.
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: function (mouse) {
+            if (mouse.button === Qt.RightButton) {
+                cell.cellMenuRequested()
+                return
+            }
+            cell.cellClicked()
+        }
         onDoubleClicked: cell.cellDoubleClicked()
     }
 }
