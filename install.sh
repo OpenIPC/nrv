@@ -6,7 +6,7 @@
 #   1. проверяет систему и ставит Docker, если его нет;
 #   2. получает исходники (если скрипт запущен не из каталога репозитория);
 #   3. готовит .env со случайными паролями, если файла ещё нет;
-#   4. собирает и поднимает контейнеры (postgres, nats, minio, go2rtc, backend, webui);
+#   4. собирает и поднимает контейнеры (postgres, nats, go2rtc, backend, webui);
 #   5. ставит агент управления хостом (время, сеть) службой systemd;
 #   6. включает автозапуск — и контейнеров, и агента.
 #
@@ -26,8 +26,11 @@ REPO_URL="${NVR_REPO_URL:-https://github.com/OpenIPC/nrv}"
 INSTALL_DIR="${NVR_INSTALL_DIR:-/opt/nvr}"
 SKIP_AGENT=0
 SKIP_BUILD=0
+SKIP_PREPARE=0
 UNINSTALL=0
 UPDATE=0
+# На чём считать детекцию: auto (по наличию видеокарты), gpu или cpu.
+DETECT_MODE="${NVR_DETECT_MODE:-auto}"
 
 usage() {
     # Свой текст справки печатаем только когда скрипт есть на диске:
@@ -42,11 +45,18 @@ usage() {
 Параметры:
   --dir PATH      куда ставить (по умолчанию /opt/nvr)
   --repo URL      откуда брать исходники
+  --gpu           детекция на видеокарте (нужен драйвер NVIDIA)
+  --cpu           детекция на процессоре (так ставится, если карты нет)
   --update        обновить исходники в каталоге установки (.env сохраняется)
+  --skip-prepare  не готовить систему (apt, chrony, проверки портов и места)
   --skip-agent    не ставить агент хоста (время и сеть будут недоступны)
   --skip-build    не пересобирать образы (быстрее, если код не менялся)
   --uninstall     удалить службы, контейнеры и каталог агента
   -h, --help      эта справка
+
+Без параметров --gpu/--cpu режим выбирается по железу: есть рабочая
+видеокарта — сборка с CUDA, нет — обычная (разница в размере образа
+детектора около 8 ГБ и в том, где идёт счёт).
 EOF
 }
 
@@ -54,7 +64,10 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dir) INSTALL_DIR="$2"; shift 2 ;;
         --repo) REPO_URL="$2"; shift 2 ;;
+        --gpu) DETECT_MODE=gpu; shift ;;
+        --cpu) DETECT_MODE=cpu; shift ;;
         --update) UPDATE=1; shift ;;
+        --skip-prepare) SKIP_PREPARE=1; shift ;;
         --skip-agent) SKIP_AGENT=1; shift ;;
         --skip-build) SKIP_BUILD=1; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
@@ -101,6 +114,81 @@ if [ "$UNINSTALL" -eq 1 ]; then
     echo "Каталог с данными оставлен: $INSTALL_DIR (удалите вручную, если нужно)."
     echo "Тома Docker с базой и архивом тоже оставлены — они содержат записи."
     exit 0
+fi
+
+# --------------------------------------------------------------- исходники
+
+say "Исходники"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -f "${SCRIPT_DIR}/docker-compose.yml" ]; then
+    # Скрипт запущен из репозитория: работаем с ним, копировать ничего
+    # не нужно — так установка с флешки или из распакованного архива
+    # не требует сети.
+    PROJECT_DIR="$SCRIPT_DIR"
+    echo "Использую каталог репозитория: $PROJECT_DIR"
+elif [ -f "${INSTALL_DIR}/docker-compose.yml" ] && [ "$UPDATE" -eq 0 ]; then
+    PROJECT_DIR="$INSTALL_DIR"
+    echo "Использую уже установленный каталог: $PROJECT_DIR"
+else
+    # Установка по сети: исходников рядом нет.
+    command -v curl >/dev/null 2>&1 || apt-get install -y -qq curl
+    command -v tar >/dev/null 2>&1 || apt-get install -y -qq tar
+
+    echo "Скачиваю исходники в $INSTALL_DIR…"
+    mkdir -p "$INSTALL_DIR"
+    TMP_ARCHIVE="$(mktemp /tmp/nvr-XXXXXX.tar.gz)"
+    curl -fsSL "${REPO_URL}/archive/refs/heads/main.tar.gz" -o "$TMP_ARCHIVE"
+
+    # Архив распаковывается в каталог вида nrv-main — переносим содержимое,
+    # а .env (пароли!) остаётся нетронутым при повторной установке.
+    TMP_DIR="$(mktemp -d)"
+    tar -xzf "$TMP_ARCHIVE" -C "$TMP_DIR"
+    rm -f "$TMP_ARCHIVE"
+    # -print -quit вместо `| head -1`: head закрывает трубу, и find
+    # получает SIGPIPE — при включённом pipefail это уронило бы скрипт.
+    INNER="$(find "$TMP_DIR" -maxdepth 1 -mindepth 1 -type d -print -quit)"
+    if [ -z "$INNER" ]; then
+        echo "Архив исходников пуст — скачивание не удалось." >&2
+        exit 1
+    fi
+    cp -a "$INNER"/. "$INSTALL_DIR"/
+    rm -rf "$TMP_DIR"
+
+    PROJECT_DIR="$INSTALL_DIR"
+    echo "Исходники разложены: $PROJECT_DIR"
+fi
+
+cd "$PROJECT_DIR"
+
+# ------------------------------------------------------- подготовка системы
+
+# Подготовка зависит от дистрибутива и идёт ДО установки Docker: на Astra
+# репозиторий apt по умолчанию смотрит на DVD, которого в приводе нет, и без
+# подготовки не найдётся даже пакет docker.io. Что именно делается и чем
+# системы отличаются — в docs/INSTALL-DISTROS.md.
+if [ "$SKIP_PREPARE" -eq 1 ]; then
+    say "Подготовка системы пропущена (--skip-prepare)"
+else
+    DISTRO_ID="$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | head -1)"
+    PREPARE=""
+    case "$DISTRO_ID" in
+        astra) PREPARE="${PROJECT_DIR}/scripts/prepare-astra.sh" ;;
+        debian|ubuntu|linuxmint|pop|raspbian) PREPARE="${PROJECT_DIR}/scripts/prepare-debian.sh" ;;
+    esac
+
+    if [ -n "$PREPARE" ] && [ -f "$PREPARE" ]; then
+        say "Подготовка системы (${DISTRO_ID})"
+        bash "$PREPARE"
+    else
+        # Незнакомый дистрибутив — не гадаем и не правим его настройки,
+        # а только говорим, что проверки придётся сделать вручную.
+        say "Подготовка системы"
+        echo "Отдельной подготовки для ${DISTRO_ID:-неизвестной системы} нет."
+        echo "Установка продолжится; проверки портов и места на диске —"
+        echo "в docs/INSTALL-DISTROS.md."
+    fi
 fi
 
 # ------------------------------------------------------------------ docker
@@ -150,52 +238,6 @@ fi
 echo "Docker: $(docker --version)"
 echo "Compose: $($COMPOSE version 2>/dev/null | head -1 || true)"
 
-# --------------------------------------------------------------- исходники
-
-say "Исходники"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-if [ -f "${SCRIPT_DIR}/docker-compose.yml" ]; then
-    # Скрипт запущен из репозитория: работаем с ним, копировать ничего
-    # не нужно — так установка с флешки или из распакованного архива
-    # не требует сети.
-    PROJECT_DIR="$SCRIPT_DIR"
-    echo "Использую каталог репозитория: $PROJECT_DIR"
-elif [ -f "${INSTALL_DIR}/docker-compose.yml" ] && [ "$UPDATE" -eq 0 ]; then
-    PROJECT_DIR="$INSTALL_DIR"
-    echo "Использую уже установленный каталог: $PROJECT_DIR"
-else
-    # Установка по сети: исходников рядом нет.
-    command -v curl >/dev/null 2>&1 || apt-get install -y -qq curl
-    command -v tar >/dev/null 2>&1 || apt-get install -y -qq tar
-
-    echo "Скачиваю исходники в $INSTALL_DIR…"
-    mkdir -p "$INSTALL_DIR"
-    TMP_ARCHIVE="$(mktemp /tmp/nvr-XXXXXX.tar.gz)"
-    curl -fsSL "${REPO_URL}/archive/refs/heads/main.tar.gz" -o "$TMP_ARCHIVE"
-
-    # Архив распаковывается в каталог вида nrv-main — переносим содержимое,
-    # а .env (пароли!) остаётся нетронутым при повторной установке.
-    TMP_DIR="$(mktemp -d)"
-    tar -xzf "$TMP_ARCHIVE" -C "$TMP_DIR"
-    rm -f "$TMP_ARCHIVE"
-    # -print -quit вместо `| head -1`: head закрывает трубу, и find
-    # получает SIGPIPE — при включённом pipefail это уронило бы скрипт.
-    INNER="$(find "$TMP_DIR" -maxdepth 1 -mindepth 1 -type d -print -quit)"
-    if [ -z "$INNER" ]; then
-        echo "Архив исходников пуст — скачивание не удалось." >&2
-        exit 1
-    fi
-    cp -a "$INNER"/. "$INSTALL_DIR"/
-    rm -rf "$TMP_DIR"
-
-    PROJECT_DIR="$INSTALL_DIR"
-    echo "Исходники разложены: $PROJECT_DIR"
-fi
-
-cd "$PROJECT_DIR"
-
 # -------------------------------------------------------------------- .env
 
 say "Настройки окружения"
@@ -223,7 +265,6 @@ else
 
     JWT="$(random_secret)"
     DB_PASS="$(random_secret)"
-    MINIO_PASS="$(random_secret)"
     RTSP_PASS="$(random_secret)"
 
     # Правки делаем только по конкретным ключам: значения в .env.example
@@ -231,15 +272,68 @@ else
     sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${JWT}|" .env
     sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${DB_PASS}|" .env
     sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgres://nvr:${DB_PASS}@localhost:5434/nvr?sslmode=disable|" .env
-    sed -i "s|^MINIO_SECRET_KEY=.*|MINIO_SECRET_KEY=${MINIO_PASS}|" .env
     sed -i "s|^EXTERNAL_RTSP_PASS=.*|EXTERNAL_RTSP_PASS=${RTSP_PASS}|" .env
-    sed -i "s|^MINIO_PUBLIC_ENDPOINT=.*|MINIO_PUBLIC_ENDPOINT=${HOST_IP}:9000|" .env
     sed -i "s|^GO2RTC_PUBLIC_HOST=.*|GO2RTC_PUBLIC_HOST=${HOST_IP}|" .env
+
+    # Адрес хранилища архива оставляем пустым: MinIO больше не публикует
+    # образы, и архив пишется на диск сервера. Прежняя подстановка
+    # ${HOST_IP}:9000 отправляла браузер за ссылками на несуществующий сервис.
 
     # Файл с паролями закрываем от посторонних: в нём ключ подписи токенов,
     # зная который можно выписать себе доступ.
     chmod 600 .env
     echo "Пароли сгенерированы. Сохраните их: они понадобятся для внешнего RTSP."
+fi
+
+# ------------------------------------------------------- режим детекции
+
+say "Режим детекции"
+
+# Запись значения по ключу без перезаписи файла целиком: в .env есть
+# комментарии, и они должны остаться на месте.
+set_env() {
+    local key="$1" value="$2"
+    if grep -qE "^${key}=" .env; then
+        sed -i "s|^${key}=.*|${key}=${value}|" .env
+    else
+        printf '%s=%s\n' "$key" "$value" >> .env
+    fi
+}
+
+# Признак видеокарты — работающий nvidia-smi, а не файл устройства:
+# карта может быть, а драйвера в системе нет, и тогда проброс GPU
+# роняет запуск всего стека, а не только детектора.
+detect_gpu() {
+    command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1
+}
+
+WANT_GPU=0
+case "$DETECT_MODE" in
+    gpu) WANT_GPU=1 ;;
+    cpu) WANT_GPU=0 ;;
+    *)
+        if detect_gpu; then
+            WANT_GPU=1
+        fi
+        ;;
+esac
+
+if [ "$WANT_GPU" -eq 1 ]; then
+    echo "Видеокарта NVIDIA найдена — детекция пойдёт на ней."
+    set_env AI_DEVICE cuda
+    set_env AI_BASE_IMAGE "nvidia/cuda:12.6.2-cudnn-runtime-ubuntu24.04"
+    set_env AI_TORCH_INDEX_URL "https://download.pytorch.org/whl/cu126"
+    # Compose сам подхватывает docker-compose.override.yml, поэтому режим
+    # сохраняется и в автозапуске, и в ручных командах без -f.
+    cp docker-compose.gpu.yml docker-compose.override.yml
+else
+    echo "Видеокарта не найдена — детекция пойдёт на процессоре."
+    echo "Образ собирается без CUDA: это экономит около 8 ГБ и время сборки."
+    set_env AI_DEVICE cpu
+    set_env AI_BASE_IMAGE ubuntu:24.04
+    set_env AI_TORCH_INDEX_URL "https://download.pytorch.org/whl/cpu"
+    # На машине без карты проброс GPU только мешает запуску.
+    rm -f docker-compose.override.yml
 fi
 
 # ------------------------------------------------------------------- запуск
