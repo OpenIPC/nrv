@@ -48,6 +48,20 @@ fi
 
 echo "==> Создаю unit-файл ${UNIT_PATH}"
 
+# Команда compose различается в разных выпусках: плагин «docker compose»
+# или отдельная программа «docker-compose». В службу записываем ту,
+# которая есть в системе, иначе после перезагрузки она не найдёт команду.
+if docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD="/usr/bin/docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD="$(command -v docker-compose)"
+else
+    echo "Ошибка: не найден Docker Compose (ни «docker compose», ни «docker-compose»)" >&2
+    exit 1
+fi
+
+echo "==> Команда compose: ${COMPOSE_CMD}"
+
 cat > "${UNIT_PATH}" <<EOF
 [Unit]
 Description=NVR Video Surveillance Server
@@ -62,8 +76,8 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=${PROJECT_DIR}
 # Поднимаем сервисы и дожидаемся их готовности.
-ExecStart=/usr/bin/docker compose up -d --remove-orphans
-ExecStop=/usr/bin/docker compose down
+ExecStart=${COMPOSE_CMD} up -d --remove-orphans
+ExecStop=${COMPOSE_CMD} down
 # Перезапуск контейнеров берёт на себя Docker (restart: unless-stopped),
 # поэтому от systemd требуется только восстановление после сбоя самого запуска.
 Restart=on-failure
