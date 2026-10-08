@@ -2298,7 +2298,7 @@ export default {
     recordingsHint: 'Where to store the video archive recorded by detection or continuously',
     snapshotsTitle: 'Event snapshots',
     snapshotsHint: 'Frames saved at the moment detection triggers',
-    note: 'The storage choice determines where files are written. Automatic cleanup by retention is enabled together with the recording worker.',
+    note: 'The storage choice determines where files are written. If no S3 address is set in the environment, the server writes them to the local disk — this is expected behaviour, not a failure. Automatic cleanup by retention is enabled together with the recording worker.',
   },
 
   gridPage: {
