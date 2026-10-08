@@ -165,17 +165,27 @@ func main() {
 		})
 
 	// MinIO — архив видеозаписей. Не критичен для работы: если хранилище
-	// недоступно, сервис стартует и продолжает отдавать live-потоки.
+	// недоступно, сервис стартует и продолжает отдавать live-потоки, а
+	// снимки и записи уходят на локальный диск (см. StorageService).
+	//
+	// Пустой адрес означает, что S3 в этой установке не используется. Тогда
+	// клиента не создаём вовсе: попытка подключиться к localhost:9000 дала
+	// бы ошибку в журнале при каждом старте, которая выглядела бы как сбой
+	// исправного сервера.
 	var videoRepo *miniorepo.VideoRepo
-	videoRepo, err = miniorepo.NewVideoRepo(
-		cfg.MinioEndpoint, cfg.MinioPublicEndpoint,
-		cfg.MinioAccessKey, cfg.MinioSecretKey, cfg.MinioBucket, cfg.MinioUseSSL,
-	)
-	if err != nil {
-		log.Warn().Err(err).
-			Str("endpoint", cfg.MinioEndpoint).
-			Msg("minio init failed, recordings archive will be unavailable")
-		videoRepo = nil
+	if cfg.MinioEndpoint == "" {
+		log.Info().Msg("MinIO не настроен: снимки и записи сохраняются на локальный диск")
+	} else {
+		videoRepo, err = miniorepo.NewVideoRepo(
+			cfg.MinioEndpoint, cfg.MinioPublicEndpoint,
+			cfg.MinioAccessKey, cfg.MinioSecretKey, cfg.MinioBucket, cfg.MinioUseSSL,
+		)
+		if err != nil {
+			log.Warn().Err(err).
+				Str("endpoint", cfg.MinioEndpoint).
+				Msg("minio init failed, снимки и записи будут сохраняться на локальный диск")
+			videoRepo = nil
+		}
 	}
 
 	// Хранилище снимков и записей: работает поверх MinIO или локального диска

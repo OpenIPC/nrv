@@ -26,6 +26,45 @@ func NewStorageService(settings *postgres.DetectionSettingsRepo, videoRepo *mini
 	return &StorageService{settings: settings, videoRepo: videoRepo}
 }
 
+// storageConfig выбирает хранилище для одного вида данных (записи, снимки).
+//
+// Порядок выбора: сначала явная настройка оператора, затем — если настройки
+// нет — локальный диск при недоступном MinIO, и только потом MinIO.
+//
+// Локальный диск стоит выше MinIO именно потому, что MinIO может быть не
+// настроен вовсе: публичные образы MinIO убраны из реестров, и при установке
+// «одной командой» контейнера с ним может просто не быть. Раньше в этом
+// случае возвращалась ошибка «minio недоступен, а хранилище настроено на
+// minio» — снимки и записи не сохранялись, а выглядело это как исправная
+// работа. Теперь сервер сам пишет на диск.
+//
+// Явная настройка из интерфейса важнее: оператор мог сознательно указать
+// MinIO, и подменять его выбор нельзя.
+func (s *StorageService) storageConfig(ctx context.Context, pick func(domain.ServerSettings) domain.StorageConfig, localPath string) domain.StorageConfig {
+	var configured domain.StorageConfig
+	if cfg, err := s.settings.GetServerSettings(ctx); err == nil {
+		configured = pick(*cfg)
+	}
+	return chooseStorage(configured, s.videoRepo != nil, localPath)
+}
+
+// chooseStorage — сам выбор хранилища, отдельно от базы и MinIO-клиента,
+// чтобы его можно было проверить тестом без запуска сервисов.
+//
+// configured — настройка оператора (пустая, если её не задавали).
+// hasMinio — удалось ли подключиться к S3 при старте сервиса.
+func chooseStorage(configured domain.StorageConfig, hasMinio bool, localPath string) domain.StorageConfig {
+	// Явный выбор оператора важнее: он мог сознательно включить MinIO,
+	// и подменять его решение «на своё усмотрение» нельзя.
+	if configured.Backend != "" {
+		return configured
+	}
+	if hasMinio {
+		return domain.StorageConfig{Backend: "minio", LocalPath: localPath}
+	}
+	return domain.StorageConfig{Backend: "local", LocalPath: localPath}
+}
+
 // SnapshotKey формирует путь снимка: <camera>/<дата>/<время>_<класс>.jpg
 func SnapshotKey(cameraID uuid.UUID, t time.Time, objectClass string) string {
 	return fmt.Sprintf("snapshots/%s/%s/%s_%s.jpg",
@@ -73,10 +112,8 @@ func (s *StorageService) SaveSnapshot(ctx context.Context, cameraID uuid.UUID, t
 		return "", nil
 	}
 
-	st := domain.StorageConfig{Backend: "minio", LocalPath: "/var/lib/nvr/snapshots"}
-	if cfg, err := s.settings.GetServerSettings(ctx); err == nil && cfg.Snapshots.Backend != "" {
-		st = cfg.Snapshots
-	}
+	st := s.storageConfig(ctx, func(c domain.ServerSettings) domain.StorageConfig { return c.Snapshots },
+		"/var/lib/nvr/snapshots")
 
 	switch st.Backend {
 	case "local":
@@ -107,10 +144,8 @@ func (s *StorageService) SaveReferencePhoto(ctx context.Context, kind string, id
 		return "", nil
 	}
 
-	st := domain.StorageConfig{Backend: "minio", LocalPath: "/var/lib/nvr/snapshots"}
-	if cfg, err := s.settings.GetServerSettings(ctx); err == nil && cfg.Snapshots.Backend != "" {
-		st = cfg.Snapshots
-	}
+	st := s.storageConfig(ctx, func(c domain.ServerSettings) domain.StorageConfig { return c.Snapshots },
+		"/var/lib/nvr/snapshots")
 
 	key := fmt.Sprintf("reference/%s/%s.jpg", kind, id.String())
 
@@ -220,10 +255,8 @@ func (s *StorageService) SaveClip(ctx context.Context, clipPath string) (string,
 		start = fi.ModTime()
 	}
 
-	st := domain.StorageConfig{Backend: "minio", LocalPath: "/var/lib/nvr/recordings"}
-	if cfg, err := s.settings.GetServerSettings(ctx); err == nil && cfg.Storage.Backend != "" {
-		st = cfg.Storage
-	}
+	st := s.storageConfig(ctx, func(c domain.ServerSettings) domain.StorageConfig { return c.Storage },
+		"/var/lib/nvr/recordings")
 
 	switch st.Backend {
 	case "local":

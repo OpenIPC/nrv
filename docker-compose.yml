@@ -28,8 +28,20 @@ services:
       timeout: 5s
       retries: 5
 
+  # MinIO — S3-хранилище видеоархива. По умолчанию НЕ запускается.
+  #
+  # Публичные образы MinIO убраны из всех реестров (Docker Hub, quay.io,
+  # ghcr.io отказывают на любой тег), поэтому поднять этот контейнер при
+  # установке больше нельзя. Архив работает и без S3: снимки и записи
+  # ложатся на локальный диск (том nvr_data ниже и режим "local" в
+  # настройках сервера), а бэкенд выбирает диск сам, если MinIO не настроен.
+  #
+  # Сервис вынесен в профиль "minio" для тех, у кого хранилище уже есть:
+  #   docker compose --profile minio up -d   + MINIO_ENDPOINT в .env
+  # Без профиля compose не тянет этот образ и не падает на его скачивании.
   minio:
     image: minio/minio:latest
+    profiles: ["minio"]
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -114,7 +126,11 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
       LOG_FORMAT: "console"
-      MINIO_ENDPOINT: "localhost:9000"
+      # Адрес S3-хранилища архива. Пусто — архив пишется на локальный диск
+      # (том nvr_data). Пустое значение здесь нормально, а не ошибка
+      # настройки: образ MinIO больше не публикуется, и диск — штатный
+      # вариант хранения. Заполнять нужно только при внешнем S3.
+      MINIO_ENDPOINT: "${MINIO_ENDPOINT:-}"
       # Адрес для presigned-ссылок, которые открывает браузер.
       # При доступе извне подставить внешний адрес сервера.
       MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
@@ -207,6 +223,15 @@ services:
     build:
       context: ./ai-detector
       dockerfile: Dockerfile
+      # Вариант сборки: CPU (по умолчанию) или CUDA — см. .env и install.sh.
+      #
+      # Значения важны не только для скорости: CUDA-сборка torch вместе
+      # с библиотеками NVIDIA занимает около 8 ГБ (против ~700 МБ у CPU),
+      # и на сервере без видеокарты эти гигабайты бесполезны — на них
+      # установка падала с «No space left on device».
+      args:
+        BASE_IMAGE: "${AI_BASE_IMAGE:-ubuntu:24.04}"
+        TORCH_INDEX_URL: "${AI_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}"
     restart: unless-stopped
     environment:
       NATS_URL: "nats://nats:4222"
@@ -220,8 +245,10 @@ services:
       # Наш сервер может стоять в сети без интернета, а телеметрия ещё
       # и копила открытые соединения до исчерпания дескрипторов.
       YOLO_OFFLINE: "true"
-      # 'cuda'/'0' — GPU, 'cpu' — только CPU (см. resolve_device в main.py)
-      DEVICE: "${AI_DEVICE:-cuda}"
+      # 'cpu' — счёт на процессоре, 'cuda'/'0' — на видеокарте
+      # (см. resolve_device в main.py: при отсутствии CUDA он честно
+      # сообщает об этом в журнал и продолжает на процессоре).
+      DEVICE: "${AI_DEVICE:-cpu}"
       CONFIDENCE: "0.25"
       # Трекинг объектов даёт track_id, но чувствителен к смене разрешения кадра.
       # TRACK=false отключает его — события продолжат сохраняться без track_id.
@@ -273,9 +300,10 @@ services:
       # Учётные данные здесь обязательны: для адресов кроме localhost
       # go2rtc требует пароль (тот же, что выдан внешним системам).
       GO2RTC_RTSP: "${EXTERNAL_RTSP_USER:-viewer}:${EXTERNAL_RTSP_PASS:-viewer}@host.docker.internal:8554"
-      # Ограничиваем видимость только первой GPU
-      NVIDIA_VISIBLE_DEVICES: "all"
-      NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"
+    # Проброс видеокарты живёт не здесь, а в docker-compose.gpu.yml:
+    # на машине без карты он не нужен, а указание драйвера nvidia роняло
+    # запуск всего стека. Установщик сам создаёт docker-compose.override.yml,
+    # если карта найдена.
     # Лимит дескрипторов. По умолчанию в контейнере 1024, и их хватает не
     # всегда: 24 камеры дают потоки видео и звука, соединения с NATS и
     # MediaMTX. Когда лимит кончается, отказывает всё сразу, а в журнале
@@ -292,13 +320,6 @@ services:
       # хоста: имя сервиса не разрешается, потому что у go2rtc нет
       # собственного адреса в bridge-сети.
       - "host.docker.internal:host-gateway"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     volumes:
       # Часовой пояс хоста: детектор проставляет время событий сам,
       # и без этого файла оно уходило бы в UTC.

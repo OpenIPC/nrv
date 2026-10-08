@@ -26,7 +26,12 @@ type Config struct {
 	// оператора. Внутри Docker это `host.docker.internal:1984`, а клиенту
 	// нужен внешний адрес или адрес в сети камер.
 	Go2rtcPublicHost string
-	MinioEndpoint    string
+	// MinioEndpoint — адрес S3-хранилища архива. Пусто означает, что S3
+	// не используется и снимки с записями ложатся на локальный диск (см.
+	// service.StorageService). Это штатное состояние, а не забытая
+	// настройка: публичные образы MinIO убраны из реестров, и контейнера
+	// с ним при установке может не быть вовсе.
+	MinioEndpoint string
 	// MinioPublicEndpoint — адрес MinIO, доступный браузеру. Нужен для
 	// presigned-ссылок: внутри Docker это `minio:9000`, а клиенту нужен
 	// внешний адрес. Если пуст, берётся MinioEndpoint.
@@ -88,7 +93,7 @@ func Load() (*Config, error) {
 		// в ссылку для браузера, браузер будет стучаться в свой собственный
 		// localhost и соединение не установится.
 		Go2rtcPublicHost:    envStr("GO2RTC_PUBLIC_HOST", ""),
-		MinioEndpoint:       envStr("MINIO_ENDPOINT", "localhost:9000"),
+		MinioEndpoint:       envStr("MINIO_ENDPOINT", ""),
 		MinioPublicEndpoint: envStr("MINIO_PUBLIC_ENDPOINT", ""),
 		MinioUseSSL:         envBool("MINIO_USE_SSL", false),
 		MinioAccessKey:      envStr("MINIO_ACCESS_KEY", "minioadmin"),
