@@ -1,5 +1,16 @@
-# GPU-версия: базовый образ с CUDA 12.6 runtime (совместим с драйвером 580 / Pascal sm_61)
-FROM nvidia/cuda:12.6.2-cudnn-runtime-ubuntu24.04
+# База образа выбирается при сборке: от неё зависит, где считается детекция.
+#
+# По умолчанию — обычная Ubuntu, детекция идёт на процессоре. Это вариант для
+# машин без видеокарты, и он безопасен для любой установки: образ на 8 ГБ
+# меньше и собирается заметно быстрее.
+#
+# Для видеокарты NVIDIA установщик подставляет сюда образ с CUDA, а ниже —
+# индекс PyTorch с CUDA-сборкой (см. docker-compose.gpu.yml).
+ARG BASE_IMAGE=ubuntu:24.04
+FROM ${BASE_IMAGE}
+
+# Индекс PyTorch: CPU-сборка по умолчанию или CUDA 12.6 для видеокарты.
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -20,9 +31,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/bin/python3.12 /usr/local/bin/python \
     && ln -sf /usr/bin/python3.12 /usr/local/bin/python3
 
-# torch/torchvision, собранные под CUDA 12.6 (официальный индекс PyTorch)
+# torch/torchvision из выбранного индекса PyTorch: CPU-сборка или CUDA.
+#
+# CUDA-вариант тянет ещё и библиотеки NVIDIA (cuDNN, cuBLAS, NCCL и прочее),
+# поэтому весит около 8 ГБ против ~700 МБ у CPU-сборки. На машине без
+# видеокарты эти гигабайты не только бесполезны — на них падала установка
+# на сервере с диском 16 ГБ («No space left on device»).
 RUN pip install --break-system-packages --no-cache-dir \
-    --index-url https://download.pytorch.org/whl/cu126 \
+    --index-url ${TORCH_INDEX_URL} \
     torch torchvision
 
 # insightface не поставляется готовым бинарником и собирает C++ расширение
@@ -63,7 +79,8 @@ urllib.request.urlretrieve('https://raw.githubusercontent.com/tensorflow/models/
 print('модель YAMNet и карта классов загружены')" \
     || echo "ПРЕДУПРЕЖДЕНИЕ: модель YAMNet не скачана, детекция звука загрузит её при старте"
 
-# Информационная проверка при сборке (не валит сборку, GPU пробрасывается только в рантайме)
+# Информационная проверка при сборке (не валит сборку: на CPU-варианте
+# строки про CUDA покажут None, а GPU пробрасывается только в рантайме)
 RUN python -c "import torch; print('torch', torch.__version__, '| cuda build:', torch.version.cuda)" || true
 
 ENTRYPOINT ["python", "main.py"]

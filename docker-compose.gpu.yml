@@ -1,0 +1,31 @@
+# Дополнение к docker-compose.yml для машин с видеокартой NVIDIA.
+#
+# Как включается. Установщик проверяет наличие карты (через nvidia-smi) и,
+# если она есть, копирует этот файл в docker-compose.override.yml. Compose
+# подхватывает override-файл сам, без -f, поэтому режим сохраняется и для
+# автозапуска (служба nvr), и для ручных команд вида `docker compose up -d`,
+# и для scripts/nvr.sh — правки в них не нужны.
+#
+# Вручную:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# Зачем отдельный файл. Проброс GPU требует установленного драйвера NVIDIA
+# и nvidia-container-toolkit. На машине без карты `deploy.resources.devices`
+# с драйвером nvidia роняет запуск всего стека — не только детектора, но и
+# камер, поэтому в основном файле этого нет. Пара к этому файлу — значения
+# AI_BASE_IMAGE и AI_TORCH_INDEX_URL в .env: без CUDA-сборки torch видеокарта
+# не используется, и пробрасывать её незачем.
+
+services:
+  ai-detector:
+    environment:
+      # Видимость видеокарты внутри контейнера.
+      NVIDIA_VISIBLE_DEVICES: "all"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
