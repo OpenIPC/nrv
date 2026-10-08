@@ -6,6 +6,14 @@ Documentation=https://github.com/himik19872/OpenIPC-NRV
 After=network-online.target
 Wants=network-online.target
 
+# Если служба падает сразу после запуска, перезапуски прекращаются.
+# При ошибке в путях изоляции (например, отсутствовал каталог в /run)
+# systemd перезапускал агента каждые пять секунд без конца — счётчик
+# дошёл до сорока тысяч попыток, забивая журнал. Тридцать секунд
+# между падениями считаются рабочим режимом, пять быстрых — отказом.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 /opt/nvr-agent/agent.py
@@ -16,21 +24,32 @@ RestartSec=5
 # Привилегии ограничены настолько, насколько это возможно при такой задаче.
 User=root
 
-# Файловая система: запись нужна только в каталог резервных копий
-# и в каталог сокета. Остальное — только чтение.
+# Каталог в /run создаёт сам systemd.
+# Без этой строки служба падала с 226/NAMESPACE: /run — это tmpfs,
+# после перезагрузки каталог исчезает, а systemd требует, чтобы пути
+# из ReadWritePaths существовали, и отказывается запускать службу.
+RuntimeDirectory=nvr-agent
+
+# Файловая система: запись нужна только туда, где агент действительно
+# что-то меняет. Остальное — только чтение или защищено целиком.
 NoNewPrivileges=yes
 ProtectHome=yes
 ProtectKernelTunables=no
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 ProtectSystem=full
-ReadWritePaths=/var/lib/nvr-agent /run/nvr-agent /etc/netplan /etc/systemd /etc/chrony
-ReadOnlyPaths=/etc/timezone
 
-# Сокет лежит в этом каталоге, и он же монтируется в контейнер бэкенда.
-# Путь задаём явно: у systemd есть свой RuntimeDirectory в /run, но он
-# живёт в памяти и теряется при перезагрузке, а нам нужен постоянный
-# каталог, который виден из контейнера.
+# Пути, которых нет в каждом дистрибутиве, помечены «-»: без этого
+# systemd считает службу сломанной, если каталога нет. netplan есть
+# в Ubuntu и Astra, но не в Debian; chrony ставится не везде;
+# файла /etc/timezone в новых системах может не быть.
+ReadWritePaths=/var/lib/nvr-agent /run/nvr-agent -/etc/netplan /etc/systemd -/etc/chrony
+ReadOnlyPaths=-/etc/timezone
+
+# Сокет лежит в постоянном каталоге, который монтируется в контейнер
+# бэкенда. RuntimeDirectory выше — это /run: он нужен только потому, что
+# указан в ReadWritePaths, а сокет там держать нельзя — /run живёт в памяти
+# и очищается при перезагрузке, тогда связь с контейнером потерялась бы.
 Environment=NVR_AGENT_SOCKET=/var/lib/nvr-agent/socket/agent.sock
 
 StandardOutput=journal

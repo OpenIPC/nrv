@@ -59,6 +59,9 @@ install -d -m 0750 "$STATE_DIR"
 # Каталог сокета находится внутри каталога состояния: он монтируется
 # в контейнер бэкенда, поэтому должен существовать до запуска службы.
 install -d -m 0755 "$SOCKET_DIR"
+# Каталог в /run создаёт и сама служба (RuntimeDirectory), но проверка
+# состояния и ручной запуск агента смотрят и сюда — пусть будет.
+install -d -m 0755 /run/nvr-agent
 
 # ---------------------------------------------------------- сервер времени
 
@@ -83,7 +86,23 @@ fi
 
 echo "Устанавливаю службу nvr-agent…"
 install -m 0644 "${SOURCE_DIR}/nvr-agent.service" /etc/systemd/system/nvr-agent.service
+
+# Проверяем unit до запуска. Ошибка в путях изоляции (отсутствующий
+# каталог в /run, незнакомый системе путь вроде netplan) валит службу
+# с кодом 226 — а видно это только в журнале после неудачного запуска.
+# systemd-analyze говорит об этом заранее и понятным текстом.
+if command -v systemd-analyze >/dev/null 2>&1; then
+    if ! systemd-analyze verify /etc/systemd/system/nvr-agent.service 2>/tmp/nvr-agent-verify.log; then
+        echo "ПРЕДУПРЕЖДЕНИЕ: в описании службы есть замечания:" >&2
+        sed 's/^/    /' /tmp/nvr-agent-verify.log >&2
+    fi
+fi
+
 systemctl daemon-reload
+# Снимаем возможную блокировку от прошлых неудачных запусков: если служба
+# до этого падала несколько раз подряд, systemd держит её остановленной
+# и повторный запуск без сброса ничего не сделает.
+systemctl reset-failed nvr-agent 2>/dev/null || true
 systemctl enable --now nvr-agent.service
 
 sleep 1
