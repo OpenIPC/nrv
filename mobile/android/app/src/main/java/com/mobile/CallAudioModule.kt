@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioManager
 import android.media.Ringtone
 import android.media.RingtoneManager
+import android.media.ToneGenerator
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -25,6 +26,7 @@ class CallAudioModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     private var ringtone: Ringtone? = null
+    private var ringback: ToneGenerator? = null
 
     override fun getName(): String = "NvrCallAudio"
 
@@ -84,5 +86,46 @@ class CallAudioModule(reactContext: ReactApplicationContext) :
             // Уже не играет.
         }
         ringtone = null
+    }
+
+    /**
+     * Играет гудки ожидания ответа при исходящем вызове.
+     *
+     * Отдельно от рингтона: если во время дозвона звучит мелодия входящего
+     * вызова, оператор думает, что звонят ему, и сбрасывает собственный
+     * вызов. Периодический сигнал «посылка вызова» даёт системный генератор
+     * тонов — держать свой звуковой файл для этого не нужно.
+     */
+    @ReactMethod
+    fun startRingback() {
+        try {
+            stopRingback()
+            // Громкость 80 из 100: сигнал слышен, но не бьёт по ушам, когда
+            // телефон лежит рядом с оператором.
+            val generator = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 80)
+            generator.startTone(ToneGenerator.TONE_SUP_RINGTONE, -1)
+            ringback = generator
+        } catch (error: Exception) {
+            // На части прошивок тоны недоступны — вызов всё равно виден
+            // на экране, и это важнее звука.
+        }
+    }
+
+    /** Останавливает гудки ожидания. */
+    @ReactMethod
+    fun stopRingback() {
+        try {
+            ringback?.stopTone()
+        } catch (error: Exception) {
+            // Уже не играют.
+        }
+        try {
+            // Генератор держит системный ресурс — освобождаем обязательно,
+            // иначе после нескольких вызовов тоны перестают звучать.
+            ringback?.release()
+        } catch (error: Exception) {
+            // Освобождать уже нечего.
+        }
+        ringback = null
     }
 }

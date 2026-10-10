@@ -5,12 +5,12 @@ import (
 	"time"
 )
 
-// Разбор события набора: номер звонящего лежит в DestCallerID*.
+// Разбор события набора: номер звонящего лежит в CallerIDNum.
 //
-// Это неочевидно, и именно здесь легко ошибиться: у DialBegin поля CallerID*
-// относятся к вызывающему каналу, но номер того, кто звонит, Asterisk
-// дублирует в DestCallerID*. Тест фиксирует, что мы читаем верное поле —
-// поля взяты из живого события Asterisk 18.
+// Это неочевидно, и на этом уже была ошибка: у группового вызова поля
+// DestCallerID* содержат номер ГРУППЫ (200), а не панели, и звонок
+// записывался как «200 → 116». Поля ниже взяты из живого события
+// Asterisk 18 при звонке панели 101 в группу.
 func TestParseCallEventDialBegin(t *testing.T) {
 	block := []string{
 		"Event: DialBegin",
@@ -18,10 +18,10 @@ func TestParseCallEventDialBegin(t *testing.T) {
 		"Channel: SIP/101-0000001a",
 		"CallerIDNum: 101",
 		"CallerIDName: panel 101",
-		"DestChannel: SIP/114-0000001b",
-		"DestCallerIDNum: 101",
-		"DestCallerIDName: panel 101",
-		"DialString: 114",
+		"DestChannel: PJSIP/300-0000001b",
+		"DestCallerIDNum: 200",
+		"DestCallerIDName: Все устройства",
+		"DialString: 200",
 		"DestLinkedid: 1791640345.229",
 	}
 
@@ -33,16 +33,16 @@ func TestParseCallEventDialBegin(t *testing.T) {
 		t.Errorf("вид события = %q, ожидался dial_begin", event.Kind)
 	}
 	if event.CallerIDNum != "101" {
-		t.Errorf("номер звонящего = %q, ожидался 101", event.CallerIDNum)
+		t.Errorf("номер звонящего = %q, ожидался 101 (номер панели, а не группы)", event.CallerIDNum)
 	}
 	if event.CallerIDName != "panel 101" {
 		t.Errorf("имя звонящего = %q", event.CallerIDName)
 	}
-	if event.DestChannel != "SIP/114-0000001b" {
+	if event.DestChannel != "PJSIP/300-0000001b" {
 		t.Errorf("канал получателя = %q", event.DestChannel)
 	}
-	if event.DialString != "114" {
-		t.Errorf("набор = %q, ожидался 114", event.DialString)
+	if event.DialString != "200" {
+		t.Errorf("набор = %q, ожидался 200", event.DialString)
 	}
 	if event.LinkedID != "1791640345.229" {
 		t.Errorf("идентификатор вызова = %q", event.LinkedID)

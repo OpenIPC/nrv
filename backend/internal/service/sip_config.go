@@ -367,18 +367,56 @@ func writeDialplanRule(out *strings.Builder, pattern string, group domain.SipGro
 	fmt.Fprintf(out, "; %s — %s\n", group.Name, strategyText(group.Strategy))
 	fmt.Fprintf(out, "exten => %s,1,NoOp(Вызов от ${CALLERID(num)} в группу %s)\n", pattern, group.Name)
 
+	// Звонящего исключаем из обзвона.
+	//
+	// Иначе получается разговор с самим собой: линия оператора обычно входит
+	// в группу «Все устройства», и при наборе её номера собственный телефон
+	// начинает звонить так, будто ему звонят, — и звонит, пока кто-нибудь не
+	// ответит. Проверено на живом стенде: в логе видно Dial до 301 при вызове
+	// от самого 301.
+	//
+	// Список собирается на месте, а не подставляется готовым: префикс канала
+	// зависит от того, кто звонит, — устройство это (SIP) или приложение
+	// (PJSIP). ${CHANNEL(channeltype)} и даёт нужный префикс, поэтому правило
+	// работает и для трубок, и для приложений, и для панелей.
+	out.WriteString(" same => n,Set(CALLLIST=" + strings.Join(targets, "&") + ")\n")
+	out.WriteString(" same => n,Set(SELF=${CHANNEL(channeltype)}/${CALLERID(num)})\n")
+	// Звонящего вычитаем перебором элементов, а не подстановкой в REPLACE().
+	//
+	// Функция REPLACE() в Asterisk удаляет перечисленные символы, а не
+	// подстроку целиком: от попытки убрать «PJSIP/301&» из списка оставались
+	// только цифры «4562», и станция уходила звонить в несуществующие каналы.
+	// Проверено на живом стенде: в логе видно Set(CALLLIST=4562) и следом
+	// Dial("4562") — вызов обрывался сразу после набора.
+	out.WriteString(" same => n,Set(IDX=1)\n")
+	out.WriteString(" same => n,Set(DIALTARGETS=)\n")
+	out.WriteString(" same => n,While($[\"${CUT(CALLLIST,&,${IDX})}\" != \"\"])\n")
+	out.WriteString(" same => n,Set(ITEM=${CUT(CALLLIST,&,${IDX})})\n")
+	// Накопитель наполняем через разделитель только начиная со второго
+	// элемента, иначе список получил бы ведущий «&» — Dial его не примет.
+	out.WriteString(" same => n,ExecIf($[\"${ITEM}\" != \"${SELF}\"]?Set(DIALTARGETS=${IF($[\"${DIALTARGETS}\" = \"\"]?${ITEM}:${DIALTARGETS}&${ITEM})}))\n")
+	out.WriteString(" same => n,Set(IDX=$[${IDX}+1])\n")
+	out.WriteString(" same => n,EndWhile()\n")
+	out.WriteString(" same => n,Set(CALLLIST=${DIALTARGETS})\n")
+	// Если кроме звонящего в группе никого нет, звонить некому: без этой
+	// проверки Dial получил бы пустой список.
+	out.WriteString(" same => n,ExecIf($[\"${CALLLIST}\" = \"\"]?Hangup())\n")
+
 	if group.Strategy == domain.SipStrategySequential {
 		// По очереди: сколько звонить каждому — делим общее время на всех.
 		perMember := group.RingSeconds / len(targets)
 		if perMember < 5 {
 			perMember = 5
 		}
-		for _, t := range targets {
-			fmt.Fprintf(out, " same => n,Dial(%s,%d)\n", t, perMember)
-		}
+		// Перебор идёт по списку без звонящего: CUT берёт очередной элемент.
+		out.WriteString(" same => n,Set(IDX=1)\n")
+		out.WriteString(" same => n,While($[\"${CUT(CALLLIST,&,${IDX})}\" != \"\"])\n")
+		fmt.Fprintf(out, " same => n,Dial(${CUT(CALLLIST,&,${IDX})},%d)\n", perMember)
+		out.WriteString(" same => n,Set(IDX=$[${IDX}+1])\n")
+		out.WriteString(" same => n,EndWhile()\n")
 	} else {
 		// Все сразу: отвечает первый.
-		fmt.Fprintf(out, " same => n,Dial(%s,%d)\n", strings.Join(targets, "&"), group.RingSeconds)
+		fmt.Fprintf(out, " same => n,Dial(${CALLLIST},%d)\n", group.RingSeconds)
 	}
 	out.WriteString(" same => n,Hangup()\n\n")
 }

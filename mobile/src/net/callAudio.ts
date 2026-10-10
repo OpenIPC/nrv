@@ -20,6 +20,8 @@ interface CallAudioNative {
   setMute(muted: boolean): void;
   startRingtone(): void;
   stopRingtone(): void;
+  startRingback(): void;
+  stopRingback(): void;
 }
 
 const native = (NativeModules as Record<string, CallAudioNative | undefined>).NvrCallAudio;
@@ -58,5 +60,29 @@ export function stopCallRingtone(): void {
     native?.stopRingtone();
   } catch {
     /* уже не играет */
+  }
+}
+
+/**
+ * Играет гудки ожидания ответа при исходящем вызове.
+ *
+ * Это не тот же звук, что при входящем: мелодия входящего вызова, играющая
+ * во время дозвона, сбивает с толку — оператор думает, что звонят ему, и
+ * ищет кнопку ответа вместо ожидания. Гудки генерируются системным тоном.
+ */
+export function startCallRingback(): void {
+  try {
+    native?.startRingback();
+  } catch {
+    /* тишина в трубке хуже, но вызов важнее звука */
+  }
+}
+
+/** Останавливает гудки. */
+export function stopCallRingback(): void {
+  try {
+    native?.stopRingback();
+  } catch {
+    /* уже не играют */
   }
 }

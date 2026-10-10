@@ -154,7 +154,7 @@ export default function CallOverlay() {
             <Pressable style={[styles.button, styles.decline]} onPress={hangup}>
               <Text style={styles.buttonText}>Отклонить</Text>
             </Pressable>
-            <Pressable style={[styles.button, styles.accept]} onPress={answer}>
+            <Pressable style={[styles.button, styles.accept]} onPress={() => answer({ video: true })}>
               <Text style={styles.buttonText}>Ответить</Text>
             </Pressable>
           </>

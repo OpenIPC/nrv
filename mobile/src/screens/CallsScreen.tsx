@@ -90,9 +90,12 @@ export default function CallsScreen({ onBack }: { onBack: () => void }) {
   const registered = snapshot.registration === 'registered';
   const busy = snapshot.call !== null;
 
-  const otherAccounts = accounts.filter(
-    (a) => a.number !== line?.number && a.kind !== 'softphone',
-  );
+  // В списке — все абоненты, кроме своей линии: звонить самому себе
+  // бессмысленно. Другие приложения (второй и третий телефон) тоже
+  // показываем: раньше они отсеивались по виду абонента, и позвонить
+  // с телефона на телефон было нельзя — второго аппарата в списке
+  // просто не было.
+  const otherAccounts = accounts.filter((a) => a.number !== line?.number);
 
   return (
     <View style={styles.container}>

@@ -202,6 +202,20 @@ export class SipClient {
     // экране: экран может быть не открыт вовсе.
     ua.on('newRTCSession', (event: { originator: string; session: RTCSession }) => {
       if (event.originator === 'remote') {
+        // Второй входящий вызов приходит, когда панель звонит одновременно
+        // и в группу, и напрямую: приложение ведёт только один разговор.
+        // Если принять второй, первый вызов теряется, а его завершение
+        // сбрасывает уже идущий разговор — со стороны это выглядит как
+        // внезапный обрыв через несколько секунд. Поэтому лишний вызов
+        // отклоняем сразу и текущий не трогаем.
+        if (this.session) {
+          try {
+            event.session.terminate();
+          } catch {
+            // Отклонить не удалось — вызов всё равно завершится по таймауту.
+          }
+          return;
+        }
         this.bindSession(event.session, 'in');
       } else {
         this.bindSession(event.session, 'out');
@@ -291,10 +305,11 @@ export class SipClient {
     if (!session) {
       return;
     }
-    // Камеру включаем только если она разрешена и вызывающий её прислал:
-    // отвечать с видео без разрешения — верный способ уронить приложение
-    // в нативном коде WebRTC.
-    const wantVideo = (options.video ?? false) && (this.state.call?.remoteVideo ?? false);
+    // Камеру включаем, если её просят и видео разрешено линией. На разбор
+    // INVITE больше не опираемся: у react-native-webrtc тело запроса не всегда
+    // доступно, из-за чего ответ уходил без видео и картинка шла только
+    // в одну сторону — тому, кто звонил.
+    const wantVideo = (options.video ?? false) && this.line.video;
     try {
       session.answer({
         mediaConstraints: {
@@ -546,6 +561,11 @@ export class SipClient {
     });
 
     session.on('accepted', () => {
+      // Событие может прийти от вызова, который уже не ведётся: устаревшая
+      // сессия не должна менять состояние текущего разговора.
+      if (this.session !== session) {
+        return;
+      }
       this.collectStreams(session);
       this.update({
         call: this.state.call ? { ...this.state.call, state: 'active' } : null,
@@ -553,6 +573,9 @@ export class SipClient {
     });
 
     session.on('confirmed', () => {
+      if (this.session !== session) {
+        return;
+      }
       this.collectStreams(session);
       this.update({
         call: this.state.call
@@ -562,6 +585,9 @@ export class SipClient {
     });
 
     session.on('failed', (event: { cause?: string }) => {
+      if (this.session !== session) {
+        return;
+      }
       this.update({
         call: this.state.call
           ? { ...this.state.call, state: 'ending', error: event?.cause || 'вызов не состоялся' }
@@ -573,6 +599,12 @@ export class SipClient {
     });
 
     session.on('ended', () => {
+      // Ради этого сравнения всё и заведено: отменённый второй вызов
+      // завершается своим событием 'ended' и раньше сбрасывал состояние
+      // идущего разговора.
+      if (this.session !== session) {
+        return;
+      }
       this.session = null;
       this.update({ call: null, remoteStream: null, localStream: null });
     });

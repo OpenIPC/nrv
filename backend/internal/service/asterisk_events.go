@@ -224,10 +224,15 @@ func parseCallEvent(block []string, now time.Time) (CallEvent, bool) {
 
 // callEventFromFields раскладывает поля AMI по нашему событию.
 //
-// У событий набора (DialBegin/DialEnd) сторона звонящего описана через
-// «Dest…»: Dial работает с уже созданным каналом вызывающего, а описывает
-// того, кому звонят. Поэтому номер звонящего берём из DestCallerID*, а из
-// CallerID* — только как запасной вариант.
+// Кто звонит, видно в полях CallerID*: вызывающий — это канал Channel.
+// Поля DestCallerID* описывают принимающую сторону, и у группового вызова
+// там стоит номер ГРУППЫ (например, 200), а не панели. Именно на этом
+// терялся номер звонящего: в журнале звонок с панели 101 в группу
+// записывался как «200 → 116».
+//
+// Запасной вариант оставлен для событий, где CallerID пришёл пустым
+// (например, вызовы, созданные самим сервером): тогда номер берём из
+// ConnectedLine, а если и его нет — из DestCallerID.
 func callEventFromFields(kind string, fields map[string]string, now time.Time) CallEvent {
 	event := CallEvent{
 		Kind:        kind,
@@ -247,10 +252,10 @@ func callEventFromFields(kind string, fields map[string]string, now time.Time) C
 	}
 
 	event.CallerIDNum = firstNonEmpty(
-		fields["DestCallerIDNum"], fields["CallerIDNum"], fields["ConnectedLineNum"],
+		fields["CallerIDNum"], fields["ConnectedLineNum"], fields["DestCallerIDNum"],
 	)
 	event.CallerIDName = firstNonEmpty(
-		fields["DestCallerIDName"], fields["CallerIDName"], fields["ConnectedLineName"],
+		fields["CallerIDName"], fields["ConnectedLineName"], fields["DestCallerIDName"],
 	)
 
 	// Имя устройства в CallerID приходит как «<unknown>» — это не имя,

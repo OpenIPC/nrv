@@ -27,6 +27,8 @@ import {
   setCallSpeaker,
   startCallRingtone,
   stopCallRingtone,
+  startCallRingback,
+  stopCallRingback,
 } from '../net/callAudio';
 import {
   clearIncomingCall,
@@ -51,8 +53,8 @@ interface SipState {
   snapshot: SipSnapshot;
   /** Позвонить на номер или в группу. */
   call: (target: string, options?: { video?: boolean }) => void;
-  /** Ответить на входящий. */
-  answer: () => void;
+  /** Ответить на входящий. видео — с картинкой, если она разрешена линией. */
+  answer: (options?: { video?: boolean }) => void;
   /** Положить трубку. */
   hangup: () => void;
   /** Включить/выключить микрофон. */
@@ -95,6 +97,9 @@ const SipContext = createContext<SipState | null>(null);
  */
 function stopRingtoneQuietly(): void {
   stopCallRingtone();
+  // Гудки ожидания гасим здесь же: иначе они остались бы играть после того,
+  // как вызов завершился или собеседник ответил.
+  stopCallRingback();
 }
 
 /**
@@ -252,8 +257,17 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       stopRingtoneQuietly();
       return;
     }
-    if (call.state === 'incoming' || call.state === 'calling') {
+    if (call.state === 'incoming') {
+      // Звонит нам — играет мелодия входящего вызова: её слышно из кармана.
       startCallRingtone();
+      return () => stopRingtoneQuietly();
+    }
+    if (call.state === 'calling') {
+      // Звоним мы — играют гудки ожидания, а не мелодия входящего. Раньше
+      // здесь стояло то же самое, что и для входящего, и исходящий вызов
+      // звучал как входящий: оператор искал кнопку ответа и сбрасывал
+      // собственный вызов.
+      startCallRingback();
       return () => stopRingtoneQuietly();
     }
     stopRingtoneQuietly();
@@ -321,16 +335,23 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     })();
   }, [line]);
 
-  const answer = useCallback(() => {
-    void (async () => {
-      const permissions = await ensureCallPermissions(true);
-      if (!permissions.audio) {
-        Alert.alert('Нужен доступ к микрофону', 'Без микрофона ответить на вызов нельзя.');
-        return;
-      }
-      clientRef.current?.answer({ video: permissions.video });
-    })();
-  }, []);
+  const answer = useCallback(
+    (options?: { video?: boolean }) => {
+      // Видео для ответа берём из того же места, что и при наборе. Раньше
+      // параметры здесь игнорировались, и намерение «ответить с видео»
+      // ни на что не влияло: картинка шла только в одну сторону.
+      const withVideo = options?.video ?? line?.video ?? false;
+      void (async () => {
+        const permissions = await ensureCallPermissions(withVideo);
+        if (!permissions.audio) {
+          Alert.alert('Нужен доступ к микрофону', 'Без микрофона ответить на вызов нельзя.');
+          return;
+        }
+        clientRef.current?.answer({ video: permissions.video });
+      })();
+    },
+    [line],
+  );
 
   const hangup = useCallback(() => {
     clientRef.current?.hangup();
