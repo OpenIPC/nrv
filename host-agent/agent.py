@@ -1077,15 +1077,33 @@ def read_update_log(limit: int = 300):
     return lines[-limit:]
 
 
+# Каталог для настроек самого docker (DOCKER_CONFIG). Нужен потому, что
+# служба агента изолирована: домашние каталоги закрыты (ProtectHome=yes), и
+# docker не может создать привычный /root/.docker — сборка падала с
+# «mkdir /root/.docker: read-only file system». Каталог лежит там, где
+# службе разрешена запись.
+DOCKER_CONFIG_DIR = BACKUP_DIR / "docker"
+
+
+def docker_env():
+    """Возвращает окружение для вызовов docker."""
+    try:
+        DOCKER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log.warning("не удалось подготовить каталог настроек docker: %s", exc)
+    return {"DOCKER_CONFIG": str(DOCKER_CONFIG_DIR)}
+
+
 def compose_command():
     """Определяет, чем вызывать compose на этом хосте.
 
     В установке бывает и плагин «docker compose», и отдельная программа
     «docker-compose» — без проверки обновление падало бы на части серверов.
     """
-    if run(["docker", "compose", "version"], timeout=20, check=False)[0] == 0:
+    env = docker_env()
+    if run(["docker", "compose", "version"], timeout=20, check=False, env=env)[0] == 0:
         return ["docker", "compose"]
-    if run(["docker-compose", "version"], timeout=20, check=False)[0] == 0:
+    if run(["docker-compose", "version"], timeout=20, check=False, env=env)[0] == 0:
         return ["docker-compose"]
     return []
 
@@ -1334,7 +1352,7 @@ def run_update(install_dir: str, branch: str, target_sha: str = "", repo: str = 
         step("сборка образов (это несколько минут)")
         code, out, err = run(
             compose + ["build"], timeout=BUILD_TIMEOUT, check=False,
-            cwd=install_dir,
+            cwd=install_dir, env=docker_env(),
         )
         if code != 0:
             tail = "\n".join((out + "\n" + err).splitlines()[-40:])
@@ -1343,7 +1361,7 @@ def run_update(install_dir: str, branch: str, target_sha: str = "", repo: str = 
         step("перезапуск контейнеров")
         code, out, err = run(
             compose + ["up", "-d", "--remove-orphans"],
-            timeout=BUILD_TIMEOUT, check=False, cwd=install_dir,
+            timeout=BUILD_TIMEOUT, check=False, cwd=install_dir, env=docker_env(),
         )
         if code != 0:
             tail = "\n".join((out + "\n" + err).splitlines()[-40:])
