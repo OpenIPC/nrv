@@ -109,18 +109,26 @@ func (r *RecorderService) StartWriting(cameraID uuid.UUID, rtspURL, mode string)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Сегменты по 2 с: компромисс между точностью пребуфера и числом файлов.
-	// -c copy — без перекодирования, копируем видео как есть (минимум CPU).
 	// -f segment + strftime — имена файлов по времени, по ним ищем нужный интервал.
 	//
-	// ВАЖНО: -map 0:v:0 берём ТОЛЬКО видеопоток. Камеры часто отдают аудио
-	// в G.711 (pcm_alaw), который MP4 не поддерживает, и ffmpeg падает с
-	// «Could not find tag for codec pcm_alaw». Для видеонаблюдения аудио
-	// в клипах не нужно, поэтому просто отбрасываем его.
+	// Видео копируем как есть (без перекодирования — минимум CPU), а звук
+	// перекодируем в AAC.
+	//
+	// Звук здесь нужен: клип вызова домофонии без голоса бесполезен — по нему
+	// не слышно, что человек говорит у двери. Скопировать звук напрямую
+	// нельзя: камеры и панели отдают его в G.711 (pcm_alaw), для которого в
+	// MP4 нет тега, и ffmpeg падает с «Could not find tag for codec pcm_alaw».
+	// Поэтому видео — copy, звук — AAC: он совместим и с MP4, и с Telegram.
+	// Знак вопроса в «-map 0:a:0?» разрешает и потоки без звука: камеры без
+	// микрофона должны записываться как раньше.
 	args := []string{
 		"-rtsp_transport", "tcp",
 		"-i", rtspURL,
 		"-map", "0:v:0",
-		"-c", "copy",
+		"-map", "0:a:0?",
+		"-c:v", "copy",
+		"-c:a", "aac",
+		"-b:a", "64k",
 		"-f", "segment",
 		"-segment_time", fmt.Sprintf("%d", r.SegmentSec),
 		"-segment_format", "mp4",
@@ -565,6 +573,10 @@ func hasMoovAtom(path string) bool {
 //   - yuvj420p и прочие full-range форматы — многие браузеры отклоняют.
 //
 // Совместимый поток просто склеивается без перекодирования (экономия CPU).
+//
+// Звуковая дорожка сохраняется: клип вызова домофонии без голоса бесполезен
+// (не слышно, что человек говорит у двери). Звук приходит уже в AAC, поэтому
+// в обоих случаях попадает в клип без лишней работы.
 func concatSegments(segments []string, out string) error {
 	listPath := out + ".txt"
 	var b strings.Builder
@@ -584,6 +596,7 @@ func concatSegments(segments []string, out string) error {
 	args := []string{"-y", "-f", "concat", "-safe", "0", "-i", listPath}
 	if browserCompatible(codec, pixFmt) {
 		// Поток уже совместим — копируем без перекодирования (минимум CPU).
+		// Звук копируется вместе с видео: он уже AAC из сегментов записи.
 		args = append(args, "-c", "copy", "-movflags", "+faststart")
 	} else {
 		// Быстрый пресет: транскодирование идёт в фоне, а клип нужен сразу.
@@ -593,6 +606,11 @@ func concatSegments(segments []string, out string) error {
 			"-crf", "23",
 			"-profile:v", "main",
 			"-pix_fmt", "yuv420p", // обязателен для совместимости с браузерами
+			// Звук перекодируем в AAC: он совместим и с браузером, и с
+			// Telegram. Если звуковой дорожки в потоке нет, параметр просто
+			// не применяется — клип останется без звука, как и раньше.
+			"-c:a", "aac",
+			"-b:a", "64k",
 			// Число потоков ограничиваем: без этого ffmpeg на многоядерной
 			// машине забирал больше шести ядер на один клип, и сборка клипов
 			// оказывалась главным потребителем процессора. Клип нужен через
@@ -602,7 +620,10 @@ func concatSegments(segments []string, out string) error {
 			"-movflags", "+faststart",
 		)
 	}
-	args = append(args, "-an", "-loglevel", "error", out)
+	// Аудио здесь не выключается. Раньше в конце стоял «-an», и даже при
+	// наличии звуковой дорожки клип собирался без звука — запись вызова
+	// домофонии получалась немой.
+	args = append(args, "-loglevel", "error", out)
 
 	if err := exec.Command("ffmpeg", args...).Run(); err != nil {
 		return fmt.Errorf("concat segments: %w", err)
