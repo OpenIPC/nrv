@@ -17,6 +17,7 @@
 конфиг возвращается сам. Ошибка в адресе не отрежет нас от сервера навсегда.
 """
 
+import base64
 import json
 import yaml
 import logging
@@ -48,6 +49,70 @@ NETPLAN_DIR = Path("/etc/netplan")
 TIMEZONE_FILE = Path("/etc/timezone")
 TIMESYNCD_CONF = Path("/etc/systemd/timesyncd.conf")
 
+# --- Обновление из репозитория ------------------------------------------
+#
+# Каталог установки и ветка: откуда берём новые версии. Каталог задаётся
+# переменной, а не вписан в код: установка может стоять в другом месте
+# (например, в домашнем каталоге при разработке).
+INSTALL_DIR_DEFAULT = os.environ.get("NVR_INSTALL_DIR", "/opt/nvr")
+UPDATE_BRANCH_DEFAULT = os.environ.get("NVR_UPDATE_BRANCH", "main")
+
+# Журнал установки: ход и результат. Его читает интерфейс, поэтому файл
+# лежит рядом с другими данными агента, а не в /tmp.
+UPDATE_LOG = BACKUP_DIR / "update.log"
+
+# Сколько ждать сетевых операций с репозиторием (обращение к GitHub бывает
+# медленным) и сколько — сборки образов: она занимает минуты.
+GIT_TIMEOUT = 180
+BUILD_TIMEOUT = 3600
+
+# Состояние установки: только одно обновление за раз.
+_update_lock = threading.Lock()
+_update_state = {
+    "state": "idle",  # idle | running | done | failed
+    "step": "",
+    "started_at": "",
+    "finished_at": "",
+    "error": "",
+}
+
+# Файл состояния. Нужен потому, что установка завершается
+# переустановкой самой службы агента: процесс перезапускается, и без
+# записи на диск итог установки потерялся бы вместе с памятью процесса.
+UPDATE_STATE_FILE = BACKUP_DIR / "update-state.json"
+
+
+def save_update_state() -> None:
+    try:
+        UPDATE_STATE_FILE.write_text(
+            json.dumps(_update_state, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as exc:
+        log.warning("не удалось сохранить состояние обновления: %s", exc)
+
+
+def load_update_state() -> None:
+    """Восстанавливает состояние установки после перезапуска службы."""
+    try:
+        data = json.loads(UPDATE_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+
+    for key in _update_state:
+        if key in data:
+            _update_state[key] = data[key]
+
+    # «Идёт установка» после перезапуска означает, что процесс был
+    # перезапущен — нашим же шагом обновления службы или оператором.
+    # Показывать вечное «идёт» нельзя: вкладка опрашивала бы сервер без
+    # конца, а установка к этому моменту уже завершена.
+    if _update_state["state"] == "running":
+        _update_state["state"] = "done"
+        _update_state["step"] = "готово (служба перезапущена)"
+        _update_state["finished_at"] = datetime.now().isoformat(timespec="seconds")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -59,15 +124,30 @@ log = logging.getLogger("nvr-agent")
 # ---------------------------------------------------------------- утилиты
 
 
-def run(cmd, timeout=30, check=True):
+def run(cmd, timeout=30, check=True, cwd=None, env=None):
     """Выполняет команду и возвращает (код, вывод, ошибки).
 
     Список аргументов, а не строка с shell=True: так значения из
     интерфейса не могут превратиться в дополнительную команду.
+
+    Каталог задаётся явно (cwd), потому что docker compose берёт файл
+    конфигурации из текущего каталога, а не из каталога установки: без
+    этого обновление собирало бы образы из чужого каталога — того, откуда
+    запущен агент.
+
+    Дополнительное окружение (env) используется для токена доступа к
+    приватному репозиторию: он передаётся переменными, а не аргументами
+    командной строки, потому что аргументы видны в списке процессов.
     """
+    if env:
+        merged = os.environ.copy()
+        merged.update(env)
+        env = merged
+
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, check=False
+            cmd, capture_output=True, text=True, timeout=timeout, check=False,
+            cwd=cwd, env=env,
         )
     except FileNotFoundError:
         return 127, "", f"команда не найдена: {cmd[0]}"
@@ -78,6 +158,80 @@ def run(cmd, timeout=30, check=True):
         log.warning("команда %s завершилась с кодом %d: %s",
                     " ".join(cmd), proc.returncode, proc.stderr.strip())
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+def git_env(token):
+    """Собирает окружение git с заголовком авторизации для приватного репозитория.
+
+    Токен уходит в переменных окружения, а не в аргументах: аргументы видны
+    в списке процессов, и токен утёк бы любому, кто в этот момент посмотрит
+    `ps`. В .git/config токен тоже не попадает — адрес репозитория остаётся
+    чистым, поэтому он не утечёт через вывод `git remote -v`.
+
+    Токен допустимо вводить как просто токен, так и в виде «логин:токен»:
+    площадки отличаются форматом. GitHub принимает любое имя с токеном в
+    роли пароля, а для GitVerse и своих Git-серверов бывает нужно задать
+    настоящее имя пользователя.
+    """
+    token = (token or "").strip()
+    if not token:
+        return {}
+
+    if ":" in token:
+        user, secret = token.split(":", 1)
+    else:
+        user, secret = "x-access-token", token
+
+    pair = base64.b64encode(f"{user}:{secret}".encode("utf-8")).decode("ascii")
+    return {
+        # GIT_CONFIG_COUNT сообщает git, сколько пар «ключ-значение» ему
+        # передали переменными окружения.
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraheader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {pair}",
+    }
+
+
+def git(install_dir, args, timeout=30, env=None):
+    """Запускает git в каталоге установки.
+
+    `-c safe.directory`: git отказывается работать с каталогом, владелец
+    которого не совпадает с пользователем процесса («dubious ownership»).
+    Агент работает от root, а каталог установки может быть создан другим
+    пользователем — например, при установке из домашнего каталога. Каталог
+    задан администратором явно, поэтому доверять ему здесь безопасно.
+
+    GIT_TERMINAL_PROMPT=0: спрашивать имя и пароль у агента негде, и без
+    этого запрета git пытается читать ввод и падает с сообщением «could
+    not read Username» вместо понятного «нужна авторизация».
+    """
+    cmd = ["git", "-c", f"safe.directory={install_dir}", "-C", install_dir, *args]
+    merged = {"GIT_TERMINAL_PROMPT": "0"}
+    if env:
+        merged.update(env)
+    return run(cmd, timeout=timeout, check=False, env=merged)
+
+
+def auth_hint(text: str, token_given: bool) -> str:
+    """Поясняет ошибку авторизации при обращении к репозиторию.
+
+    Сообщение самого git («could not read Username») ничего не говорит
+    оператору о причине: он видит отказ, но не понимает, что репозиторий
+    приватный и нужен токен.
+    """
+    lowered = (text or "").lower()
+    looks_like_auth = any(
+        marker in lowered
+        for marker in ("authentication", "could not read username", "403", "401")
+    )
+    if not looks_like_auth:
+        return ""
+    if token_given:
+        return " — проверьте токен доступа и его права на этот репозиторий"
+    return (
+        " — возможно, репозиторий приватный: укажите токен доступа "
+        "в источнике обновлений"
+    )
 
 
 def is_valid_ipv4(value: str) -> bool:
@@ -894,6 +1048,400 @@ def wait_for_connectivity() -> bool:
     return False
 
 
+# ------------------------------------------------- обновление из репозитория
+
+
+def update_log_write(text: str) -> None:
+    """Дописывает строку в журнал установки.
+
+    Журнал нужен именно файлом: во время обновления контейнеры
+    перезапускаются, соединение с браузером обрывается, и без записи на
+    диск итог установки посмотреть было бы негде.
+    """
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with UPDATE_LOG.open("a", encoding="utf-8") as handle:
+            handle.write(f"[{stamp}] {text}\n")
+    except OSError as exc:
+        # Неудачная запись журнала не должна срывать само обновление.
+        log.warning("не удалось записать журнал обновления: %s", exc)
+
+
+def read_update_log(limit: int = 300):
+    """Возвращает последние строки журнала установки."""
+    try:
+        lines = UPDATE_LOG.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return lines[-limit:]
+
+
+def compose_command():
+    """Определяет, чем вызывать compose на этом хосте.
+
+    В установке бывает и плагин «docker compose», и отдельная программа
+    «docker-compose» — без проверки обновление падало бы на части серверов.
+    """
+    if run(["docker", "compose", "version"], timeout=20, check=False)[0] == 0:
+        return ["docker", "compose"]
+    if run(["docker-compose", "version"], timeout=20, check=False)[0] == 0:
+        return ["docker-compose"]
+    return []
+
+
+def git_repo_info(install_dir: str):
+    """Собирает сведения о версии, установленной в каталоге.
+
+    Источник версии — сам каталог установки, а не образ: так видно точный
+    коммит, с которого собраны работающие контейнеры, и не нужно вшивать
+    хеш в образ при сборке.
+    """
+    if not os.path.isdir(install_dir):
+        return {"ok": False, "error": f"каталог установки {install_dir} не найден"}
+    if not os.path.isdir(os.path.join(install_dir, ".git")):
+        # Установка без git (распакованный архив): проверять нечего, и
+        # сообщаем об этом прямо, а не делаем вид, что версия актуальна.
+        return {
+            "ok": False,
+            "error": (
+                f"каталог {install_dir} не является git-репозиторием — "
+                "обновление из репозитория недоступно"
+            ),
+        }
+
+    code, out, err = git(install_dir, ["log", "-1", "--format=%H%n%cI%n%s"])
+    if code != 0:
+        return {"ok": False, "error": f"git не смог прочитать версию: {err or out}"}
+
+    parts = out.splitlines()
+    sha = parts[0] if parts else ""
+    date = parts[1] if len(parts) > 1 else ""
+    subject = parts[2] if len(parts) > 2 else ""
+
+    code, branch, _ = git(install_dir, ["rev-parse", "--abbrev-ref", "HEAD"])
+    code, remote, _ = git(install_dir, ["remote", "get-url", "origin"])
+    code, dirty, _ = git(install_dir, ["status", "--porcelain"])
+
+    return {
+        "ok": True,
+        "dir": install_dir,
+        "sha": sha,
+        "short": sha[:8],
+        "date": date,
+        "subject": subject,
+        "branch": branch if code == 0 else "",
+        # Локальные правки не мешают обновлению, но о них честнее сказать:
+        # reset --hard их перезапишет.
+        "dirty": bool(dirty),
+        "remote": remote,
+    }
+
+
+def read_previous_version():
+    """Возвращает сведения о версии, с которой обновлялись последний раз.
+
+    Нужна для отката: после неудачного обновления должно быть понятно, к
+    чему возвращаться.
+    """
+    try:
+        parts = (BACKUP_DIR / "previous-sha").read_text(encoding="utf-8").split()
+    except OSError:
+        return {}
+    if len(parts) < 2:
+        return {}
+    return {"sha": parts[0], "branch": parts[1]}
+
+
+def apply_repo_url(install_dir: str, repo: str):
+    """Переводит origin на заданный адрес репозитория.
+
+    Адрес обновлений приходит из настроек сервера, а не вшит в код: одна и
+    та же сборка ставится с GitHub, с GitVerse и с локального зеркала. Если
+    адрес отличается от текущего origin, меняем его в самом репозитории —
+    иначе git продолжал бы тянуть обновления из прежнего места.
+    """
+    repo = (repo or "").strip()
+    if not repo:
+        return None
+
+    code, current, _ = git(install_dir, ["remote", "get-url", "origin"])
+    if code == 0 and current.strip() == repo:
+        return None
+
+    code, out, err = git(install_dir, ["remote", "set-url", "origin", repo])
+    if code != 0:
+        return f"не удалось задать адрес репозитория {repo}: {err or out}"
+
+    log.info("адрес репозитория обновления изменён на %s", repo)
+    return None
+
+
+def check_update(payload):
+    """Проверяет, есть ли в репозитории версия новее установленной."""
+    install_dir = payload.get("dir") or INSTALL_DIR_DEFAULT
+    branch = payload.get("branch") or UPDATE_BRANCH_DEFAULT
+    env = git_env(payload.get("token"))
+
+    info = git_repo_info(install_dir)
+    if not info["ok"]:
+        return info
+
+    error = apply_repo_url(install_dir, payload.get("repo"))
+    if error:
+        return {"ok": False, "error": error}
+    if payload.get("repo"):
+        info = git_repo_info(install_dir)
+
+    # Забираем состояние ветки. Это единственное обращение агента наружу,
+    # поэтому ошибку сети показываем как есть — по ней видно, что чинить.
+    code, out, err = git(install_dir, ["fetch", "--prune", "origin", branch],
+                        timeout=GIT_TIMEOUT, env=env)
+    if code != 0:
+        detail = err or out
+        return {
+            "ok": False,
+            "error": (
+                f"не удалось обратиться к репозиторию: {detail}"
+                + auth_hint(detail, bool(env))
+            ),
+        }
+
+    code, remote_sha, err = git(install_dir, ["rev-parse", f"origin/{branch}"])
+    if code != 0:
+        return {"ok": False, "error": f"ветка origin/{branch} не найдена: {err}"}
+
+    code, remote_meta, _ = git(
+        install_dir, ["log", "-1", "--format=%cI%n%s", f"origin/{branch}"]
+    )
+    meta_parts = remote_meta.splitlines()
+    remote = {
+        "sha": remote_sha,
+        "short": remote_sha[:8],
+        "date": meta_parts[0] if meta_parts else "",
+        "subject": meta_parts[1] if len(meta_parts) > 1 else "",
+    }
+
+    behind = remote_sha != info["sha"]
+
+    commits = []
+    diff = ""
+    if behind:
+        _, log_out, _ = git(
+            install_dir,
+            ["log", "--oneline", "--no-decorate", f"HEAD..origin/{branch}"],
+        )
+        commits = [line for line in log_out.splitlines() if line.strip()]
+        _, diff, _ = git(
+            install_dir, ["diff", "--shortstat", f"HEAD..origin/{branch}"]
+        )
+
+    # Место на диске: сборка образов на заполненном диске заканчивается
+    # ошибкой уже на середине, а это хуже, чем честный отказ заранее.
+    free_gb = 0.0
+    try:
+        free_gb = round(shutil.disk_usage(install_dir).free / (1024 ** 3), 1)
+    except OSError as exc:
+        log.warning("не удалось проверить место на диске: %s", exc)
+
+    return {
+        "ok": True,
+        "dir": install_dir,
+        "branch": branch,
+        "current": {
+            "sha": info["sha"],
+            "short": info["short"],
+            "date": info["date"],
+            "subject": info["subject"],
+        },
+        "remote": remote,
+        "behind": behind,
+        "commits": commits,
+        "diff": diff,
+        "dirty": info["dirty"],
+        "previous": read_previous_version(),
+        # Проверяем и саму команду, и файл: без файла compose в каталоге
+        # установки сборка не начнётся, и лучше сказать об этом заранее,
+        # чем показать кнопку, которая приведёт к ошибке.
+        "compose": bool(compose_command())
+        and os.path.isfile(os.path.join(install_dir, "docker-compose.yml")),
+        "free_gb": free_gb,
+        # Меньше двух гигабайт — сборке образов не хватит.
+        "enough_space": free_gb >= 2.0,
+    }
+
+
+def run_update(install_dir: str, branch: str, target_sha: str = "", repo: str = "",
+               token: str = "") -> None:
+    """Выполняет установку обновления. Работает в отдельном потоке.
+
+    target_sha задаётся при откате: тогда переключаемся не на верхушку
+    ветки, а на конкретный коммит.
+    """
+
+    def step(text: str) -> None:
+        _update_state["step"] = text
+        save_update_state()
+        log.info("обновление: %s", text)
+        update_log_write(text)
+
+    try:
+        env = git_env(token)
+        info = git_repo_info(install_dir)
+        if not info["ok"]:
+            raise RuntimeError(info["error"])
+
+        update_log_write(f"=== начало обновления: ветка {branch}, было {info['short']} ===")
+
+        error = apply_repo_url(install_dir, repo)
+        if error:
+            raise RuntimeError(error)
+
+        step("получение изменений из репозитория")
+        code, out, err = git(
+            install_dir, ["fetch", "--prune", "origin", branch],
+            timeout=GIT_TIMEOUT, env=env,
+        )
+        if code != 0 and not target_sha:
+            detail = err or out
+            raise RuntimeError(
+                f"не удалось получить изменения: {detail}"
+                + auth_hint(detail, bool(token))
+            )
+
+        # Прежний коммит сохраняем до переключения: после reset --hard
+        # узнать его будет уже негде, а без него откат невозможен.
+        try:
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            (BACKUP_DIR / "previous-sha").write_text(
+                f"{info['sha']} {branch}\n", encoding="utf-8"
+            )
+        except OSError as exc:
+            log.warning("не удалось сохранить прежнюю версию: %s", exc)
+
+        target = target_sha or f"origin/{branch}"
+        step(f"переключение на {target}")
+        code, out, err = git(install_dir, ["reset", "--hard", target], timeout=120)
+        if code != 0:
+            raise RuntimeError(f"не удалось переключить версию: {err or out}")
+
+        compose = compose_command()
+        if not compose:
+            raise RuntimeError("docker compose не найден на этом хосте")
+
+        # .env и данные не трогаем: они не в репозитории, а прежние образы
+        # остаются в хранилище docker — на них и происходит откат.
+        step("сборка образов (это несколько минут)")
+        code, out, err = run(
+            compose + ["build"], timeout=BUILD_TIMEOUT, check=False,
+            cwd=install_dir,
+        )
+        if code != 0:
+            tail = "\n".join((out + "\n" + err).splitlines()[-40:])
+            raise RuntimeError(f"сборка образов не удалась:\n{tail}")
+
+        step("перезапуск контейнеров")
+        code, out, err = run(
+            compose + ["up", "-d", "--remove-orphans"],
+            timeout=BUILD_TIMEOUT, check=False, cwd=install_dir,
+        )
+        if code != 0:
+            tail = "\n".join((out + "\n" + err).splitlines()[-40:])
+            raise RuntimeError(f"контейнеры не поднялись:\n{tail}")
+
+        new_info = git_repo_info(install_dir)
+        update_log_write(
+            "=== обновление завершено успешно: "
+            f"{new_info.get('short', '?')} ==="
+        )
+        _update_state.update(
+            state="done",
+            step="готово",
+            finished_at=datetime.now().isoformat(timespec="seconds"),
+            error="",
+        )
+        save_update_state()
+
+        # Служба агента обновляется последней и уже после записи итога: в
+        # новых версиях у неё появляются новые команды, без которых часть
+        # настроек в интерфейсе не работает. Перезапуск службы завершает и
+        # этот самый процесс, поэтому всё важное записано заранее.
+        agent_install = os.path.join(install_dir, "host-agent", "install.sh")
+        if os.path.isfile(agent_install):
+            update_log_write("обновление службы агента (перезапуск прервёт этот журнал)")
+            code, out, err = run(
+                ["bash", agent_install], timeout=600, check=False, cwd=install_dir
+            )
+            if code != 0:
+                # Ошибка здесь не отменяет обновления сервера: оно уже
+                # выполнено. Сообщаем отдельно, чтобы это было видно.
+                update_log_write(f"служба агента не обновилась: {err or out}")
+    except (RuntimeError, OSError) as exc:
+        update_log_write(f"!!! ошибка: {exc}")
+        _update_state.update(
+            state="failed",
+            step="ошибка",
+            finished_at=datetime.now().isoformat(timespec="seconds"),
+            error=str(exc),
+        )
+        save_update_state()
+
+
+def apply_update(payload):
+    """Запускает установку обновления и сразу отвечает.
+
+    Установка длится минуты, а одно соединение с агентом — это один запрос
+    и один ответ: держать его открытым нельзя, иначе браузер отвалится по
+    таймауту. Поэтому работа уходит в поток, а ход виден через
+    update_status.
+    """
+    install_dir = payload.get("dir") or INSTALL_DIR_DEFAULT
+    branch = payload.get("branch") or UPDATE_BRANCH_DEFAULT
+    target_sha = payload.get("sha") or ""
+    repo = payload.get("repo") or ""
+    token = payload.get("token") or ""
+
+    with _update_lock:
+        if _update_state["state"] == "running":
+            return {"ok": False, "error": "обновление уже выполняется"}
+        _update_state.update(
+            state="running",
+            step="подготовка",
+            started_at=datetime.now().isoformat(timespec="seconds"),
+            finished_at="",
+            error="",
+        )
+        save_update_state()
+
+    thread = threading.Thread(
+        target=run_update,
+        args=(install_dir, branch, target_sha, repo, token),
+        daemon=True,
+    )
+    thread.start()
+    return {"ok": True, "started": True, "dir": install_dir, "branch": branch}
+
+
+def rollback_update(payload):
+    """Возвращает прежнюю версию из сохранённого коммита."""
+    install_dir = payload.get("dir") or INSTALL_DIR_DEFAULT
+    previous = read_previous_version()
+    if not previous:
+        return {"ok": False, "error": "нет сведений о прежней версии — откат невозможен"}
+    return apply_update(
+        {"dir": install_dir, "branch": previous["branch"], "sha": previous["sha"]}
+    )
+
+
+def update_status(payload):
+    """Возвращает состояние установки и хвост журнала."""
+    return {
+        "ok": True,
+        "state": dict(_update_state),
+        "log": read_update_log(),
+    }
+
+
 # ------------------------------------------------------------- обработка
 
 
@@ -908,6 +1456,13 @@ HANDLERS = {
     },
     "network_apply": apply_network,
     "hardware_state": lambda payload: read_hardware_state(),
+    "version_info": lambda payload: git_repo_info(
+        payload.get("dir") or INSTALL_DIR_DEFAULT
+    ),
+    "update_check": check_update,
+    "update_apply": apply_update,
+    "update_rollback": rollback_update,
+    "update_status": update_status,
     "ping": lambda payload: {"ok": True, "pong": True},
 }
 
@@ -971,6 +1526,9 @@ class Server(socketserver.ThreadingUnixStreamServer):
 
 def main():
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Ход установки переживает перезапуск службы: его итог записан на диск.
+    load_update_state()
 
     socket_path = Path(SOCKET_PATH)
     socket_path.parent.mkdir(parents=True, exist_ok=True)

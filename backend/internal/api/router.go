@@ -111,6 +111,12 @@ type RouterConfig struct {
 	// вместе со своим номером и паролем: другого способа подключиться к
 	// Asterisk у него нет.
 	AsteriskWSPort int
+	// InstallDir, UpdateRepoURL и UpdateBranch — обновление сервера:
+	// каталог установки, адрес репозитория и ветка. Пустые значения
+	// означают «решает агент на хосте».
+	InstallDir    string
+	UpdateRepoURL string
+	UpdateBranch  string
 }
 
 func NewRouter(cfg RouterConfig) *chi.Mux {
@@ -221,6 +227,15 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// Настройки времени и сети: изменения выполняет служба на хосте,
 	// бэкенд только передаёт ей команды и показывает результат.
 	hostH := handlers.NewHostHandler(cfg.HostAgent)
+
+	// Проверка и установка обновлений. Каталог установки и адрес
+	// репозитория берём из настроек: адрес не вшит в код, потому что
+	// установки живут на разных площадках. Сохранённые в интерфейсе
+	// адрес, ветка и токен имеют приоритет над значениями .env.
+	updatesH := handlers.NewUpdatesHandler(
+		cfg.HostAgent, cfg.InstallDir, cfg.UpdateRepoURL, cfg.UpdateBranch,
+		settingsRepo,
+	)
 
 	audioH := handlers.NewAudioHandler(postgres.NewAudioRepo(cfg.DB), cfg.AudioSvc) // Адрес камеры нужен, чтобы определить аудиокодек через ffprobe.
 	audioH.WithCameraSource(func(cameraID uuid.UUID) string {
@@ -484,6 +499,17 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Patch("/settings/host/time", hostH.UpdateTime)
 			r.Patch("/settings/host/network", hostH.UpdateNetwork)
 			r.Get("/settings/host/timezones", hostH.Timezones)
+
+			// Версия сервера и обновления из репозитория.
+			//
+			// Версию узнаём у агента на хосте: источник истины — git-коммит
+			// в каталоге установки, а не образ, иначе хеш пришлось бы
+			// вшивать в образ при сборке.
+			r.Get("/version", updatesH.Version)
+			r.Get("/updates/check", updatesH.Check)
+			r.Post("/updates/apply", updatesH.Apply)
+			r.Post("/updates/rollback", updatesH.Rollback)
+			r.Get("/updates/status", updatesH.Status)
 			// Справочник известных лиц
 			r.Get("/faces", recogH.ListFaces)
 			r.Post("/faces", recogH.CreateFace)

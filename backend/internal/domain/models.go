@@ -397,6 +397,44 @@ type ServerSettings struct {
 	Storage       StorageConfig        `json:"storage"`
 	Snapshots     StorageConfig        `json:"snapshots"`
 	Notifications NotificationSettings `json:"notifications"`
+	// Updates — откуда сервер берёт обновления. Отдельная секция, потому
+	// что меняется она со страницы сервера, а не из настроек уведомлений.
+	Updates UpdateSettings `json:"updates"`
+}
+
+// UpdateSettings — откуда сервер берёт обновления.
+//
+// Хранится в базе, а не только в переменных окружения установки: адрес
+// репозитория и токен оператор должен менять из интерфейса, без правки
+// .env и пересоздания контейнеров.
+type UpdateSettings struct {
+	// RepoURL — адрес репозитория. Пусто — берётся значение, заданное при
+	// установке (UPDATE_REPO_URL).
+	RepoURL string `json:"repo_url"`
+	// Branch — ветка обновлений. Пусто — main.
+	Branch string `json:"branch"`
+	// Token — токен доступа для приватного репозитория (GitHub, GitVerse,
+	// свой Git-сервер).
+	//
+	// `json:"-"` намеренно: токен не должен утаскиваться наружу вместе с
+	// настройками — их читают все, у кого есть право на просмотр страницы.
+	// Наружу отдаётся только признак TokenSet, а сам токен получает сервис
+	// обновлений и передаёт службе на хосте.
+	Token string `json:"-"`
+	// TokenSet — задан ли токен. Отдельное поле, потому что самого токена
+	// интерфейс не видит: иначе по пустому полю нельзя отличить «токена
+	// нет» от «токен есть, но не показан».
+	TokenSet bool `json:"token_set"`
+}
+
+// UpdateSettingsRequest — что прислал оператор на вкладке обновлений.
+type UpdateSettingsRequest struct {
+	RepoURL string `json:"repo_url"`
+	Branch  string `json:"branch"`
+	// Token: отсутствует — не менять, пустая строка — удалить, иначе —
+	// новый токен. Так выглядит обычный разбор формы: пустое поле не
+	// должно затирать уже заданный токен, который интерфейс не показывает.
+	Token *string `json:"token,omitempty"`
 }
 
 // --- Уведомления ---
@@ -846,6 +884,8 @@ type UpdateServerSettingsRequest struct {
 	// а не внутри System: присмотр не только сообщает, но и действует
 	// на камеру, и выключается отдельно от уведомлений о сервере.
 	Majestic *MajesticWatchConfig `json:"majestic,omitempty"`
+	// Updates — источник обновлений: адрес репозитория, ветка и токен.
+	Updates *UpdateSettingsRequest `json:"updates,omitempty"`
 }
 
 // CreateCameraRequest — запрос на создание камеры

@@ -105,6 +105,12 @@ systemctl daemon-reload
 systemctl reset-failed nvr-agent 2>/dev/null || true
 systemctl enable --now nvr-agent.service
 
+# Перезапуск, а не только «включить»: если служба уже работала, enable --now
+# не подхватит новый agent.py, и он остался бы на диске без дела — с
+# прежним набором команд. Именно так новые настройки «не появлялись бы»
+# после обновления сервера.
+systemctl restart nvr-agent.service
+
 sleep 1
 if systemctl is-active --quiet nvr-agent; then
     echo "Служба nvr-agent запущена"

@@ -57,6 +57,19 @@ type Config struct {
 	SyslogAdvertise string
 	// LogRetentionDays — сколько дней хранить логи с камер.
 	LogRetentionDays int
+	// InstallDir — каталог установки на хосте. По нему агент находит
+	// git-коммит работающей версии и обновляется из репозитория.
+	//
+	// Пусто означает каталог по умолчанию в самом агенте (/opt/nvr):
+	// при типовой установке задавать его не нужно.
+	InstallDir string
+	// UpdateRepoURL — адрес репозитория, откуда берутся обновления.
+	//
+	// Не вшит в код намеренно: установки живут на разных площадках
+	// (GitHub, GitVerse, локальное зеркало), и адрес задаётся при установке.
+	UpdateRepoURL string
+	// UpdateBranch — ветка для обновления, обычно main.
+	UpdateBranch string
 	// PublicURL — адрес этого сервера, доступный из сети устройств.
 	//
 	// Нужен там, где устройство само обращается к серверу и адрес ему надо
@@ -132,6 +145,11 @@ func Load() (*Config, error) {
 		// руками не нужно.
 		SyslogAdvertise:  envStr("SYSLOG_ADVERTISE", ""),
 		LogRetentionDays: envInt("LOG_RETENTION_DAYS", 30),
+		// Каталог установки и адрес обновлений: пустые значения означают
+		// «решает агент», поэтому умолчаний здесь нет, кроме ветки.
+		InstallDir:    envStr("NVR_INSTALL_DIR", ""),
+		UpdateRepoURL: envStr("UPDATE_REPO_URL", ""),
+		UpdateBranch:  envStr("UPDATE_BRANCH", "main"),
 		// Пусто — значит адрес определяет сам сервис по адресу запроса.
 		PublicURL: envStr("PUBLIC_URL", ""),
 		// По умолчанию пусто: конфигурацию Asterisk правим только если

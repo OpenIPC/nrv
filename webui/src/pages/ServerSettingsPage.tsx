@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next'
 import { hostAPI, type HostStatus, type NetworkInterface, type TimeState } from '../api/host'
 import { useToast } from '../context/ToastContext'
 import LanguageCard from '../components/LanguageCard'
+import UpdatesPanel from '../components/UpdatesPanel'
 import {
   Clock, Network, Server, Loader2, Save, RefreshCw, CheckCircle2, XCircle,
-  AlertTriangle, Wifi, Globe, Info, ShieldAlert, Timer,
+  AlertTriangle, Wifi, Globe, Info, ShieldAlert, Timer, Download,
 } from 'lucide-react'
 
 const cardStyle: React.CSSProperties = {
@@ -84,6 +85,8 @@ export default function ServerSettingsPage() {
 
   const [status, setStatus] = useState<HostStatus | null>(null)
   const [loading, setLoading] = useState(true)
+  // Какая вкладка открыта: общие настройки или обновления.
+  const [tab, setTab] = useState<'general' | 'updates'>('general')
   const [zones, setZones] = useState<string[]>([])
   const [savingTime, setSavingTime] = useState(false)
   const [savingNet, setSavingNet] = useState(false)
@@ -266,6 +269,32 @@ export default function ServerSettingsPage() {
           просто не доберётся, если не поймёт, что здесь написано. */}
       <LanguageCard />
 
+      {/* Разделы страницы. Обновления вынесены отдельной вкладкой: это
+          редкая и «тяжёлая» операция, и держать её рядом с полями, которые
+          правят каждый день, незачем. */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <button
+          onClick={() => setTab('general')}
+          className={tab === 'general' ? 'btn btn-primary' : 'btn'}
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <Clock size={15} />
+          {t('serverPage.tabGeneral')}
+        </button>
+        <button
+          onClick={() => setTab('updates')}
+          className={tab === 'updates' ? 'btn btn-primary' : 'btn'}
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <Download size={15} />
+          {t('serverPage.tabUpdates')}
+        </button>
+      </div>
+
+      {tab === 'updates' ? (
+        <UpdatesPanel />
+      ) : (
+        <>
       {!available && (
         <div style={warningStyle}>
           <ShieldAlert size={20} style={{ flexShrink: 0, marginTop: 1 }} />
@@ -537,6 +566,8 @@ export default function ServerSettingsPage() {
           <XCircle size={14} />
           {t('serverPage.notAvailableHint')}
         </div>
+      )}
+        </>
       )}
     </div>
   )

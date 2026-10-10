@@ -33,6 +33,9 @@ const (
 	// networkTimeout учитывает проверку связи после применения: агент
 	// ждёт восстановления сети до минуты.
 	networkTimeout = 150 * time.Second
+	// updateTimeout — проверка обновлений: агент забирает изменения из
+	// репозитория в интернете, и на медленном канале это долго.
+	updateTimeout = 200 * time.Second
 )
 
 // Client обращается к агенту через локальный сокет.
@@ -83,8 +86,13 @@ func (c *Client) call(ctx context.Context, action string, payload map[string]any
 	defer conn.Close()
 
 	deadline := time.Now().Add(requestTimeout)
-	if action == "network_apply" {
+	switch action {
+	case "network_apply":
 		deadline = time.Now().Add(networkTimeout)
+	case "update_check":
+		// Проверка обновлений обращается к репозиторию в интернете:
+		// это единственное действие, которое может длиться минутами.
+		deadline = time.Now().Add(updateTimeout)
 	}
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl

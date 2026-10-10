@@ -559,9 +559,13 @@ func main() {
 		// Порт WebSocket-транспорта Asterisk: его получает приложение,
 		// чтобы зарегистрироваться без ручной настройки.
 		AsteriskWSPort: cfg.AsteriskWSPort,
+		// Обновление сервера: каталог установки и адрес репозитория.
+		// Пустые значения означают «решает агент на хосте».
+		InstallDir:    cfg.InstallDir,
+		UpdateRepoURL: cfg.UpdateRepoURL,
+		UpdateBranch:  cfg.UpdateBranch,
 	})
 
-	// HTTP-сервер
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
 		Handler:      router,

@@ -2348,6 +2348,34 @@ export interface StorageConfig {
 export interface ServerSettings {
   storage: StorageConfig
   snapshots: StorageConfig
+  /** Откуда сервер берёт обновления (вкладка «Обновления»). */
+  updates: UpdateSettings
+}
+
+/** Источник обновлений: адрес репозитория и ветка. */
+export interface UpdateSettings {
+  /** Адрес репозитория. Пусто — значение, заданное при установке. */
+  repo_url: string
+  branch: string
+  /**
+   * Токен задан. Сам токен сервер наружу не отдаёт: по нему нельзя
+   * отличить «токена нет» от «токен есть, но не показан».
+   */
+  token_set: boolean
+}
+
+/**
+ * Что отправляем при сохранении источника обновлений.
+ *
+ * Токен передаётся только если оператор его ввёл (или очистил пустой
+ * строкой). Отсутствие поля означает «оставить прежний токен» — иначе
+ * сохранение адреса репозитория затирало бы токен, который интерфейс
+ * не показывает.
+ */
+export interface UpdateSettingsPatch {
+  repo_url: string
+  branch: string
+  token?: string
 }
 
 // Классы объектов COCO, которые умеет распознавать YOLOv8.
@@ -2419,6 +2447,11 @@ export const detectionAPI = {
 export const settingsAPI = {
   get: () => api.get<ServerSettings>('/settings'),
   update: (data: Partial<ServerSettings>) => api.patch<ServerSettings>('/settings', data),
+  // Источник обновлений сохраняем отдельным методом: в теле запроса есть
+  // токен, а в ответе его нет, поэтому общий тип Partial<ServerSettings>
+  // здесь не подходит.
+  updateSource: (data: UpdateSettingsPatch) =>
+    api.patch<ServerSettings>('/settings', { updates: data }),
 }
 
 // --- Уведомления ---

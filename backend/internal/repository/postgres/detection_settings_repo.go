@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -310,6 +311,24 @@ func applySetting(out *domain.ServerSettings, key string, raw []byte) error {
 		if err := json.Unmarshal(raw, &out.Notifications.Majestic); err != nil {
 			return fmt.Errorf("decode majestic watch settings: %w", err)
 		}
+	case "updates":
+		// Источник обновлений. Разбираем во временную структуру с полем
+		// token: в domain.UpdateSettings токена нет по тегам (json:"-"),
+		// и прямая распаковка его бы потеряла.
+		var loaded struct {
+			RepoURL string `json:"repo_url"`
+			Branch  string `json:"branch"`
+			Token   string `json:"token"`
+		}
+		if err := json.Unmarshal(raw, &loaded); err != nil {
+			return fmt.Errorf("decode update settings: %w", err)
+		}
+		out.Updates = domain.UpdateSettings{
+			RepoURL:  loaded.RepoURL,
+			Branch:   loaded.Branch,
+			Token:    loaded.Token,
+			TokenSet: loaded.Token != "",
+		}
 	}
 	return nil
 }
@@ -390,7 +409,57 @@ func (r *DetectionSettingsRepo) UpdateServerSettings(ctx context.Context, req do
 			return nil, fmt.Errorf("save majestic watch settings: %w", err)
 		}
 	}
+	if req.Updates != nil {
+		if err := r.saveUpdateSettings(ctx, req.Updates); err != nil {
+			return nil, err
+		}
+	}
 	return r.GetServerSettings(ctx)
+}
+
+// saveUpdateSettings сохраняет секцию обновлений, не теряя заданный токен.
+//
+// Отдельная функция нужна потому, что токен интерфейс не получает и не
+// присылает обратно: если сохранять секцию целиком, любое изменение
+// адреса репозитория стирало бы токен, и приватный репозиторий переставал
+// бы обновляться без всякого сообщения об ошибке со стороны оператора.
+func (r *DetectionSettingsRepo) saveUpdateSettings(ctx context.Context, req *domain.UpdateSettingsRequest) error {
+	var current []byte
+	err := r.db.QueryRow(ctx, `SELECT value FROM server_settings WHERE key = 'updates'`).Scan(&current)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("read update settings: %w", err)
+	}
+
+	var stored struct {
+		RepoURL string `json:"repo_url"`
+		Branch  string `json:"branch"`
+		Token   string `json:"token"`
+	}
+	if len(current) > 0 {
+		if err := json.Unmarshal(current, &stored); err != nil {
+			return fmt.Errorf("decode update settings: %w", err)
+		}
+	}
+
+	stored.RepoURL = req.RepoURL
+	stored.Branch = req.Branch
+	if req.Token != nil {
+		// Пустая строка — оператор убрал токен (репозиторий стал публичным
+		// или токен отозван). Отсутствие поля — токен оставить как есть.
+		stored.Token = strings.TrimSpace(*req.Token)
+	}
+
+	body, err := json.Marshal(stored)
+	if err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		INSERT INTO server_settings (key, value, updated_at) VALUES ('updates', $1::jsonb, now())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+		string(body)); err != nil {
+		return fmt.Errorf("save update settings: %w", err)
+	}
+	return nil
 }
 
 // decodePoints разбирает JSON-массив точек; при ошибке возвращает пустой срез,

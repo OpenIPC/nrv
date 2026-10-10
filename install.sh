@@ -313,6 +313,16 @@ detect_gpu() {
     command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1
 }
 
+# Обновления сервера из репозитория.
+#
+# Каталог установки и адрес репозитория записываем в .env: их читает
+# бэкенд и передаёт службе на хосте. Адрес не вшит в код потому, что одна и
+# та же сборка ставится с GitHub, с GitVerse и с локального зеркала —
+# переезд между ними не должен требовать правки кода.
+set_env NVR_INSTALL_DIR "$INSTALL_DIR"
+set_env UPDATE_REPO_URL "$REPO_URL"
+set_env UPDATE_BRANCH main
+
 WANT_GPU=0
 case "$DETECT_MODE" in
     gpu) WANT_GPU=1 ;;

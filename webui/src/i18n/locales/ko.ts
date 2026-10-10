@@ -158,6 +158,8 @@ export default {
 
   serverPage: {
     title: '서버',
+    tabGeneral: '시간과 네트워크',
+    tabUpdates: '업데이트',
     intro: '이 서버의 시간과 네트워크입니다. 변경은 호스트의 별도 서비스가 수행합니다 — 영상 서버 자체에는 시스템 권한이 없습니다.',
 
     agentDownTitle: '서버 관리 서비스가 응답하지 않습니다.',
@@ -215,6 +217,55 @@ export default {
     gateway: '게이트웨이',
     notAvailable: '사용할 수 없음',
     notAvailableHint: '서비스를 사용할 수 없는 동안에는 설정을 변경할 수 없습니다. 변경 사항을 적용할 곳이 없기 때문입니다.',
+  },
+
+  updates: {
+    sourceTitle: '업데이트 소스',
+    repoLabel: '저장소 주소',
+    repoHint: '서버가 업데이트를 가져오는 곳입니다. 비어 있으면 설치 시 기록된 주소를 사용합니다.',
+    branchLabel: '브랜치',
+    tokenLabel: '액세스 토큰',
+    tokenSet: '설정됨',
+    tokenPlaceholder: '비공개 저장소에만 필요합니다',
+    tokenHint:
+      '공개 저장소라면 비워 두십시오. 토큰은 서버에 저장되며 브라우저로 되돌아오지 않습니다. 토큰 자체 또는 로그인:토큰 형식으로 입력할 수 있습니다.',
+    saveSource: '소스 저장',
+    sourceSaved: '업데이트 소스가 저장되었습니다',
+    sourceSaveFailed: '업데이트 소스를 저장할 수 없습니다',
+    clearToken: '토큰 삭제',
+    versionTitle: '서버 버전',
+    currentVersion: '설치된 버전',
+    repository: '저장소',
+    branch: '브랜치',
+    installDir: '설치 디렉터리',
+    dirtyWarning:
+      '설치 디렉터리에 커밋되지 않은 변경 사항이 있습니다 — 업데이트 시 덮어써집니다.',
+    checkTitle: '저장소에서 업데이트',
+    checkButton: '업데이트 확인',
+    checking: '확인 중…',
+    checkFailed: '업데이트를 확인할 수 없습니다',
+    foundNew: '새 버전이 있습니다',
+    upToDate: '최신 버전이 설치되어 있습니다',
+    changesTitle: '변경 내용',
+    noChanges: '변경 없음',
+    installButton: '업데이트 설치',
+    installing: '설치 중…',
+    installWarning:
+      '설치 중에는 보기와 녹화가 중단됩니다: 컨테이너가 재시작됩니다. 몇 분 정도 걸리므로 서버 전원을 끄지 마십시오.',
+    confirmInstall:
+      '업데이트를 설치하시겠습니까? 카메라 보기와 녹화가 몇 분간 중단되고 서버가 재시작됩니다.',
+    confirmRollback:
+      '이전 버전으로 되돌리시겠습니까? 서버가 다시 재시작되며 녹화와 설정은 유지됩니다.',
+    rollbackButton: '이전 버전으로 되돌리기',
+    installStarted: '설치가 시작되었습니다 — 진행 상황은 아래 로그에서 볼 수 있습니다',
+    installFailed: '설치를 시작할 수 없습니다',
+    lowSpace:
+      '디스크 여유 공간이 {{free}} GB입니다. 이미지 빌드에 부족할 수 있으니 공간을 확보하십시오.',
+    noCompose: '서버에 docker compose가 없어 업데이트를 설치할 수 없습니다.',
+    logTitle: '설치 로그',
+    logEmpty: '아직 없음',
+    logHint:
+      '로그는 서버에 저장되어 재시작 후에도 남습니다: 페이지 연결이 끊기면 새로 고친 뒤 이 탭으로 돌아오십시오.',
   },
 
   switchesPage: {

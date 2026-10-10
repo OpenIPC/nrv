@@ -152,6 +152,8 @@ export default {
 
   serverPage: {
     title: 'Server',
+    tabGeneral: 'Time and network',
+    tabUpdates: 'Updates',
     intro:
       'Time and network of this server. Changes are applied by a separate service on the host — the video server itself has no system privileges.',
 
@@ -213,6 +215,56 @@ export default {
     gateway: 'Gateway',
     notAvailable: 'unavailable',
     notAvailableHint: 'While the service is unavailable you cannot change the settings — there would be nowhere to apply them.',
+  },
+
+  updates: {
+    sourceTitle: 'Update source',
+    repoLabel: 'Repository URL',
+    repoHint:
+      'Where the server takes updates from. Empty — the address recorded during installation.',
+    branchLabel: 'Branch',
+    tokenLabel: 'Access token',
+    tokenSet: 'set',
+    tokenPlaceholder: 'needed only for a private repository',
+    tokenHint:
+      'Leave empty for a public repository. The token is stored on the server and never sent back to the browser; enter either the token itself or login:token.',
+    saveSource: 'Save source',
+    sourceSaved: 'Update source saved',
+    sourceSaveFailed: 'Could not save the update source',
+    clearToken: 'Remove token',
+    versionTitle: 'Server version',
+    currentVersion: 'Installed version',
+    repository: 'Repository',
+    branch: 'branch',
+    installDir: 'Install directory',
+    dirtyWarning:
+      'The install directory has uncommitted changes — they will be overwritten by the update.',
+    checkTitle: 'Updates from the repository',
+    checkButton: 'Check for updates',
+    checking: 'Checking…',
+    checkFailed: 'Could not check for updates',
+    foundNew: 'A new version is available',
+    upToDate: 'The latest version is installed',
+    changesTitle: 'What will change',
+    noChanges: 'No changes',
+    installButton: 'Install update',
+    installing: 'Installing…',
+    installWarning:
+      'Viewing and recording will be interrupted: the containers restart. The update takes a few minutes — do not power off the server.',
+    confirmInstall:
+      'Install the update? Camera viewing and recording will stop for a few minutes while the server restarts.',
+    confirmRollback:
+      'Return to the previous version? The server will restart again; recordings and settings are kept.',
+    rollbackButton: 'Return to previous version',
+    installStarted: 'Installation started — progress is shown in the log below',
+    installFailed: 'Could not start the installation',
+    lowSpace:
+      'Only {{free}} GB free on disk. That may be too little to build images — free up space.',
+    noCompose: 'docker compose was not found on the server — updates cannot be installed.',
+    logTitle: 'Installation log',
+    logEmpty: 'Nothing yet',
+    logHint:
+      'The log is stored on the server and survives a restart: if the page loses connection, reload it and return to this tab.',
   },
 
   switchesPage: {
