@@ -468,6 +468,26 @@ async function maskCredentials(page) {
         el.value = el.value.replace(re, '$1***:***@')
       }
     })
+
+    // Внешний адрес сервера.
+    //
+    // Он задаётся в настройках телефонии и виден в поле как есть. Публичный
+    // адрес установки в документацию попадать не должен — по нему видно,
+    // куда установка смотрит наружу. Подменяем на адрес из стандарта для
+    // документации (RFC 5737), чтобы по снимку было понятно: поле заполнено.
+    //
+    // Приватные адреса оставляем как есть: они ничего не выдают, а снимок
+    // с ними полезнее — видно, что именно вписывать в это поле.
+    const privateNet = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/i
+    document.querySelectorAll('input').forEach((el) => {
+      const value = (el.value || '').trim()
+      if (!value || privateNet.test(value) || value === 'localhost') return
+      const looksLikeAddress =
+        /^\d{1,3}(\.\d{1,3}){3}$/.test(value) || /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(value)
+      if (!looksLikeAddress) return
+      el.value = '203.0.113.10'
+      el.setAttribute('value', '203.0.113.10')
+    })
   })
 }
 
