@@ -1355,6 +1355,11 @@ export interface SipSettings {
   video_enabled: boolean
   video_codec: string
   ring_timeout: number
+  /** Адрес STUN-сервера; пусто — внешний адрес через него не ищется. */
+  stun_server: string
+  /** Диапазон портов разговора — его же пробрасывают на роутере. */
+  rtp_port_start: number
+  rtp_port_end: number
   updated_at?: string
 }
 

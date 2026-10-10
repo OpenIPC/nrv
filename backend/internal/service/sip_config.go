@@ -58,7 +58,9 @@ func (b *SipConfigBuilder) Sync(ctx context.Context) error {
 
 	files := map[string]string{
 		"sip_accounts.conf":        renderSipAccounts(snapshot.Accounts),
-		"pjsip_accounts.conf":      renderPjsipAccounts(snapshot.Accounts, settings.VideoEnabled, settings.VideoCodec),
+		"pjsip_accounts.conf":      renderPjsipAccounts(snapshot.Accounts, settings.VideoEnabled, settings.VideoCodec, settings.ExternalAddress),
+		"pjsip_transport.conf":     renderPjsipTransport(settings),
+		"rtp_settings.conf":        renderRtpSettings(settings),
 		"extensions_accounts.conf": renderDialplan(snapshot.Groups, snapshot.Rules),
 		"server_settings.conf":     renderServerSettings(settings),
 	}
@@ -179,13 +181,96 @@ func renderServerSettings(settings *domain.SipSettings) string {
 	return out.String()
 }
 
+// renderPjsipTransport собирает секцию транспорта для приложений.
+//
+// Секция пишется из базы, а не держится в статическом pjsip.conf, ради
+// внешнего адреса. Без него станция предлагает приложениям только локальный
+// адрес: телефон в мобильной сети регистрируется, но разговор остаётся без
+// звука и видео — медиа уходит в сеть, откуда до телефона не добраться.
+//
+// local_net отделяет «свои» сети: для них в SDP остаётся локальный адрес.
+// Без этого деления внешний адрес применялся бы и к разговорам внутри
+// дома, и голос пытался бы идти через NAT.
+func renderPjsipTransport(settings *domain.SipSettings) string {
+	var out strings.Builder
+	out.WriteString("; Файл собран сервером из настроек телефонии. Правки будут перезаписаны.\n")
+	out.WriteString("; Транспорт приложений: WebRTC по WebSocket.\n\n")
+	out.WriteString("[transport-ws]\n")
+	out.WriteString("type=transport\n")
+	out.WriteString("protocol=ws\n")
+	// bind обязателен: без него Asterisk отказывается создавать транспорт
+	// («binding not specified»), и приложения теряют связь при каждой
+	// пересборке конфигурации. Порт здесь не используется — WebSocket
+	// отдаёт HTTP-сервер Asterisk на порту из http.conf, — но путаницы
+	// значение не создаёт.
+	out.WriteString("bind=0.0.0.0:8088\n")
+
+	if settings.ExternalAddress != "" {
+		fmt.Fprintf(&out, "external_signaling_address=%s\n", settings.ExternalAddress)
+		fmt.Fprintf(&out, "external_media_address=%s\n", settings.ExternalAddress)
+	}
+	if settings.LocalNet != "" {
+		for _, net := range strings.FieldsFunc(settings.LocalNet, func(r rune) bool {
+			return r == ',' || r == ';' || r == '\n' || r == ' '
+		}) {
+			if net = strings.TrimSpace(net); net != "" {
+				fmt.Fprintf(&out, "local_net=%s\n", net)
+			}
+		}
+	}
+	if settings.ExternalAddress == "" && settings.LocalNet == "" {
+		out.WriteString("; Внешний адрес не задан: все абоненты в одной сети с сервером.\n")
+	}
+	return out.String()
+}
+
+// renderRtpSettings собирает настройки медиа для Asterisk.
+//
+// Файл подключается из rtp.conf и содержит то, что зависит от установки:
+// диапазон портов разговора и адрес STUN. Раньше эти значения жили прямо в
+// rtp.conf, и на новой установке их приходилось править руками в файле —
+// теперь они задаются на странице «Домофония».
+func renderRtpSettings(settings *domain.SipSettings) string {
+	start, end := settings.RtpPortStart, settings.RtpPortEnd
+	if start < 1024 || end > 65535 || start > end {
+		// Некорректные значения в базе не должны валить станцию: с ними
+		// Asterisk не запустится, и пропадут все звонки сразу. Берём
+		// прежние, проверенные.
+		start, end = 10000, 10100
+	}
+
+	var out strings.Builder
+	out.WriteString("; Файл собран сервером из настроек телефонии. Правки будут перезаписаны.\n\n")
+	out.WriteString("[general]\n")
+	// Диапазон портов сужен сознательно: это те порты, которые нужно
+	// пробросить на роутере, а один разговор занимает по порту в каждую
+	// сторону. Значение по умолчанию (10000-20000 у Asterisk) пришлось бы
+	// пробрасывать целиком.
+	fmt.Fprintf(&out, "rtpstart=%d\n", start)
+	fmt.Fprintf(&out, "rtpend=%d\n", end)
+	// Джиттер-буфер сглаживает неравномерность прихода пакетов: у вызывных
+	// панелей и камер слабый процессор, и паузы в потоке случаются.
+	out.WriteString("jbenable=yes\n")
+	out.WriteString("jbmaxsize=200\n")
+	if settings.StunServer != "" {
+		// Через STUN станция узнаёт свой внешний адрес и предлагает его
+		// приложениям внешним ICE-кандидатом. Без этого в SDP уходят только
+		// локальные адреса, и звонок из мобильной сети проходит без звука и
+		// видео.
+		fmt.Fprintf(&out, "stunaddr=%s\n", settings.StunServer)
+	} else {
+		out.WriteString("; Адрес STUN не задан: внешние звонки не настраивались.\n")
+	}
+	return out.String()
+}
+
 // renderPjsipAccounts собирает файл абонентов нового драйвера (приложения).
 //
 // Имена объектов важны: AOR обязан называться так же, как endpoint. Это
 // выяснено на живой регистрации — при `aors=aor300` у абонента 300
 // Asterisk отвечал 404 на REGISTER и писал в журнал
 // «find_registrar_aor: AOR ” not found for endpoint '300'».
-func renderPjsipAccounts(accounts []domain.SipAccount, videoEnabled bool, videoCodec string) string {
+func renderPjsipAccounts(accounts []domain.SipAccount, videoEnabled bool, videoCodec, externalAddress string) string {
 	var out strings.Builder
 	out.WriteString("; Файл собран сервером из базы. Правки будут перезаписаны.\n")
 	out.WriteString("; Абоненты-приложения: браузер, мобильное, десктоп (WebRTC по WebSocket).\n")
@@ -196,7 +281,7 @@ func renderPjsipAccounts(accounts []domain.SipAccount, videoEnabled bool, videoC
 		if a.Kind != domain.SipKindSoftphone {
 			continue
 		}
-		writePjsipAccount(&out, a, videoEnabled, videoCodec)
+		writePjsipAccount(&out, a, videoEnabled, videoCodec, externalAddress)
 		written++
 	}
 	if written == 0 {
@@ -206,7 +291,7 @@ func renderPjsipAccounts(accounts []domain.SipAccount, videoEnabled bool, videoC
 }
 
 // writePjsipAccount описывает одного абонента нового драйвера.
-func writePjsipAccount(out *strings.Builder, a domain.SipAccount, videoEnabled bool, videoCodec string) {
+func writePjsipAccount(out *strings.Builder, a domain.SipAccount, videoEnabled bool, videoCodec, externalAddress string) {
 	cid := a.Name
 	if cid == "" {
 		cid = a.Number
@@ -235,9 +320,25 @@ func writePjsipAccount(out *strings.Builder, a domain.SipAccount, videoEnabled b
 	if videoEnabled {
 		fmt.Fprintf(out, "allow=%s\n", videoCodec)
 	}
-	// webrtc=yes включает DTLS-SRTP и ICE: браузер и телефоны не умеют
-	// незашифрованный RTP, без этого приложение не подключится.
+	// webrtc=yes включает DTLS-SRTP и ICE: приложение (WebRTC) не умеет
+	// работать без ICE — попытка его отключить заканчивалась обрывом вызова
+	// и ошибкой «rtc error» на телефоне. Проверено на живом.
 	out.WriteString("webrtc=yes\n")
+	// Адрес медиа для приложений вне домашней сети.
+	//
+	// Берётся из настроек телефонии («Внешний адрес»). Без него станция
+	// указывает в SDP локальный адрес (192.168.1.x), и телефон в мобильной
+	// сети не понимает, куда отправлять звук и видео.
+	if externalAddress != "" {
+		fmt.Fprintf(out, "media_address=%s\n", externalAddress)
+	}
+	// Симметричный RTP: куда пришёл звук от собеседника, туда и уходит наш.
+	//
+	// Нужен для мобильной сети: телефон за NAT оператора имеет только
+	// внутренний адрес (100.122.x.x), и адресовать пакеты туда бессмысленно.
+	// По первому же пакету от телефона станция запоминает его настоящий
+	// адрес и отвечает уже туда.
+	out.WriteString("rtp_symmetric=yes\n")
 	out.WriteString("direct_media=no\n")
 	// auto_info: принимаем DTMF и в RTP (rfc4733), и в сообщениях SIP INFO.
 	//

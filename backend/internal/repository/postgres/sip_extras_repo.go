@@ -77,14 +77,21 @@ func (r *SipRepo) ClearAccountSwitch(ctx context.Context, accountID uuid.UUID) e
 func (r *SipRepo) GetSettings(ctx context.Context) (*domain.SipSettings, error) {
 	var s domain.SipSettings
 	err := r.db.QueryRow(ctx, `
-		SELECT external_address, local_net, video_enabled, video_codec, ring_timeout, updated_at
+		SELECT external_address, local_net, video_enabled, video_codec, ring_timeout,
+		       stun_server, rtp_port_start, rtp_port_end, updated_at
 		FROM sip_settings WHERE id = 1`).
 		Scan(&s.ExternalAddress, &s.LocalNet, &s.VideoEnabled, &s.VideoCodec,
-			&s.RingTimeout, &s.UpdatedAt)
+			&s.RingTimeout, &s.StunServer, &s.RtpPortStart, &s.RtpPortEnd, &s.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Строку создаёт миграция, но пустая таблица не должна валить
 		// страницу настроек: отдаём значения по умолчанию.
-		return &domain.SipSettings{VideoCodec: "vp8", RingTimeout: 30}, nil
+		return &domain.SipSettings{
+			VideoCodec:   "vp8",
+			RingTimeout:  30,
+			StunServer:   "stun.sipnet.ru:3478",
+			RtpPortStart: 10000,
+			RtpPortEnd:   10100,
+		}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get sip settings: %w", err)
@@ -95,16 +102,21 @@ func (r *SipRepo) GetSettings(ctx context.Context) (*domain.SipSettings, error) 
 // UpdateSettings сохраняет настройки телефонии.
 func (r *SipRepo) UpdateSettings(ctx context.Context, s *domain.SipSettings) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO sip_settings (id, external_address, local_net, video_enabled, video_codec, ring_timeout, updated_at)
-		VALUES (1, $1, $2, $3, $4, $5, now())
+		INSERT INTO sip_settings (id, external_address, local_net, video_enabled, video_codec,
+		                         ring_timeout, stun_server, rtp_port_start, rtp_port_end, updated_at)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, now())
 		ON CONFLICT (id) DO UPDATE SET
 			external_address = EXCLUDED.external_address,
 			local_net = EXCLUDED.local_net,
 			video_enabled = EXCLUDED.video_enabled,
 			video_codec = EXCLUDED.video_codec,
 			ring_timeout = EXCLUDED.ring_timeout,
+			stun_server = EXCLUDED.stun_server,
+			rtp_port_start = EXCLUDED.rtp_port_start,
+			rtp_port_end = EXCLUDED.rtp_port_end,
 			updated_at = now()`,
-		s.ExternalAddress, s.LocalNet, s.VideoEnabled, s.VideoCodec, s.RingTimeout)
+		s.ExternalAddress, s.LocalNet, s.VideoEnabled, s.VideoCodec, s.RingTimeout,
+		s.StunServer, s.RtpPortStart, s.RtpPortEnd)
 	if err != nil {
 		return fmt.Errorf("update sip settings: %w", err)
 	}

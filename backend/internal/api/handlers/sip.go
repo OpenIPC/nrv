@@ -690,6 +690,31 @@ func (h *SipHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		in.RingTimeout = 30
 	}
 
+	// Адрес STUN попадает прямо в конфигурацию Asterisk, поэтому пробелы и
+	// переводы строк в нём недопустимы: строка с ними превратилась бы в
+	// мусорную директиву, и станция не поднялась бы с невнятной ошибкой.
+	// Пустое значение допустимо — тогда внешний адрес через STUN не ищется.
+	in.StunServer = strings.TrimSpace(in.StunServer)
+	if strings.ContainsAny(in.StunServer, " \t\r\n") {
+		writeError(w, http.StatusBadRequest, "адрес STUN не должен содержать пробелов")
+		return
+	}
+
+	// Диапазон портов: пустое значение (ноль) заменяем на прежнее, а границы
+	// проверяем — с неверными Asterisk не запустится, и пропадут сразу все
+	// звонки, а не только новые настройки.
+	if in.RtpPortStart == 0 {
+		in.RtpPortStart = 10000
+	}
+	if in.RtpPortEnd == 0 {
+		in.RtpPortEnd = 10100
+	}
+	if in.RtpPortStart < 1024 || in.RtpPortEnd > 65535 || in.RtpPortStart > in.RtpPortEnd {
+		writeError(w, http.StatusBadRequest,
+			"неверный диапазон портов: начало от 1024, конец до 65535, начало не больше конца")
+		return
+	}
+
 	if err := h.repo.UpdateSettings(r.Context(), &in); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -781,7 +806,7 @@ func (h *SipHandler) MyLine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	host := h.serverAddress(r)
+	host := h.requestAddress(r)
 	// Приложению нужен адрес WebSocket-транспорта Asterisk. Без него
 	// регистрация невозможна: у chan_pjsip это единственный способ
 	// подключиться, обычный UDP-транспорт приложению недоступен.
@@ -851,6 +876,29 @@ func (h *SipHandler) serverAddress(r *http.Request) string {
 	if host == "" {
 		host = r.Host
 	}
+	host = cleanAddress(host)
+	if host == "localhost" || host == "127.0.0.1" {
+		return ""
+	}
+	return host
+}
+
+// requestAddress возвращает адрес, по которому к серверу обратился клиент.
+//
+// Приложению нужен именно он: телефон получает адрес WebSocket и SIP-сервера
+// ровно такой, по которому сам зашёл. Если подставлять настройку PUBLIC_URL,
+// аппарат в мобильной сети получает локальный адрес (192.168.1.x) и не может
+// подключиться: видео с камер через веб-прокси при этом работает, а звонки
+// отваливаются с «нет связи» — проверено на живом телефоне.
+func (h *SipHandler) requestAddress(r *http.Request) string {
+	if host := cleanAddress(r.Host); host != "" && host != "localhost" && host != "127.0.0.1" {
+		return host
+	}
+	return h.serverAddress(r)
+}
+
+// cleanAddress убирает из адреса схему, порт и путь.
+func cleanAddress(host string) string {
 	if i := strings.Index(host, "//"); i >= 0 {
 		host = host[i+2:]
 	}
@@ -861,9 +909,6 @@ func (h *SipHandler) serverAddress(r *http.Request) string {
 	// веб-интерфейса устройство примет за адрес регистратора.
 	if i := strings.LastIndex(host, ":"); i > 0 {
 		host = host[:i]
-	}
-	if host == "localhost" || host == "127.0.0.1" {
-		return ""
 	}
 	return host
 }

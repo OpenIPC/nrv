@@ -2367,6 +2367,15 @@ export default {
     calls: 'Calls',
     ringTimeout: 'Ring for, seconds',
     ringTimeoutHint: 'Default value for new call groups.',
+    media: 'Call media',
+    stunServer: 'STUN server',
+    stunServerHint:
+      'Needed for calls from a mobile network: the station learns its external address through STUN and offers it to the phone. Leave empty if the apps are used only at home.',
+    rtpRange: 'Call ports',
+    rtpRangeHint:
+      'Port range used for audio and video. This is the range to forward on the router; one call takes one port in each direction.',
+    portsHint:
+      'For calls from outside, two ports are forwarded on the router: {{ws}}/tcp for app connections and {{rtp}}/udp for audio and video. The web interface and camera viewing use their own ports.',
   },
 
   externalAccessPage: {

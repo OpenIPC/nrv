@@ -186,8 +186,22 @@ type SipSettings struct {
 	// потоком (из go2rtc), а не по SIP.
 	VideoCodec string `json:"video_codec"`
 	// RingTimeout — сколько секунд звонить, если группу не переопределили.
-	RingTimeout int       `json:"ring_timeout"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	RingTimeout int `json:"ring_timeout"`
+	// StunServer — адрес STUN-сервера; пусто — не использовать.
+	//
+	// Нужен, когда приложениями пользуются не только внутри дома: через STUN
+	// станция узнаёт свой внешний адрес и предлагает его телефону внешним
+	// ICE-кандидатом. Без этого в SDP уходят только локальные адреса, и
+	// звонок из мобильной сети остаётся без звука и видео.
+	StunServer string `json:"stun_server"`
+	// RtpPortStart и RtpPortEnd — диапазон портов, по которым идёт звук и
+	// видео разговора.
+	//
+	// Нужны не станции, а оператору: именно этот диапазон пробрасывается на
+	// роутере, и он же показывается на странице настроек как подсказка.
+	RtpPortStart int       `json:"rtp_port_start"`
+	RtpPortEnd   int       `json:"rtp_port_end"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // SipGroup — группа вызова.

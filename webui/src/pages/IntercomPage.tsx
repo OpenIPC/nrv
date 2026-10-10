@@ -1018,6 +1018,62 @@ function SettingsTab({
         </div>
       </div>
 
+      {/* Медиа разговора: порты и STUN. Нужны установкам, где приложения
+          работают не только внутри дома. */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h3 style={{ fontSize: 15, marginBottom: 12 }}>{t('intercomSettings.media')}</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+          <div>
+            <Label>{t('intercomSettings.stunServer')}</Label>
+            <input
+              style={{ width: '100%' }}
+              value={settings.stun_server}
+              disabled={!canManage}
+              placeholder="stun.sipnet.ru:3478"
+              onChange={(e) => setSettings({ ...settings, stun_server: e.target.value })}
+            />
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>
+              {t('intercomSettings.stunServerHint')}
+            </p>
+          </div>
+          <div>
+            <Label>{t('intercomSettings.rtpRange')}</Label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                style={{ width: '100%' }}
+                type="number"
+                min={1024}
+                max={65535}
+                value={settings.rtp_port_start}
+                disabled={!canManage}
+                onChange={(e) => setSettings({ ...settings, rtp_port_start: Number(e.target.value) })}
+              />
+              <span style={{ color: 'var(--text-secondary)' }}>—</span>
+              <input
+                style={{ width: '100%' }}
+                type="number"
+                min={1024}
+                max={65535}
+                value={settings.rtp_port_end}
+                disabled={!canManage}
+                onChange={(e) => setSettings({ ...settings, rtp_port_end: Number(e.target.value) })}
+              />
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>
+              {t('intercomSettings.rtpRangeHint')}
+            </p>
+          </div>
+        </div>
+        {/* Подсказка собирается из самих настроек: оператор видит ровно те
+            порты, которые нужно пробросить, и не переписывает их из документа. */}
+        <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 8, lineHeight: 1.5 }}>
+          {t('intercomSettings.portsHint', {
+            ws: 8088,
+            rtp: `${settings.rtp_port_start}-${settings.rtp_port_end}`,
+          })}
+        </p>
+      </div>
+
       {/* Видеозвонки. */}
       <div className="card" style={{ marginBottom: 16 }}>
         <h3 style={{ fontSize: 15, marginBottom: 12 }}>{t('intercomSettings.video')}</h3>
