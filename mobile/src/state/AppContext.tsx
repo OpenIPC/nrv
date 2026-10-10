@@ -9,14 +9,18 @@ import React, {
 import { ApiClient } from '../net/api';
 import { parseAddress } from '../net/address';
 import {
+  clearCredentials,
   clearToken,
+  loadCredentials,
   loadSelectedServerId,
   loadServers,
   loadToken,
+  saveCredentials,
   saveSelectedServerId,
   saveServers,
   saveToken,
 } from '../storage/servers';
+import type { ServerCredentials } from '../storage/servers';
 import type { ServerProfile } from '../types';
 
 /**
@@ -41,16 +45,28 @@ interface AppState {
    */
   baseUrl: string;
   token: string | null;
+  /**
+   * Почему потребовался повторный вход: показывается на экране входа.
+   *
+   * Нужно, чтобы внезапное появление формы входа не выглядело как сбой:
+   * срок токена истёк, и пароль нужно ввести заново.
+   */
+  authNotice: string | null;
   client: ApiClient | null;
   /** Добавляет сервер и делает его текущим. */
   addServer: (name: string, address: string, username?: string) => Promise<ServerProfile>;
   /** Делает сервер текущим. */
   selectServer: (id: string) => Promise<void>;
-  /** Удаляет сервер вместе с сохранённым токеном. */
+  /** Удаляет сервер вместе с сохранённым токеном и учётными данными. */
   removeServer: (id: string) => Promise<void>;
-  /** Сохраняет токен после входа. */
-  signIn: (token: string) => Promise<void>;
-  /** Забывает токен текущего сервера. */
+  /**
+   * Сохраняет токен и учётные данные после входа.
+   *
+   * Логин и пароль нужны для автоматического входа, когда токен истечёт
+   * (он живёт сутки, а обновить его на сервере нечем).
+   */
+  signIn: (token: string, username: string, password: string) => Promise<void>;
+  /** Забывает токен и учётные данные текущего сервера. */
   signOut: () => Promise<void>;
   /** Перечитывает список серверов из хранилища. */
   reloadServers: () => Promise<void>;
@@ -63,6 +79,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [servers, setServers] = useState<ServerProfile[]>([]);
   const [current, setCurrent] = useState<ServerProfile | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  // Учётные данные текущего сервера: нужны, чтобы войти заново, когда
+  // срок действия токена истечёт. Пароль не показывается в интерфейсе —
+  // хранится только для повторного входа.
+  const [credentials, setCredentials] = useState<ServerCredentials | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
 
   // Загрузка сохранённого состояния при старте приложения.
   useEffect(() => {
@@ -84,6 +105,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (selected) {
         const stored = await loadToken(selected.id);
         if (!cancelled) setToken(stored);
+        const creds = await loadCredentials(selected.id);
+        if (!cancelled) setCredentials(creds);
       }
       if (!cancelled) setReady(true);
     })();
@@ -102,8 +125,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    */
   const client = useMemo(() => {
     if (!current) return null;
-    return new ApiClient(current.baseUrl, token);
-  }, [current, token]);
+    return new ApiClient(current.baseUrl, token, credentials, {
+      // Клиент сам обновил сессию — сохраняем новый токен, чтобы он
+      // пережил перезапуск приложения.
+      onTokenRefreshed: (fresh) => {
+        setToken(fresh);
+        void saveToken(current.id, fresh);
+      },
+      // Автоматически войти не удалось (сменили пароль или права).
+      // Показываем экран входа, но сервер из списка НЕ удаляем: адрес и
+      // логин по-прежнему верны, вводить нужно только пароль.
+      onAuthLost: () => {
+        setAuthNotice('Срок сессии истёк — войдите снова');
+        setToken(null);
+      },
+    });
+  }, [current, token, credentials]);
 
   const reloadServers = useCallback(async () => {
     const stored = await loadServers();
@@ -146,8 +183,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       await saveSelectedServerId(profile.id);
 
       // Токен привязан к серверу: при переключении берём сохранённый.
+      // Учётные данные — тоже: у каждого сервера свой логин.
       const stored = await loadToken(profile.id);
       setToken(stored);
+      setCredentials(await loadCredentials(profile.id));
 
       return profile;
     },
@@ -162,6 +201,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       await saveSelectedServerId(id);
       const stored = await loadToken(profile.id);
       setToken(stored);
+      setCredentials(await loadCredentials(profile.id));
     },
     [servers],
   );
@@ -171,6 +211,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const next = servers.filter((s) => s.id !== id);
       await saveServers(next);
       await clearToken(id);
+      await clearCredentials(id);
       setServers(next);
 
       if (current?.id === id) {
@@ -180,16 +221,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // Токен берём у сервера, который станет текущим: у него может
         // быть своя сохранённая сессия.
         setToken(fallback ? await loadToken(fallback.id) : null);
+        setCredentials(fallback ? await loadCredentials(fallback.id) : null);
       }
     },
     [servers, current],
   );
 
   const signIn = useCallback(
-    async (newToken: string) => {
+    async (newToken: string, username: string, password: string) => {
       setToken(newToken);
+      // Вход выполнен — подсказка про истёкшую сессию больше не нужна.
+      setAuthNotice(null);
+      // Учётные данные держим для автоматического входа: токен живёт
+      // сутки, а обновить его на сервере нечем.
+      const creds: ServerCredentials = { username, password };
+      setCredentials(creds);
       if (current) {
         await saveToken(current.id, newToken);
+        await saveCredentials(current.id, creds);
       }
     },
     [current],
@@ -197,8 +246,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     setToken(null);
+    // Выход — осознанное действие, поэтому сохранённые данные забываем:
+    // иначе после выхода приложение вошло бы само обратно.
+    setCredentials(null);
     if (current) {
       await clearToken(current.id);
+      await clearCredentials(current.id);
     }
   }, [current]);
 
@@ -209,6 +262,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       current,
       baseUrl: current?.baseUrl ?? '',
       token,
+      authNotice,
       client,
       addServer,
       selectServer,
@@ -222,6 +276,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       servers,
       current,
       token,
+      authNotice,
       client,
       addServer,
       selectServer,

@@ -51,6 +51,13 @@ const (
 	PermLogsView = "logs.view"
 	// PermUsersManage — пользователи и их права.
 	PermUsersManage = "users.manage"
+	// PermSIPView — домофония: список абонентов, групп, правил и состояние связи.
+	PermSIPView = "sip.view"
+	// PermSIPManage — домофония: заведение абонентов, группы вызова и правила.
+	//
+	// Отдельно от просмотра: добавление абонента меняет то, куда будут
+	// звонить панели на объекте, а это действие, а не наблюдение.
+	PermSIPManage = "sip.manage"
 )
 
 // Роли. role=admin означает полный доступ и не перечисляется в permissions:
@@ -76,6 +83,7 @@ var AllPermissions = []string{
 	PermACSView, PermACSManage, PermACSOpen,
 	PermPlansView, PermPlansManage,
 	PermSwitchesManage, PermSettingsManage, PermLogsView, PermUsersManage,
+	PermSIPView, PermSIPManage,
 }
 
 // RolePresets — наборы прав для готовых ролей.
@@ -95,12 +103,17 @@ var RolePresets = map[string][]string{
 	// и справочников не входит.
 	RoleDispatcher: {
 		PermCamerasView, PermArchiveView, PermPlansView, PermACSView, PermACSOpen,
+		// Диспетчер принимает вызовы с панели — ему нужен раздел домофонии
+		// на просмотр. Правка абонентов и групп остаётся администратору:
+		// ошибка в группе вызова отправит звонок не туда.
+		PermSIPView,
 	},
 	// Оператор: то же, плюс управление камерами (PTZ) и звуком,
 	// просмотр событий и распознавания.
 	RoleOperator: {
 		PermCamerasView, PermPTZControl, PermAudioListen, PermAudioTalk,
 		PermArchiveView, PermEventsView, PermACSView, PermPlansView,
+		PermSIPView,
 	},
 	// Наблюдатель: только просмотр, без действий.
 	RoleViewer: {

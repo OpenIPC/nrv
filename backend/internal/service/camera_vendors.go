@@ -107,6 +107,10 @@ var vendorNames = map[string]string{
 	"uniview":   "Uniview",
 	"reolink":   "Reolink",
 	"beward":    "Beward",
+	// Fanvil — производитель SIP-трубок и вызывных панелей. В карте он
+	// нужен, чтобы в списке найденных устройств было видно название,
+	// а не код «fanvil».
+	"fanvil":    "Fanvil",
 	"xiongmai":  "Xiongmai",
 	"tvt":       "TVT",
 	"bosch":     "Bosch",

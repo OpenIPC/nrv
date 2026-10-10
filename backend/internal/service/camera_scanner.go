@@ -823,6 +823,18 @@ func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint 
 	hasRTSP := s.checkTCP(ip, 554)
 	hasHTTP := s.checkTCP(ip, 80)
 
+	// --- Домофоны и трубки: это не камеры ---
+	//
+	// Проверяем ДО отсева по портам, и вот почему. У трубки Fanvil нет
+	// ни RTSP, ни признаков камеры, зато есть веб-сервер Rapid Logic —
+	// тот же, что у камер Axis. Из-за этого трубка показывалась камерой
+	// Axis, оператор заводил её в разделе камер и потом искал, почему
+	// у устройства нет изображения. Домофон Dahua отвечает только по
+	// фирменному порту 37777 — до этой проверки он не находился вовсе.
+	if ic := s.probeIntercom(ctx, ip, hasHTTP); ic != nil {
+		return ic
+	}
+
 	if !hasRTSP && !hasHTTP {
 		return nil
 	}
@@ -954,6 +966,92 @@ func (s *CameraScanner) probeCamera(ctx context.Context, ip, userHint, passHint 
 	}
 
 	return nil
+}
+
+// =========================================================================
+// Домофоны, трубки и вызывные панели
+// =========================================================================
+
+// fanvilSignatures — признаки веб-интерфейса Fanvil в неавторизованном ответе.
+//
+// Нужны отдельные признаки, потому что одной подписи «Rapid Logic» мало:
+// этот веб-сервер используют и камеры Axis. Признаки ниже проверены на двух
+// живых трубках Fanvil i501 (192.168.1.50 и 192.168.1.179): страница входа
+// отдаёт xmlUtil.js и comm.js, а все подписи интерфейса помечены
+// идентификаторами переводов XSTR_*.
+var fanvilSignatures = []string{"xstr_lbl", "xmlutil.js", "doorphone.htm", "key==nonce"}
+
+// probeIntercom определяет, что устройство — домофон, трубка или панель,
+// а не камера.
+//
+// Зачем отдельная проверка. Трубка Fanvil попадала в список камер: у неё
+// нет RTSP, зато есть веб-сервер Rapid Logic — тот же, что у камер Axis.
+// Оператор заводил её камерой и потом искал, почему нет изображения.
+// Домофон Dahua не находился вовсе: у него открыт только фирменный порт
+// 37777, а веб-интерфейс выключен.
+func (s *CameraScanner) probeIntercom(ctx context.Context, ip string, hasHTTP bool) *domain.DiscoveredCamera {
+	// Домофоны Dahua и подобные им: веб-интерфейса нет, но порт 37777
+	// отвечает. Показать такое устройство в списке нужно — иначе оператор
+	// считает, что его нет в сети, и заводит абонента, не зная адреса.
+	if !hasHTTP {
+		if !s.checkTCP(ip, 37777) {
+			return nil
+		}
+		return &domain.DiscoveredCamera{
+			IP:         ip,
+			MAC:        s.getMAC(ip),
+			Vendor:     "dahua",
+			VendorName: VendorName("dahua"),
+			Model:      "Dahua (порт 37777)",
+			DeviceType: domain.DeviceTypeIntercom,
+			SipKind:    string(domain.SipKindMonitor),
+			HowFound:   "port_37777",
+			Online:     true,
+		}
+	}
+
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, fmt.Sprintf("http://%s/", ip), nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	resp.Body.Close()
+
+	haystack := strings.ToLower(resp.Header.Get("Server") + " " + string(body))
+	if !containsAny(haystack, fanvilSignatures) {
+		return nil
+	}
+
+	return &domain.DiscoveredCamera{
+		IP:         ip,
+		MAC:        s.getMAC(ip),
+		Vendor:     "fanvil",
+		VendorName: VendorName("fanvil"),
+		// Вид абонента по умолчанию — «видеодомофон / трубка». Для трубок
+		// это верно; вызывная панель отличима только на самом устройстве,
+		// и оператор поменяет вид в форме, если это панель.
+		DeviceType: domain.DeviceTypeIntercom,
+		SipKind:    string(domain.SipKindMonitor),
+		HowFound:   "http_headers",
+		Online:     true,
+	}
+}
+
+// containsAny проверяет, есть ли в строке хоть один из фрагментов.
+func containsAny(haystack string, needles []string) bool {
+	for _, n := range needles {
+		if strings.Contains(haystack, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkTCP проверяет доступность TCP-порта

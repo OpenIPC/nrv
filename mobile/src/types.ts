@@ -166,3 +166,28 @@ export interface AccessEvent {
   media_type?: string;
   recording_id?: string;
 }
+
+/** Краткие сведения об абоненте домофонии — то, что нужно для списка. */
+export interface SipAccountBrief {
+  id: string;
+  number: string;
+  /** panel — вызывная панель, camera — камера с SIP, monitor — трубка,
+   * softphone — приложение. */
+  kind: string;
+  display_name?: string;
+  host?: string;
+  /** Состояние регистрации; null — неизвестно (нет связи с Asterisk). */
+  registered?: boolean | null;
+  /** Имя учётной записи, если линия принадлежит пользователю сервера. */
+  username?: string;
+}
+
+/** Группа вызова: звонок на её номер поднимает всех участников. */
+export interface SipGroupBrief {
+  id: string;
+  /** Номер группы — то, что набирает телефон, чтобы позвать всех. */
+  number: string;
+  name: string;
+  enabled: boolean;
+  members?: Array<{ account_id: string; number: string; display_name?: string }>;
+}

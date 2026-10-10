@@ -24,6 +24,16 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	}
 }
 
+// writeError отвечает ошибкой.
+//
+// Отдельный помощник, потому что один и тот же вид ответа — объект с полем
+// error — повторялся в каждом обработчике, и в части мест это были разные
+// вызовы writeJSON. Клиент разбирает ответ по полю error, поэтому вид ответа
+// должен быть единым.
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}
+
 // decodeJSONBody разбирает JSON из тела запроса с ограничением размера.
 // Возвращает понятную ошибку вместо «unexpected EOF» при пустом теле.
 func decodeJSONBody(r *http.Request, dst any) error {

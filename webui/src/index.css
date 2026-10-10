@@ -73,7 +73,17 @@ input:focus, select:focus, textarea:focus {
   left: 0;
   bottom: 0;
   z-index: 10;
+  /*
+    Пунктов меню больше, чем помещается в невысокое окно (ноутбук, небольшой
+    монитор), и нижние разделы — «Домофония», «Настройки», «Пользователи» —
+    оказывались недоступны вовсе. Прокрутка панели решает это без правки
+    самого меню.
+  */
+  overflow-y: auto;
 }
+
+/* Логотип не сжимается: иначе при тесной высоте он выдавливал бы меню. */
+.sidebar-logo { flex: 0 0 auto; }
 
 .sidebar-logo {
   font-size: 20px;
@@ -85,7 +95,16 @@ input:focus, select:focus, textarea:focus {
   gap: 10px;
 }
 
-.sidebar-nav { display: flex; flex-direction: column; gap: 4px; }
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Занимает всю высоту и прокручивается сам — кнопка «Выйти» остаётся
+     внизу панели и не уезжает вместе с меню. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
 
 .sidebar-link {
   display: flex;

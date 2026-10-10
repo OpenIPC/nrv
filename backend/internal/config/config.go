@@ -66,6 +66,29 @@ type Config struct {
 	// Не путать с адресом для браузера (MediamtxPublicHost): здесь нужен
 	// адрес, по которому сервер виден со стороны контроллеров и камер.
 	PublicURL string
+	// AsteriskConfigDir — каталог конфигурации Asterisk. Туда сервер
+	// записывает файлы абонентов и правил вызова, собранные из базы.
+	//
+	// Пусто — значит SIP-домофония не настроена: сервер не трогает
+	// конфигурацию Asterisk. Это штатное состояние для установки, где
+	// телефония не нужна: контейнер Asterisk в таком развёртывании
+	// просто не запускается (профиль `sip`).
+	AsteriskConfigDir string
+	// AsteriskAMIAddr — адрес интерфейса управления Asterisk (AMI).
+	// Через него сервер перезагружает конфигурацию, не разрывая звонки.
+	AsteriskAMIAddr string
+	AsteriskAMIUser string
+	// AsteriskAMISecret — пароль AMI. Пусто означает, что перезагрузка
+	// недоступна: файлы будут записаны, но подхватятся только после
+	// перезапуска Asterisk.
+	AsteriskAMISecret string
+	// AsteriskWSPort — порт SIP over WebSocket.
+	//
+	// Приложения (телефон, браузер, десктоп) подключаются к Asterisk только
+	// так: у старого драйвера WebSocket нет вовсе. Порт задан в http.conf
+	// Asterisk; сервер сообщает его приложению вместе с номером и паролем,
+	// чтобы настройку не пришлось вписывать руками.
+	AsteriskWSPort int
 }
 
 func Load() (*Config, error) {
@@ -111,6 +134,13 @@ func Load() (*Config, error) {
 		LogRetentionDays: envInt("LOG_RETENTION_DAYS", 30),
 		// Пусто — значит адрес определяет сам сервис по адресу запроса.
 		PublicURL: envStr("PUBLIC_URL", ""),
+		// По умолчанию пусто: конфигурацию Asterisk правим только если
+		// её каталог смонтирован явно (см. docker-compose.yml).
+		AsteriskConfigDir: envStr("ASTERISK_CONFIG_DIR", ""),
+		AsteriskAMIAddr:   envStr("ASTERISK_AMI_ADDR", "127.0.0.1:5038"),
+		AsteriskAMIUser:   envStr("ASTERISK_AMI_USER", "nvr"),
+		AsteriskAMISecret: envStr("ASTERISK_AMI_SECRET", ""),
+		AsteriskWSPort:    envInt("ASTERISK_WS_PORT", 8088),
 	}
 
 	if cfg.JWTSecret == "change-me-in-production" {

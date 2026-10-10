@@ -94,6 +94,16 @@ var routeRules = []Rule{
 	{Prefix: "/api/v1/rtsp", Perm: domain.PermSettingsManage},
 	{Prefix: "/api/v1/switches", Perm: domain.PermSwitchesManage},
 
+	// Своя линия нужна любому вошедшему: без неё приложение не зарегистрируется
+	// на Asterisk, и звонки не придут. Отдаём только СВОЮ линию — чужую этим
+	// маршрутом не получить.
+	{Prefix: "/api/v1/sip/my-line", Perm: ""},
+
+	// Домофония: смотреть список абонентов может любой, у кого есть это
+	// право, а менять — только тот, кому доверили.
+	{Prefix: "/api/v1/sip", Method: http.MethodGet, Perm: domain.PermSIPView},
+	{Prefix: "/api/v1/sip", Perm: domain.PermSIPManage},
+
 	// Общедоступное для вошедших.
 	{Prefix: "/api/v1/stats", Perm: ""},
 	{Prefix: "/api/v1/docs", Perm: ""},

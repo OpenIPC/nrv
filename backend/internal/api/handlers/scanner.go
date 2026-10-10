@@ -1,19 +1,62 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
 	"github.com/nvr/backend/internal/domain"
+	"github.com/nvr/backend/internal/repository/postgres"
 	"github.com/nvr/backend/internal/service"
 )
 
 type ScannerHandler struct {
 	scanner *service.CameraScanner
+	// sipRepo нужен, чтобы отличать уже заведённые домофоны от новых.
+	//
+	// Сканер сверяет найденное только с камерами (по MAC и адресу), а
+	// абоненты SIP живут в своей таблице. Без этой сверки трубка, уже
+	// заведённая абонентом, показывалась в сканере новой — и оператор
+	// создавал второй абонент с тем же номером.
+	sipRepo *postgres.SipRepo
 }
 
 func NewScannerHandler(scanner *service.CameraScanner) *ScannerHandler {
 	return &ScannerHandler{scanner: scanner}
+}
+
+// WithSipAccounts подключает сверку домофонов с заведёнными абонентами.
+func (h *ScannerHandler) WithSipAccounts(repo *postgres.SipRepo) *ScannerHandler {
+	h.sipRepo = repo
+	return h
+}
+
+// markKnownIntercoms помечает домофоны, которые уже заведены абонентами SIP.
+func (h *ScannerHandler) markKnownIntercoms(ctx context.Context, result *domain.ScanResult) {
+	if h.sipRepo == nil || result == nil || len(result.Cameras) == 0 {
+		return
+	}
+	accounts, err := h.sipRepo.ListAccounts(ctx)
+	if err != nil {
+		// Сверка — дополнение к списку: без неё страница остаётся полезной.
+		return
+	}
+	byHost := make(map[string]string, len(accounts))
+	for _, a := range accounts {
+		if a.Host != "" {
+			byHost[a.Host] = a.ID.String()
+		}
+	}
+	for i := range result.Cameras {
+		cam := &result.Cameras[i]
+		if cam.DeviceType != domain.DeviceTypeIntercom {
+			continue
+		}
+		if id, ok := byHost[cam.IP]; ok {
+			cam.AlreadyAdded = true
+			cam.AddedID = id
+		}
+	}
 }
 
 // Scan запускает сканирование подсети
@@ -41,6 +84,7 @@ func (h *ScannerHandler) Scan(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		h.markKnownIntercoms(r.Context(), merged)
 		writeJSON(w, http.StatusOK, merged)
 		return
 	}
@@ -51,6 +95,7 @@ func (h *ScannerHandler) Scan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.markKnownIntercoms(r.Context(), result)
 	writeJSON(w, http.StatusOK, result)
 }
 

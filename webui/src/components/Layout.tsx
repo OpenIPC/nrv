@@ -5,7 +5,8 @@ import { usePermissions } from '../context/PermissionsContext'
 import {
   LayoutDashboard, Video, AlertTriangle, HardDrive,
   Shield, LogOut, Camera, Search, Settings, ScanFace, Volume2, Share2,
-  LayoutGrid, Bell, Server, ScrollText, Activity, Users, Map, EthernetPort, UserCog
+  LayoutGrid, Bell, Server, ScrollText, Activity, Users, Map, EthernetPort, UserCog,
+  PhoneCall
 } from 'lucide-react'
 
 // Ключи перевода, а не готовые подписи: подпись берётся из словаря
@@ -37,6 +38,9 @@ const navItems = [
   { to: '/switches', icon: EthernetPort, key: 'nav.switches', perm: 'switches.manage' },
   // Доступ — это люди, группы и карты: управление СКУД, а не просмотр.
   { to: '/access', icon: Users, key: 'nav.access', perm: 'acs.manage' },
+  // Домофония рядом с доступом: оба раздела про вход в помещение, но
+  // разные вещи — здесь звонки, там карты и двери.
+  { to: '/intercom', icon: PhoneCall, key: 'nav.intercom', perm: 'sip.view' },
   { to: '/external-access', icon: Share2, key: 'nav.externalAccess', perm: 'settings.manage' },
   // Уведомления рядом с настройками: это тоже настройка сервера.
   { to: '/notifications', icon: Bell, key: 'nav.notifications', perm: 'settings.manage' },

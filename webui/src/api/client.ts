@@ -447,6 +447,21 @@ export interface DiscoveredCamera {
   main_stream: string
   sub_stream: string
   snapshot?: string
+  /**
+   * Что это за устройство: camera или intercom (домофон, трубка, панель).
+   *
+   * Поле появилось потому, что трубка Fanvil показывалась камерой: у неё
+   * тот же веб-сервер Rapid Logic, что у камер Axis, а RTSP нет вовсе.
+   * Домофон заводится не камерой, а абонентом SIP — иначе у него не будет
+   * ни изображения, ни звонка.
+   */
+  device_type?: 'camera' | 'intercom'
+  /**
+   * Вид абонента SIP для домофона: panel, camera, monitor, softphone.
+   * Вид определяет драйвер Asterisk, а от драйвера зависит, будет ли
+   * устройство звонить.
+   */
+  sip_kind?: SipAccountKind
   online: boolean
   /**
    * Устройство уже заведено в системе.
@@ -1250,6 +1265,218 @@ export const rtspAPI = {
   // Назначить номер канала камере прямо со страницы внешнего доступа.
   assignChannel: (cameraId: string, channel: number) =>
     api.post<ExternalRTSPSettings>(`/rtsp/channels/${cameraId}`, { channel }),
+}
+
+// --- SIP-домофония ---
+
+/**
+ * Вид абонента.
+ *
+ * Вид определяет драйвер Asterisk: панели, камеры и трубки работают через
+ * старый драйвер (chan_sip), приложения — через новый (chan_pjsip).
+ * Панель Beward и видеодомофон Dahua с новым драйвером работают некорректно,
+ * и это проверено на живом оборудовании, поэтому разделение не косметическое.
+ */
+export type SipAccountKind = 'panel' | 'camera' | 'monitor' | 'softphone'
+
+/** Стратегия обзвона группы. */
+export type SipGroupStrategy = 'all' | 'sequential'
+
+export interface SipAccount {
+  id: string
+  number: string
+  kind: SipAccountKind
+  display_name?: string
+  camera_id?: string
+  controller_id?: string
+  host?: string
+  enabled: boolean
+  created_at: string
+  updated_at: string
+  /** Драйвер Asterisk, вычисленный из вида абонента. */
+  driver?: string
+  /** Зарегистрирован ли абонент прямо сейчас. */
+  registered?: boolean
+  // --- Уведомления о вызовах ---
+  /** Слать уведомления в Telegram. */
+  notify_telegram: boolean
+  /** Слать уведомления в MAX. */
+  notify_max: boolean
+  /** Уведомлять о пропущенных вызовах. */
+  notify_missed: boolean
+  /**
+   * Записывать видео со звуком при пропущенном вызове.
+   * У домофона есть и камера, и микрофон, поэтому пропущенный вызов
+   * можно не пересказывать сообщением, а показать.
+   */
+  record_missed: boolean
+  notes?: string
+  /**
+   * Производитель устройства. От него зависит способ заливки настроек:
+   * у Fanvil — файл конфигурации, у OpenIPC — секция sip в Majestic,
+   * у Beward — CGI-запрос, у Dahua — ручная настройка в меню.
+   */
+  vendor?: string
+  // --- Привязка к коммутатору ---
+  switch_id?: string
+  switch_port?: number
+  switch_name?: string
+}
+
+/**
+ * Что об абоненте знает Asterisk.
+ *
+ * Данные из телефонии, а не из нашей базы: только Asterisk видит настоящий
+ * адрес устройства, порт и версию прошивки.
+ */
+export interface SipPeerInfo {
+  number: string
+  driver?: string
+  /** Адрес, с которого зарегистрировано устройство (`IP:порт`). */
+  contact?: string
+  /** Модель и версия прошивки, как их показал Asterisk. */
+  user_agent?: string
+  /** Состояние словами Asterisk: `OK (3 ms)`, `Unreachable`. */
+  status?: string
+  registered: boolean
+}
+
+/** Карточка абонента: настройки, данные Asterisk и группы. */
+export interface SipAccountDetail {
+  account: SipAccount
+  peer?: SipPeerInfo
+  groups: SipGroup[]
+}
+
+/** Настройки телефонии сервера. */
+export interface SipSettings {
+  external_address: string
+  local_net: string
+  video_enabled: boolean
+  video_codec: string
+  ring_timeout: number
+  updated_at?: string
+}
+
+export interface SipGroupMember {
+  account_id: string
+  number: string
+  display_name?: string
+  kind: SipAccountKind
+  position?: number
+}
+
+export interface SipGroup {
+  id: string
+  /**
+   * Номер группы — то, что набирают, чтобы вызвать всех её участников.
+   * Пусто, если группа вызывается только правилом.
+   */
+  number: string
+  name: string
+  strategy: SipGroupStrategy
+  ring_seconds: number
+  enabled: boolean
+  created_at: string
+  members?: SipGroupMember[]
+}
+
+export interface SipRule {
+  id: string
+  source_account_id?: string | null
+  /** Номер того, кто звонит — для показа в списке правил. */
+  source_number?: string
+  dialed_number: string
+  group_id: string
+  group_name?: string
+  enabled: boolean
+  created_at: string
+}
+
+export interface SipSchema {
+  /** Управляет ли сервер конфигурацией Asterisk на этой установке. */
+  configured: boolean
+  /**
+   * Доступна ли автонастройка устройств по сети. Выключена, если сервер
+   * не смог определить свой адрес для устройств.
+   */
+  provisioning?: boolean
+  /** Адрес сервера, который прописывается устройствам. */
+  server?: string
+  kinds: { value: SipAccountKind; label: string }[]
+  strategies: { value: SipGroupStrategy; label: string }[]
+}
+
+export const sipAPI = {
+  // Справочники и признак того, что конфигурация управляется сервером.
+  schema: () => api.get<SipSchema>('/sip/schema'),
+  // Пересобрать конфигурацию Asterisk: нужно, когда её правили на устройстве
+  // напрямую или когда предыдущая сборка не прошла.
+  sync: () => api.post<{ ok: boolean }>('/sip/sync', {}),
+
+  accounts: () => api.get<SipAccount[]>('/sip/accounts'),
+  account: (id: string) => api.get<SipAccountDetail>(`/sip/accounts/${id}`),
+  createAccount: (data: Partial<SipAccount> & { password?: string }) =>
+    api.post<SipAccount>('/sip/accounts', data),
+  updateAccount: (id: string, data: Partial<SipAccount> & { password?: string }) =>
+    api.put<SipAccount>(`/sip/accounts/${id}`, data),
+  deleteAccount: (id: string) => api.delete(`/sip/accounts/${id}`),
+
+  /**
+   * Привязка абонента к порту коммутатора.
+   *
+   * Нужна, чтобы знать, где именно подключено устройство: по порту
+   * находится его питание, а по нему же понятно, куда идти руками.
+   */
+  setSwitch: (id: string, switchId: string, port: number) =>
+    api.put<{ ok: boolean }>(`/sip/accounts/${id}/switch`, {
+      switch_id: switchId,
+      port,
+    }),
+  clearSwitch: (id: string) => api.delete(`/sip/accounts/${id}/switch`),
+
+  settings: () => api.get<SipSettings>('/sip/settings'),
+  updateSettings: (data: Partial<SipSettings>) =>
+    api.put<SipSettings>('/sip/settings', data),
+
+  groups: () => api.get<SipGroup[]>('/sip/groups'),
+  createGroup: (data: Partial<SipGroup>) => api.post<SipGroup[]>('/sip/groups', data),
+  updateGroup: (id: string, data: Partial<SipGroup>) =>
+    api.put<SipGroup>(`/sip/groups/${id}`, data),
+  deleteGroup: (id: string) => api.delete(`/sip/groups/${id}`),
+  setGroupMembers: (id: string, accountIds: string[]) =>
+    api.put<SipGroup[]>(`/sip/groups/${id}/members`, { account_ids: accountIds }),
+
+  rules: () => api.get<SipRule[]>('/sip/rules'),
+  createRule: (data: Partial<SipRule>) => api.post<SipRule>('/sip/rules', data),
+  updateRule: (id: string, data: Partial<SipRule>) =>
+    api.put<SipRule>(`/sip/rules/${id}`, data),
+  deleteRule: (id: string) => api.delete(`/sip/rules/${id}`),
+
+  /**
+   * Прописать абонента в самом устройстве (трубки Fanvil).
+   *
+   * Сервер берёт номер и пароль из базы и записывает их в устройство —
+   * оператору не нужно вводить те же данные в его веб-интерфейсе.
+   */
+  /**
+   * Файл настроек линии для импорта в устройство вручную.
+   *
+   * Отдаётся как файл (blob), а не JSON: его содержимое вставляется в
+   * трубку через её веб-интерфейс, и портить его разбором в браузере
+   * нельзя — переводы строк и выравнивание важны для прошивки.
+   */
+  configFile: (id: string) =>
+    api.get<Blob>(`/sip/accounts/${id}/config-file`, { responseType: 'blob' }),
+
+  provision: (data: {
+    account_id: string
+    host: string
+    web_user: string
+    web_password: string
+    vendor?: string
+  }) =>
+    api.post<{ server: string; number: string; display_name: string }>('/sip/provision', data),
 }
 
 export const camerasAPI = {

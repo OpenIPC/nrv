@@ -195,12 +195,15 @@ export default function CamerasScreen({
   onOpenArchive,
   onOpenAccess,
   onOpenServers,
+  onOpenCalls,
 }: {
   onOpenCamera: (camera: Camera) => void;
   onOpenArchive: () => void;
   /** Контроль доступа: двери и журнал проходов. */
   onOpenAccess: () => void;
   onOpenServers: () => void;
+  /** Звонки: домофония и своя линия. */
+  onOpenCalls: () => void;
 }) {
   const { client, current, token } = useApp();
   const [cameras, setCameras] = useState<Camera[]>([]);
@@ -264,6 +267,11 @@ export default function CamerasScreen({
               оператор заходит регулярно, и прятать их в меню незачем. */}
           <Pressable style={styles.archiveButton} onPress={onOpenAccess}>
             <Text style={styles.archiveButtonText}>Доступ</Text>
+          </Pressable>
+          {/* Звонки — третий частый раздел: ответить на вызов с калитки
+              должно быть не глубже одного касания от списка камер. */}
+          <Pressable style={styles.archiveButton} onPress={onOpenCalls}>
+            <Text style={styles.archiveButtonText}>Звонки</Text>
           </Pressable>
         </View>
       </View>

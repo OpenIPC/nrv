@@ -28,7 +28,7 @@ export default function LoginScreen({
   onLoggedIn: () => void;
   onOpenServers: () => void;
 }) {
-  const { current, client, signIn, signOut } = useApp();
+  const { current, client, signIn, signOut, authNotice } = useApp();
   const [username, setUsername] = useState(current?.username ?? 'admin');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -48,10 +48,12 @@ export default function LoginScreen({
     setError(null);
     try {
       const result = await client.login(username.trim(), password);
-      // Токен сохраняем, но в поле пароля его не оставляем: приложение
-      // может уйти в фон, и снимок экрана не должен показывать пароль.
+      // Учётные данные сохраняем до очистки поля: они нужны, чтобы войти
+      // автоматически, когда истекёт срок действия токена (сутки).
+      await signIn(result.token, username.trim(), password);
+      // В поле пароль не оставляем: приложение может уйти в фон, и снимок
+      // экрана не должен его показывать.
       setPassword('');
-      await signIn(result.token);
 
       // Проверяем срок действия сразу: если часы на сервере сбиты и токен
       // уже просрочен, лучше сказать об этом теперь, а не при первом запросе.
@@ -80,6 +82,10 @@ export default function LoginScreen({
         keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.title}>Вход</Text>
+
+        {authNotice && !error && (
+          <Text style={styles.notice}>{authNotice}</Text>
+        )}
 
         {current && (
           <Pressable style={styles.serverCard} onPress={onOpenServers}>
@@ -189,9 +195,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: spacing.md,
   },
+  // Пояснение (например, «срок сессии истёк») — не ошибка, поэтому
+  // нейтральный цвет: красный здесь пугал бы зря.
+  notice: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: spacing.md,
+    lineHeight: 20,
+  },
   error: {
-    backgroundColor: 'rgba(239,68,68,0.12)',
-    borderWidth: 1,
+    backgroundColor: 'rgba(239,68,68,0.12)',    borderWidth: 1,
     borderColor: colors.danger,
     borderRadius: radius.md,
     padding: spacing.md,

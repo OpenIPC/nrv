@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nvr/backend/internal/domain"
 	"github.com/nvr/backend/internal/repository/postgres"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -61,13 +62,18 @@ type userCacheEntry struct {
 type UserService struct {
 	repo *postgres.UserRepo
 
+	// lines выдаёт учётным записям их внутренние номера SIP. nil на
+	// установке без телефонии: тогда пользователи заводятся как раньше.
+	lines UserLineProvisioner
+
 	mu    sync.Mutex
 	cache map[uuid.UUID]userCacheEntry
 }
 
-func NewUserService(repo *postgres.UserRepo) *UserService {
+func NewUserService(repo *postgres.UserRepo, lines UserLineProvisioner) *UserService {
 	return &UserService{
 		repo:  repo,
+		lines: lines,
 		cache: make(map[uuid.UUID]userCacheEntry),
 	}
 }
@@ -114,6 +120,16 @@ func (s *UserService) Create(ctx context.Context, req CreateUserRequest) (*domai
 	}
 	if err := s.repo.Create(ctx, user, string(hash)); err != nil {
 		return nil, err
+	}
+	// Линия SIP — часть учётной записи, а не отдельное действие: человек
+	// входит в приложение и должен сразу получить свой номер. Ошибку не
+	// возвращаем: учётная запись уже создана, а линию можно выдать позже
+	// (она досоздаётся при входе владельца в приложение).
+	if s.lines != nil {
+		if err := s.lines.EnsureLine(ctx, user); err != nil {
+			log.Warn().Err(err).Str("user", user.Username).
+				Msg("не удалось выдать учётной записи линию SIP")
+		}
 	}
 	return user, nil
 }
@@ -178,6 +194,14 @@ func (s *UserService) Update(ctx context.Context, id uuid.UUID, req UpdateUserRe
 		return nil, err
 	}
 	s.forget(id)
+	// Подпись линии идёт за именем владельца. Номер при этом не меняем:
+	// он уже прописан на телефоне, а имя — только подпись в списке.
+	if s.lines != nil {
+		if err := s.lines.RenameLine(ctx, id, user.Username); err != nil {
+			log.Warn().Err(err).Str("user", user.Username).
+				Msg("не удалось обновить подпись линии SIP")
+		}
+	}
 	return user, nil
 }
 
@@ -203,6 +227,13 @@ func (s *UserService) Delete(ctx context.Context, id uuid.UUID, actor *domain.Us
 		return err
 	}
 	s.forget(id)
+	// Линия уходит вместе с учётной записью: без владельца она бесполезна,
+	// а занятый номер мешал бы выдать его следующему пользователю.
+	if s.lines != nil {
+		if err := s.lines.RemoveLine(ctx, id); err != nil {
+			log.Warn().Err(err).Msg("не удалось убрать линию SIP удалённой учётной записи")
+		}
+	}
 	return nil
 }
 

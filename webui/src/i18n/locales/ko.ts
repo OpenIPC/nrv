@@ -27,6 +27,7 @@ export default {
     acs: '출입 통제',
     plans: '평면도',
     switches: '스위치',
+    intercom: '인터폰',
     access: '출입',
     externalAccess: '외부 접속',
     notifications: '알림',

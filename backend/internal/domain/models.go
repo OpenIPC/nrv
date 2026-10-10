@@ -906,6 +906,19 @@ type ScanRequest struct {
 	Password string   `json:"password"`
 }
 
+// Типы найденных устройств.
+//
+// Сканер ищет не только камеры: в сети стоят домофоны, трубки и вызывные
+// панели. Раньше они показывались камерами — у трубки Fanvil тот же
+// веб-сервер, что у камер Axis, а RTSP нет вовсе. Разделение нужно, чтобы
+// интерфейс сразу предложил завести SIP-абонента, а не камеру без потока.
+const (
+	// DeviceTypeCamera — камера (значение по умолчанию: пустое поле).
+	DeviceTypeCamera = "camera"
+	// DeviceTypeIntercom — домофон, трубка или вызывная панель.
+	DeviceTypeIntercom = "intercom"
+)
+
 // DiscoveredCamera — камера, найденная при сканировании
 type DiscoveredCamera struct {
 	IP       string `json:"ip"`
@@ -928,10 +941,27 @@ type DiscoveredCamera struct {
 	HowFound   string `json:"how_found,omitempty"`
 	MainStream string `json:"main_stream"`
 	SubStream  string `json:"sub_stream"`
-	Snapshot   string `json:"snapshot,omitempty"`
-	Username   string `json:"username,omitempty"` // учётные данные, которые подошли
-	Password   string `json:"password,omitempty"`
-	Online     bool   `json:"online"`
+
+	// DeviceType — что это за устройство: camera или intercom (домофон,
+	// трубка, вызывная панель).
+	//
+	// Поле появилось после живой находки: сканер находил трубку Fanvil
+	// и показывал её камерой — потому что у неё тот же веб-сервер
+	// Rapid Logic, что у камер Axis, а RTSP нет вовсе. Оператор заводил
+	// трубку камерой и потом искал, почему у неё нет изображения.
+	//
+	// Пустое значение означает camera: старые ответы и другие потребители
+	// продолжают работать без изменений.
+	DeviceType string `json:"device_type,omitempty"`
+	// SipKind — вид абонента SIP для найденного домофона (panel, camera,
+	// monitor, softphone). Нужен, чтобы интерфейс сразу предложил завести
+	// учётную запись правильного вида: вид определяет драйвер Asterisk,
+	// а от драйвера зависит, будет ли устройство звонить вообще.
+	SipKind  string `json:"sip_kind,omitempty"`
+	Snapshot string `json:"snapshot,omitempty"`
+	Username string `json:"username,omitempty"` // учётные данные, которые подошли
+	Password string `json:"password,omitempty"`
+	Online   bool   `json:"online"`
 	// AlreadyAdded — этот адрес уже заведён в системе. Повторное
 	// добавление создаст дубль и второй путь в медиасервере, поэтому
 	// такие устройства помечаем, а не показываем как новые.

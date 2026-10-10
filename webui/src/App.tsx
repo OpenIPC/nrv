@@ -15,6 +15,8 @@ import LogsPage from './pages/LogsPage'
 import MajesticPage from './pages/MajesticPage'
 import RecognitionPage from './pages/RecognitionPage'
 import ACSPage from './pages/ACSPage'
+import IntercomPage from './pages/IntercomPage'
+import IntercomAccountPage from './pages/IntercomAccountPage'
 import AccessPage from './pages/AccessPage'
 import PlansPage from './pages/PlansPage'
 import SwitchesPage from './pages/SwitchesPage'
@@ -186,6 +188,28 @@ export default function App() {
                   element={
                     <RequirePermission perm="plans.view">
                       <PlansPage />
+                    </RequirePermission>
+                  }
+                />
+                {/* Домофония — отдельно от СКУД, хотя оба раздела про
+                    вход в помещение: здесь звонки на трубки и в приложения,
+                    там карты и двери. */}
+                <Route
+                  path="/intercom"
+                  element={
+                    <RequirePermission perm="sip.view">
+                      <IntercomPage />
+                    </RequirePermission>
+                  }
+                />
+                {/* Карточка абонента: отдельная страница, потому что про
+                    устройство нужно знать много — адрес, порт коммутатора,
+                    уведомления и версию прошивки. */}
+                <Route
+                  path="/intercom/:id"
+                  element={
+                    <RequirePermission perm="sip.view">
+                      <IntercomAccountPage />
                     </RequirePermission>
                   }
                 />

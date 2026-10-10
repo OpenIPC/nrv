@@ -23,12 +23,16 @@ Item {
         TextField {
             id: server
             Layout.fillWidth: true
+            // Адрес уже сохранён при прошлом входе: подставляем его, чтобы
+            // после истечения сессии оператор не вводил всё заново.
+            text: Api.serverUrl
             placeholderText: qsTr("Адрес сервера: 192.168.1.111:3001")
         }
 
         TextField {
             id: user
             Layout.fillWidth: true
+            text: Api.savedLogin
             placeholderText: qsTr("Логин")
         }
 

@@ -96,6 +96,21 @@ type RouterConfig struct {
 	WebhookSvc *service.WebhookService
 	// HostAgent обращается к службе на хосте для смены времени и сети
 	HostAgent *hostagent.Client
+	// SIPRepo и SipBuilder — домофония: абоненты, группы вызова, правила.
+	//
+	// Сборщик конфигурации Asterisk может быть nil: телефония выключена
+	// на этой установке. Тогда раздел работает в режиме только базы.
+	SIPRepo    *postgres.SipRepo
+	SipBuilder *service.SipConfigBuilder
+	// SipStatus читает состояние регистрации у Asterisk.
+	SipStatus service.SipStatusSource
+	// PublicURL — адрес сервера, доступный устройствам. Он прописывается
+	// в трубках при автонастройке (см. ProvisionDevice).
+	PublicURL string
+	// AsteriskWSPort — порт SIP over WebSocket. Приложение получает его
+	// вместе со своим номером и паролем: другого способа подключиться к
+	// Asterisk у него нет.
+	AsteriskWSPort int
 }
 
 func NewRouter(cfg RouterConfig) *chi.Mux {
@@ -120,9 +135,16 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(cfg.UserRepo, tokenAuth)
+	// Линии SIP у учётных записей: у каждого, кто входит в систему, должен
+	// быть свой внутренний номер, иначе в журнале вызовов не видно, кто
+	// взял трубку. На установке без телефонии сервиса нет — nil.
+	var userLines service.UserLineProvisioner
+	if cfg.SIPRepo != nil {
+		userLines = service.NewUserLineService(cfg.SIPRepo, cfg.SipBuilder)
+	}
 	// Пользователи и права: сервис один на всё приложение — по нему же
 	// middleware проверяет права на каждом запросе (и держит их в кеше).
-	userSvc := service.NewUserService(cfg.UserRepo)
+	userSvc := service.NewUserService(cfg.UserRepo, userLines)
 	userH := handlers.NewUserHandler(userSvc)
 	cameraH := handlers.NewCameraHandler(cfg.CameraSvc)
 	streamH := handlers.NewStreamHandler(cfg.CameraSvc, cfg.Go2rtcAPI, cfg.Go2rtcPublicHost, tokenAuth)
@@ -130,6 +152,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// что у HLS — go2rtc отдаёт и то, и другое с одного API-порта.
 	webrtcH := handlers.NewWebRTCHandler(cfg.CameraSvc, cfg.Go2rtcAPI)
 	scannerH := handlers.NewScannerHandler(cfg.Scanner)
+	if cfg.SIPRepo != nil {
+		// Сканер должен отличать уже заведённые домофоны от новых: сверка
+		// идёт с абонентами SIP, а не только с камерами.
+		scannerH = scannerH.WithSipAccounts(cfg.SIPRepo)
+	}
 	camHealthH := handlers.NewCameraHealthHandler(cfg.HealthSvc)
 	camSettingsH := handlers.NewCameraSettingsHandler(cfg.SettingsSvc)
 	camPreviewH := handlers.NewCameraPreviewHandler(cfg.PreviewSvc, tokenAuth)
@@ -158,6 +185,18 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	switchH := handlers.NewSwitchHandler(cfg.SwitchSvc)
 	// Доступ к камерам по их собственным протоколам.
 	cameraAPIH := handlers.NewCameraAPIHandler(cfg.CameraAPISvc)
+	// Домофония: абоненты, группы вызова и правила — отдельная подсистема.
+	// Настройщик устройств нужен и без репозитория: он ходит по сети
+	// к самим трубкам, а не в базу.
+	sipProvisioner := service.NewFanvilProvisioner()
+	var sipH *handlers.SipHandler
+	if cfg.SIPRepo != nil {
+		sipH = handlers.NewSipHandler(cfg.SIPRepo, cfg.SipBuilder, cfg.SipStatus).
+			WithProvisioning(sipProvisioner, cfg.PublicURL).
+			// Линия учётной записи и адрес WebSocket-транспорта: без них
+			// мобильное приложение не сможет зарегистрироваться.
+			WithUserLines(userLines, cfg.AsteriskWSPort)
+	}
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
 	statsH := handlers.NewStatsHandler(cfg.DB)
@@ -658,6 +697,48 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// Сканер камер
 			r.Post("/scanner/scan", scannerH.Scan)
 			r.Post("/scanner/probe", scannerH.Probe)
+
+			// SIP-домофония: вызывные панели, видеодомофоны, приложения и
+			// группы вызова. Маршруты только если репозиторий создан:
+			// на установке без домофонии их лучше нет вовсе — тогда
+			// интерфейс не покажет раздел, который не работает.
+			if sipH != nil {
+				r.Get("/sip/schema", sipH.Schema)
+				// Реквизиты своей линии: доступны любому вошедшему — без них
+				// приложение не зарегистрируется и звонки не придут.
+				r.Get("/sip/my-line", sipH.MyLine)
+				r.Post("/sip/sync", sipH.Sync)
+				// Прописать абонента в самом устройстве (трубки Fanvil).
+				r.Post("/sip/provision", sipH.ProvisionDevice)
+
+				r.Get("/sip/accounts", sipH.ListAccounts)
+				r.Post("/sip/accounts", sipH.CreateAccount)
+				// Файл настроек линии — для импорта в устройство вручную.
+				r.Get("/sip/accounts/{id}/config-file", sipH.ConfigFile)
+				// Карточка абонента: настройки, место в группах и то, что
+				// об устройстве знает Asterisk.
+				r.Get("/sip/accounts/{id}", sipH.GetAccount)
+				// Привязка к порту коммутатора: по ней ищут устройство
+				// в сети и понимают, чей это порт.
+				r.Put("/sip/accounts/{id}/switch", sipH.SetAccountSwitch)
+				r.Delete("/sip/accounts/{id}/switch", sipH.ClearAccountSwitch)
+				// Настройки телефонии сервера: внешний адрес, видеозвонки.
+				r.Get("/sip/settings", sipH.GetSettings)
+				r.Put("/sip/settings", sipH.UpdateSettings)
+				r.Put("/sip/accounts/{id}", sipH.UpdateAccount)
+				r.Delete("/sip/accounts/{id}", sipH.DeleteAccount)
+
+				r.Get("/sip/groups", sipH.ListGroups)
+				r.Post("/sip/groups", sipH.CreateGroup)
+				r.Put("/sip/groups/{id}", sipH.UpdateGroup)
+				r.Delete("/sip/groups/{id}", sipH.DeleteGroup)
+				r.Put("/sip/groups/{id}/members", sipH.SetGroupMembers)
+
+				r.Get("/sip/rules", sipH.ListRules)
+				r.Post("/sip/rules", sipH.CreateRule)
+				r.Put("/sip/rules/{id}", sipH.UpdateRule)
+				r.Delete("/sip/rules/{id}", sipH.DeleteRule)
+			}
 		})
 	})
 

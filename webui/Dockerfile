@@ -3,7 +3,15 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci --silent
+
+# npm ci ставит ровно то, что записано в package-lock.json — сборка
+# воспроизводима и не подтягивает свежие версии.
+#
+# Флаг --silent здесь вреден: он скрывает и причину сбоя, так что при
+# ошибке в журнале остаётся только «did not complete successfully» без
+# единой подсказки (так и случилось при установке на Ubuntu). --no-audit
+# и --no-fund убирают посторонний вывод, но не прячут ошибки.
+RUN npm ci --no-audit --no-fund
 
 COPY . .
 

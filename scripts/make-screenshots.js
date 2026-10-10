@@ -339,6 +339,76 @@ const SHOTS = [
       await page.waitForTimeout(800)
     },
   },
+
+  // --- Домофония: звонки с панелей на трубки и в приложение ---
+  //
+  // Снимки для инструкции docs/intercom.md. Панель одна на всех страницах,
+  // поэтому по ним видно и вкладки раздела, и карточку абонента с тем, что
+  // о нём знает Asterisk.
+  {
+    file: '31-intercom-accounts.png',
+    title: 'Домофония: абоненты',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/intercom`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(4000)
+    },
+  },
+  {
+    file: '32-intercom-groups.png',
+    title: 'Домофония: группы вызова и номера групп',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/intercom`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(3000)
+      await page.locator('button:has-text("Группы вызова")').first().click()
+      await page.waitForTimeout(1500)
+    },
+  },
+  {
+    file: '33-intercom-rules.png',
+    title: 'Домофония: правила вызова',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/intercom`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(3000)
+      await page.locator('button:has-text("Правила вызова")').first().click()
+      await page.waitForTimeout(1500)
+    },
+  },
+  {
+    file: '34-intercom-settings.png',
+    title: 'Домофония: настройки сервера телефонии (внешний адрес, свои сети)',
+    prepare: async (page) => {
+      await page.goto(`${BASE}/intercom`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(3000)
+      await page.locator('button:has-text("Настройки")').first().click()
+      await page.waitForTimeout(1500)
+    },
+  },
+  {
+    file: '35-intercom-account.png',
+    title: 'Домофония: карточка абонента (данные Asterisk, размещение, группы)',
+    viewport: { width: 1440, height: 1500 },
+    prepare: async (page) => {
+      // Карточку открываем по идентификатору, который берём у сервера: он
+      // у каждой установки свой, и вписывать его в скрипт нельзя.
+      const id = await page.evaluate(async () => {
+        const token = localStorage.getItem('token') || sessionStorage.getItem('token') || ''
+        const response = await fetch('/api/v1/sip/accounts', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!response.ok) return ''
+        const accounts = await response.json()
+        // Берём устройство, а не приложение: у него есть и адрес, и состояние
+        // в Asterisk — то, ради чего этот снимок и делается.
+        const device = accounts.find((a) => a.kind !== 'softphone') || accounts[0]
+        return device ? device.id : ''
+      })
+      if (!id) {
+        throw new Error('не удалось получить абонента для карточки')
+      }
+      await page.goto(`${BASE}/intercom/${id}`, { waitUntil: 'domcontentloaded' })
+      await page.waitForTimeout(4500)
+    },
+  },
 ]
 
 /**

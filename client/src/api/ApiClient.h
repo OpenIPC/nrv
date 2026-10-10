@@ -27,6 +27,7 @@ class ApiClient : public QObject
     /** Вход выполнен: показываем стену, а не окно входа. */
     Q_PROPERTY(bool authenticated READ authenticated NOTIFY authenticatedChanged)
     Q_PROPERTY(QString userName READ userName NOTIFY userChanged)
+    Q_PROPERTY(QString savedLogin READ savedLogin NOTIFY userChanged)
     Q_PROPERTY(QVariantList cameras READ cameras NOTIFY camerasChanged)
     /** Последнее сообщение об ошибке — показывается в окне входа. */
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
@@ -77,6 +78,14 @@ public:
     bool busy() const { return m_busy; }
     bool authenticated() const { return !m_token.isEmpty(); }
     QString userName() const { return m_userName; }
+    /**
+     * Логин, сохранённый на этом рабочем месте.
+     *
+     * Подставляется в форму входа: после истечения сессии оператору
+     * достаточно ввести пароль, а сервер удалять и добавлять заново не
+     * нужно.
+     */
+    QString savedLogin() const { return m_login; }
     QVariantList cameras() const { return m_cameras; }
     QString lastError() const { return m_lastError; }
     QString serverUrl() const { return m_serverUrl; }
@@ -296,6 +305,20 @@ private:
     void setError(const QString &message);
     void loadProfile();
     void loadCameras();
+    /**
+     * Входит автоматически, если сохранённый токен истёк или его нет.
+     *
+     * Токен живёт сутки, а обновить его на сервере нечем (эндпоинта
+     * refresh нет), поэтому без входа сохранёнными данными оператору
+     * пришлось бы удалять сервер и добавлять его заново.
+     */
+    void restoreSession();
+    /** Сохраняет логин и пароль для автоматического входа. */
+    void saveCredentials(const QString &user, const QString &password);
+    /** Повторный вход сохранёнными данными — после отказа 401. */
+    void reauthenticate();
+    /** Проверяет срок действия токена по полю exp (без проверки подписи). */
+    static bool tokenExpired(const QString &token);
     void setPlanBusy(bool value);
     void setPtzBusy(bool value);
     void setPtzError(const QString &message);
@@ -306,6 +329,14 @@ private:
     QString m_serverUrl;      // без завершающего слэша, например http://192.168.1.111:3000
     QString m_token;
     QString m_userName;
+    // Логин и пароль для автоматического входа. Хранятся в настройках
+    // открытым текстом: без них нечем войти заново, когда истечёт токен
+    // (см. saveCredentials).
+    QString m_login;
+    QString m_password;
+    // Признак уже идущего повторного входа: без него каждый запрос,
+    // получивший 401, запускал бы свой вход и они бы размножились.
+    bool m_reauthInFlight = false;
     QVariantList m_cameras;
     QStringList m_permissions;
     QString m_lastError;

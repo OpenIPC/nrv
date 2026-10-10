@@ -13,6 +13,58 @@
     -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!--
+      Камера — только для видеозвонков с панели: без этого разрешения
+      приложение падало при наборе номера. Видео в домофонии не роскошь:
+      по нему видно, кто стоит у двери, и отказываться от него на телефоне
+      незачем. Если разрешения нет, приложение само позвонит со звуком.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
+    <!--
+      Телефонная линия.
+
+      Служба переднего плана с постоянным уведомлением — единственный способ
+      удержать приложение работающим в фоне: без неё Android останавливает
+      процесс, рвётся соединение с Asterisk, и звонок с калитки приходит
+      только при открытом приложении.
+
+      Типы службы (dataSync — соединение, microphone — разговор с погашенным
+      экраном) требуются начиная с Android 14: система должна знать, чем
+      занята служба, а приложению нужны соответствующие разрешения.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Уведомление о линии: без разрешения его не видно, и система
+         может не запустить службу на Android 13+. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Соединение не должно засыпать вместе с экраном: иначе входящий
+         звонок откладывается до включения телефона. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Wi-Fi тоже не должен уходить в экономичный режим: в нём пауза между
+         пакетами доходит до секунд, и вызов не успевает дойти. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!--
+      Работа без ограничений по батарее.
+
+      Нужна не для экономии, а против заморозки: прошивки Transsion (TECNO)
+      и подобные «гибернируют» приложение через несколько секунд после ухода
+      в фон даже при работающей службе переднего плана — процесс замораживается
+      и перестаёт принимать вызовы. Исключение из оптимизации батареи выводит
+      приложение из этого списка.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!--
+      Показ входящего вызова на весь экран поверх блокировки.
+
+      Без него на заблокированном телефоне вызов только звонит: кто звонит и
+      кнопка ответа появляются лишь после разблокировки, и вызов легко
+      пропустить.
+    -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <!--
       Приложение работает и на телевизоре, и на телефоне.
@@ -58,5 +110,12 @@
             <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
         </intent-filter>
       </activity>
+
+      <!-- Служба телефонной линии. exported=false: управлять ею может
+           только само приложение. -->
+      <service
+        android:name=".SipForegroundService"
+        android:exported="false"
+        android:foregroundServiceType="dataSync|microphone" />
     </application>
 </manifest>

@@ -77,3 +77,66 @@ export async function saveToken(serverId: string, token: string): Promise<void> 
 export async function clearToken(serverId: string): Promise<void> {
   await AsyncStorage.removeItem(KEY_TOKEN_PREFIX + serverId);
 }
+
+const KEY_CREDS_PREFIX = '@nvr/credentials/';
+
+/** Учётные данные сервера, сохранённые для повторного входа. */
+export interface ServerCredentials {
+  username: string;
+  password: string;
+}
+
+/**
+ * Сохраняет логин и пароль сервера.
+ *
+ * Зачем хранить пароль. Токен доступа живёт сутки, а обновить его на сервере
+ * нечем (эндпоинта refresh нет). Без сохранённых данных приложение через день
+ * оказывалось в тупике: войти заново нечем, и приходилось удалять сервер и
+ * добавлять его заново. Теперь при истечении токена приложение входит
+ * автоматически.
+ *
+ * Почему в AsyncStorage, а не в защищённом хранилище. Проект сознательно
+ * обходится без лишних нативных зависимостей (там же лежат и токены), а
+ * react-native-keychain — нативный модуль, требующий пересборки приложения.
+ * На устройстве без root файлы приложения недоступны другим программам, но
+ * при работе через интернет хранилище стоит заменить на keychain.
+ */
+export async function loadCredentials(
+  serverId: string,
+): Promise<ServerCredentials | null> {
+  try {
+    const raw = await AsyncStorage.getItem(KEY_CREDS_PREFIX + serverId);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      !parsed ||
+      typeof parsed.username !== 'string' ||
+      typeof parsed.password !== 'string'
+    ) {
+      return null;
+    }
+    return parsed as ServerCredentials;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCredentials(
+  serverId: string,
+  credentials: ServerCredentials,
+): Promise<void> {
+  await AsyncStorage.setItem(
+    KEY_CREDS_PREFIX + serverId,
+    JSON.stringify(credentials),
+  );
+}
+
+/**
+ * Забывает учётные данные сервера.
+ *
+ * Вызывается при выходе и при удалении сервера: после осознанного выхода
+ * автоматически входить заново не нужно — это отменило бы сам выход.
+ */
+export async function clearCredentials(serverId: string): Promise<void> {
+  await AsyncStorage.removeItem(KEY_CREDS_PREFIX + serverId);
+}

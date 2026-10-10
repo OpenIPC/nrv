@@ -23,6 +23,7 @@ export default {
     acs: '门禁',
     plans: '平面图',
     switches: '交换机',
+    intercom: '对讲',
     access: '通行',
     externalAccess: '外部访问',
     notifications: '通知',

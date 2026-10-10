@@ -482,44 +482,83 @@ func main() {
 	cameraSvc.WithExternalRTSP(externalRTSPSvc)
 	externalRTSPSvc.RestoreAll(context.Background(), cameraRepo)
 
+	// SIP-домофония: вызывные панели, видеодомофоны и приложения.
+	//
+	// Репозиторий создаётся всегда: раздел и его данные есть на любой
+	// установке. Сборщик конфигурации — только если каталог конфигурации
+	// Asterisk подключён явно (см. ASTERISK_CONFIG_DIR в config.go).
+	sipRepo := postgres.NewSipRepo(db)
+	var sipBuilder *service.SipConfigBuilder
+	var sipStatus service.SipStatusSource
+	if cfg.AsteriskConfigDir != "" {
+		var reloader service.AsteriskReloader
+		// AMI нужен в двух местах: для перезагрузки конфигурации и для
+		// состояния регистрации. Создаём один клиент — соединение он
+		// открывает на каждый вызов сам, а настройки живут в нём.
+		if cfg.AsteriskAMISecret != "" {
+			ami := service.NewAMIClient(cfg.AsteriskAMIAddr, cfg.AsteriskAMIUser, cfg.AsteriskAMISecret)
+			reloader = ami
+			sipStatus = ami
+		} else {
+			// Без AMI файлы запишутся, но Asterisk о них не узнает.
+			// Предупреждаем сразу на старте: иначе это выяснится при
+			// первом звонке, когда искать причину уже некогда.
+			log.Warn().Msg("AMI-пароль не задан: конфигурация SIP будет записана, но Asterisk подхватит её только после перезапуска")
+		}
+		sipBuilder = service.NewSipConfigBuilder(sipRepo, cfg.AsteriskConfigDir, reloader)
+		// Собираем при старте: данные в базе могли остаться с прошлого
+		// запуска, а конфигурация Asterisk живёт в контейнере и при его
+		// пересоздании осталась бы прежней.
+		if err := sipBuilder.Sync(context.Background()); err != nil {
+			log.Error().Err(err).Msg("не удалось собрать конфигурацию SIP при старте")
+		}
+	}
+
 	// Инициализация роутера
 	router := api.NewRouter(api.RouterConfig{
-		CameraSvc:          cameraSvc,
-		EventSvc:           eventSvc,
-		ACSSvc:             acsSvc,
-		ACSAccessSvc:       acsAccessSvc,
-		CardCapture:        cardCapture,
-		ACSPlanSvc:         acsPlanSvc,
-		LiveHub:            liveHub,
-		SwitchSvc:          switchSvc,
-		CameraAPISvc:       cameraAPISvc,
-		FirmwareSvc:        firmwareSvc,
-		UserRepo:           userRepo,
-		JWTSecret:          cfg.JWTSecret,
-		WGManager:          wgManager,
-		DB:                 db,
-		Go2rtcAPI:          cfg.Go2rtcAPI,
-		Go2rtcPublicHost:   cfg.Go2rtcPublicHost,
-		Scanner:            scanner,
-		VideoRepo:          videoRepo,
-		StorageSvc:         storageSvc,
-		RetentionSvc:       retentionSvc,
-		AudioSvc:           audioSvc,
-		HealthSvc:          healthSvc,
-		SettingsSvc:        settingsSvc,
-		PreviewSvc:         previewSvc,
-		ExternalRTSPSvc:    externalRTSPSvc,
-		LogsSvc:            logSvc,
-		SyslogSrv:          syslogSrv,
-		MajesticSvc:        majesticSvc,
-		MajesticSettings:   majesticSettings,
-		SchemaSettings:     schemaSettingsSvc,
-		ImageProfile:       imageProfileSvc,
+		CameraSvc:        cameraSvc,
+		EventSvc:         eventSvc,
+		ACSSvc:           acsSvc,
+		ACSAccessSvc:     acsAccessSvc,
+		CardCapture:      cardCapture,
+		ACSPlanSvc:       acsPlanSvc,
+		LiveHub:          liveHub,
+		SwitchSvc:        switchSvc,
+		CameraAPISvc:     cameraAPISvc,
+		FirmwareSvc:      firmwareSvc,
+		UserRepo:         userRepo,
+		JWTSecret:        cfg.JWTSecret,
+		WGManager:        wgManager,
+		DB:               db,
+		Go2rtcAPI:        cfg.Go2rtcAPI,
+		Go2rtcPublicHost: cfg.Go2rtcPublicHost,
+		Scanner:          scanner,
+		VideoRepo:        videoRepo,
+		StorageSvc:       storageSvc,
+		RetentionSvc:     retentionSvc,
+		AudioSvc:         audioSvc,
+		HealthSvc:        healthSvc,
+		SettingsSvc:      settingsSvc,
+		PreviewSvc:       previewSvc,
+		ExternalRTSPSvc:  externalRTSPSvc,
+		LogsSvc:          logSvc,
+		SyslogSrv:        syslogSrv,
+		MajesticSvc:      majesticSvc,
+		MajesticSettings: majesticSettings,
+		SchemaSettings:   schemaSettingsSvc,
+		ImageProfile:     imageProfileSvc,
 		// Сервис создан выше — по нему работает страница уведомлений:
 		// проверка связи и журнал отправок.
 		Notifier:   notifier,
 		WebhookSvc: webhookSvc,
 		HostAgent:  hostAgent,
+		SIPRepo:    sipRepo,
+		SipBuilder: sipBuilder,
+		SipStatus:  sipStatus,
+		PublicURL:  cfg.PublicURL,
+		// Порт WebSocket-транспорта Asterisk: его получает приложение,
+		// чтобы зарегистрироваться без ручной настройки.
+		AsteriskWSPort: cfg.AsteriskWSPort,
 	})
 
 	// HTTP-сервер

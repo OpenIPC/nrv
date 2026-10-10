@@ -13,12 +13,15 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AppProvider, useApp } from './src/state/AppContext';
+import { SipProvider } from './src/state/SipContext';
 import ServersScreen from './src/screens/ServersScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import CamerasScreen from './src/screens/CamerasScreen';
 import LiveScreen from './src/screens/LiveScreen';
 import ArchiveScreen from './src/screens/ArchiveScreen';
 import AccessScreen from './src/screens/AccessScreen';
+import CallsScreen from './src/screens/CallsScreen';
+import CallOverlay from './src/screens/CallOverlay';
 import TvApp from './src/tv/TvApp';
 import { isTelevision } from './src/tv/device';
 import { colors } from './src/theme';
@@ -37,7 +40,8 @@ type Route =
   | { name: 'cameras' }
   | { name: 'live'; camera: Camera }
   | { name: 'archive'; camera?: Camera }
-  | { name: 'access' };
+  | { name: 'access' }
+  | { name: 'calls' };
 
 function Router() {
   const { ready, current, token } = useApp();
@@ -91,6 +95,9 @@ function Router() {
     case 'access':
       return <AccessScreen onBack={() => setRoute({ name: 'cameras' })} />;
 
+    case 'calls':
+      return <CallsScreen onBack={() => setRoute({ name: 'cameras' })} />;
+
     case 'cameras':
     default:
       return (
@@ -98,6 +105,7 @@ function Router() {
           onOpenCamera={(camera) => setRoute({ name: 'live', camera })}
           onOpenArchive={() => setRoute({ name: 'archive' })}
           onOpenAccess={() => setRoute({ name: 'access' })}
+          onOpenCalls={() => setRoute({ name: 'calls' })}
           onOpenServers={() => setRoute({ name: 'servers' })}
         />
       );
@@ -152,9 +160,15 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar barStyle="light-content" backgroundColor={colors.background} />
       <AppProvider>
-        <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-          <Root />
-        </SafeAreaView>
+        {/* Телефония внутри состояния приложения: линия привязана к учётной
+            записи, а входящий вызов должен переживать переходы между экранами. */}
+        <SipProvider>
+          <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+            <Root />
+            {/* Экран звонка поверх всего: вызов приходит в любой момент. */}
+            <CallOverlay />
+          </SafeAreaView>
+        </SipProvider>
       </AppProvider>
     </SafeAreaProvider>
   );

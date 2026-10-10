@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>SIP-проверка — NVR</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 720px; }
+  h1 { font-size: 20px; }
+  label { display: block; margin-top: 12px; font-size: 14px; color: #444; }
+  input { width: 100%; padding: 8px; font-size: 15px; box-sizing: border-box; }
+  button { margin-top: 12px; margin-right: 8px; padding: 10px 16px; font-size: 15px; cursor: pointer; }
+  #log { margin-top: 16px; padding: 12px; background: #111; color: #ddd; height: 260px;
+         overflow: auto; font-family: monospace; font-size: 13px; white-space: pre-wrap; }
+  .hint { background: #fff8e1; border: 1px solid #ffe082; padding: 10px; border-radius: 6px;
+          font-size: 13px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<h1>Проверка SIP-клиента домофонии</h1>
+
+<p>Страница проверяет подключение к SIP-серверу по WebSocket: регистрацию,
+входящий вызов и разговор. Нужна для диагностики, в обычной работе не
+требуется.</p>
+
+<label>Адрес SIP-сервера (WebSocket)</label>
+<input id="ws" placeholder="по умолчанию — этот же адрес и порт">
+
+<label>Номер (абонент приложения)</label>
+<input id="uri" placeholder="по умолчанию — sip:300@этот адрес">
+
+<label>Пароль</label>
+<input id="pass" type="password" placeholder="пароль абонента">
+
+<button id="reg">Зарегистрироваться</button>
+<button id="hangup">Отбой</button>
+
+<div id="log"></div>
+
+<div class="hint">
+  <b>Микрофон.</b> Браузер отдаёт доступ к микрофону только на защищённой
+  странице (HTTPS) или на <code>localhost</code>. Если страница открыта по
+  <code>http://</code> с другого адреса, вызов принять можно, но звук в
+  сторону сервера не пойдёт — это ограничение браузера, а не сервера.
+</div>
+
+<!-- Библиотека лежит рядом, а не на CDN: сервер может стоять в сети без
+     интернета, и тогда внешняя ссылка просто не загрузится (проверено). -->
+<script src="jssip.min.js"></script>
+<script>
+// Тестовый SIP-клиент на JsSIP: SIP over WebSocket — тот же способ, которым
+// будут подключаться рабочие места оператора и мобильное приложение.
+const log = (msg) => {
+  const el = document.getElementById('log');
+  el.textContent += new Date().toLocaleTimeString() + '  ' + msg + '\n';
+  el.scrollTop = el.scrollHeight;
+};
+
+let ua = null;
+let session = null;
+
+document.getElementById('reg').addEventListener('click', () => {
+  // Адрес по умолчанию — тот же сервер и порт, с которого открыта страница:
+  // nginx веб-интерфейса проксирует /ws на Asterisk, поэтому открывать
+  // наружу отдельный порт SIP не нужно (см. webui/nginx.conf).
+  const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const wsUrl = document.getElementById('ws').value.trim()
+    || wsProto + '://' + location.host + '/ws';
+  const uri = document.getElementById('uri').value.trim()
+    || 'sip:300@' + location.hostname;
+  const pass = document.getElementById('pass').value;
+
+  if (ua) {
+    log('Отключаю прежнюю сессию');
+    ua.stop();
+    ua = null;
+  }
+
+  log('Подключаюсь: ' + wsUrl);
+  const socket = new JsSIP.WebSocketInterface(wsUrl);
+
+  ua = new JsSIP.UA({
+    sockets: [socket],
+    uri,
+    password: pass,
+    register: true,
+    // Абонент и сервер в одной сети — NAT не нужен.
+    // Пустое значение оставлено явно: так видно, что настройка осознанная.
+  });
+
+  ua.on('connected', () => log('WebSocket соединён'));
+  ua.on('disconnected', () => log('WebSocket закрыт'));
+  ua.on('registered', () => log('ЗАРЕГИСТРИРОВАН на сервере'));
+  ua.on('unregistered', () => log('Регистрация снята'));
+  ua.on('registrationFailed', (e) => log('Регистрация не удалась: ' + e.cause));
+
+  // Входящий вызов: показываем, кто звонит, и не отвечаем сами — ответ
+  // даём кнопкой, чтобы успеть прочитать журнал.
+  ua.on('newRTCSession', (data) => {
+    session = data.session;
+    if (session.direction === 'incoming') {
+      log('ВХОДЯЩИЙ вызов от ' + session.remote_identity.uri.toString());
+    } else {
+      log('Исходящий вызов: ' + session.remote_identity.uri.toString());
+    }
+
+    session.on('accepted', () => log('Разговор начат'));
+    session.on('confirmed', () => log('Сессия подтверждена'));
+    session.on('ended', () => log('Вызов завершён'));
+    session.on('failed', (e) => log('Вызов не состоялся: ' + e.cause));
+
+    // Отвечаем автоматически только если микрофон доступен; иначе ждём
+    // решения оператора — иначе вызов «повиснет» без звука.
+    log('Нажмите «Ответить» в диалоге браузера, чтобы принять вызов');
+    if (confirm('Входящий вызов от ' + session.remote_identity.uri.toString() + '. Ответить?')) {
+      session.answer({ mediaConstraints: { audio: true, video: false } });
+    } else {
+      session.terminate();
+    }
+  });
+
+  ua.start();
+});
+
+document.getElementById('hangup').addEventListener('click', () => {
+  if (session) {
+    session.terminate();
+    session = null;
+  }
+  log('Отбой');
+});
+</script>
+</body>
+</html>

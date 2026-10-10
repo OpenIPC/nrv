@@ -1,5 +1,6 @@
 #include "api/ApiClient.h"
 
+#include <QDateTime>
 #include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -85,11 +86,13 @@ void ApiClient::loadProfile()
     }
 
     m_token = settings.value(QStringLiteral("auth/token")).toString();
-    if (!m_token.isEmpty()) {
-        emit authenticatedChanged();
-        loadCameras();
-        refreshPlans();
-    }
+    m_login = settings.value(QStringLiteral("auth/user")).toString();
+    m_password = settings.value(QStringLiteral("auth/password")).toString();
+
+    // Токен живёт сутки. Если он просрочен, входим сразу сохранёнными
+    // данными, а не показываем форму входа: без этого оператору пришлось
+    // бы заново добавлять сервер (см. restoreSession).
+    restoreSession();
 }
 
 void ApiClient::setMediaServer(const QString &host, int rtspPort,
@@ -128,9 +131,12 @@ void ApiClient::login(const QString &server, const QString &user, const QString 
     body.insert(QStringLiteral("password"), password);
 
     QNetworkReply *reply = m_net.post(request, QJsonDocument(body).toJson());
-    connect(reply, &QNetworkReply::finished, this, [this, reply, user]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, user, password]() {
         reply->deleteLater();
         setBusy(false);
+        // Попытка входа завершена — разрешаем следующую, в том числе
+        // повторную после отказа 401.
+        m_reauthInFlight = false;
 
         if (reply->error() != QNetworkReply::NoError) {
             // Сервер отвечает понятной причиной («неверный пароль»),
@@ -154,6 +160,9 @@ void ApiClient::login(const QString &server, const QString &user, const QString 
         QSettings settings;
         settings.setValue(QStringLiteral("server/url"), m_serverUrl);
         settings.setValue(QStringLiteral("auth/token"), m_token);
+        // Учётные данные сохраняем для автоматического входа, когда
+        // истекёт срок токена.
+        saveCredentials(user, password);
 
         if (m_mediaHost.isEmpty()) {
             m_mediaHost = QUrl(m_serverUrl).host();
@@ -194,6 +203,11 @@ void ApiClient::logout()
 
     QSettings settings;
     settings.remove(QStringLiteral("auth/token"));
+    // Пароль забываем: выход — осознанное действие, и автоматически
+    // входить обратно после него не нужно. Логин оставляем — он удобен
+    // для следующего входа.
+    settings.remove(QStringLiteral("auth/password"));
+    m_password.clear();
 
     emit authenticatedChanged();
     emit userChanged();
@@ -204,11 +218,103 @@ void ApiClient::logout()
     emit ptzChanged();
 }
 
+void ApiClient::saveCredentials(const QString &user, const QString &password)
+{
+    m_login = user;
+    m_password = password;
+
+    // Пароль лежит в настройках открытым текстом. Это осознанный выбор:
+    // без него нельзя войти заново, когда истекёт срок токена, а хранилище
+    // ключей (QtKeychain) — лишняя зависимость. Файл настроек доступен
+    // только своей учётной записи; при работе через интернет пароль стоит
+    // перенести в системное хранилище.
+    QSettings settings;
+    settings.setValue(QStringLiteral("auth/user"), m_login);
+    settings.setValue(QStringLiteral("auth/password"), m_password);
+}
+
+bool ApiClient::tokenExpired(const QString &token)
+{
+    // Разбираем payload сами, без проверки подписи: подпись проверяет
+    // сервер, а нам нужно лишь не отправлять заведомо просроченный токен.
+    // Всё непонятное считаем просроченным — лишний вход безвреден, а
+    // запрос с мёртвым токеном даёт отказ.
+    const QList<QByteArray> parts = token.toUtf8().split('.');
+    if (parts.size() < 2) {
+        return true;
+    }
+
+    QByteArray payload = parts.at(1);
+    // base64url отличается от обычного base64 алфавитом и тем, что
+    // выравнивание символами «=» в токен не пишется.
+    payload.replace('-', '+');
+    payload.replace('_', '/');
+    while (payload.size() % 4 != 0) {
+        payload.append('=');
+    }
+
+    const QJsonObject body = QJsonDocument::fromJson(QByteArray::fromBase64(payload)).object();
+    const double exp = body.value(QStringLiteral("exp")).toDouble();
+    if (exp <= 0) {
+        return true;
+    }
+    // Минута запаса: если срок истекает вот-вот, входим сразу, а не ждём
+    // отказа первого запроса.
+    return QDateTime::currentSecsSinceEpoch() >= static_cast<qint64>(exp) - 60;
+}
+
+void ApiClient::restoreSession()
+{
+    if (!m_token.isEmpty() && !tokenExpired(m_token)) {
+        emit authenticatedChanged();
+        loadCameras();
+        refreshPlans();
+        return;
+    }
+
+    // Токен просрочен или его нет. Если сохранены учётные данные — входим
+    // сами, иначе показываем форму входа.
+    m_token.clear();
+    if (m_serverUrl.isEmpty() || m_login.isEmpty() || m_password.isEmpty()) {
+        emit authenticatedChanged();
+        return;
+    }
+    reauthenticate();
+}
+
+void ApiClient::reauthenticate()
+{
+    if (m_reauthInFlight) {
+        return;
+    }
+    if (m_serverUrl.isEmpty() || m_login.isEmpty() || m_password.isEmpty()) {
+        // Входить нечем: приложение покажет форму входа. Сервер из списка
+        // удалять не нужно — адрес и логин по-прежнему верны.
+        m_token.clear();
+        emit authenticatedChanged();
+        return;
+    }
+
+    m_reauthInFlight = true;
+    // Вход тот же, что и по кнопке: он сохранит новый токен и обновит
+    // камеры с планами.
+    login(m_serverUrl, m_login, m_password);
+}
+
 void ApiClient::handleReply(QNetworkReply *reply, const std::function<void(const QJsonDocument &)> &done)
 {
     reply->deleteLater();
 
     if (reply->error() != QNetworkReply::NoError) {
+        // 401 — токен больше не принимается: истёк срок или его отозвали.
+        // Пробуем войти сохранёнными данными, чтобы оператор не видел
+        // отказа там, где виноват только срок сессии.
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (status == 401 && !m_login.isEmpty() && !m_password.isEmpty()) {
+            setError(tr("Срок сессии истёк — выполняется повторный вход"));
+            reauthenticate();
+            return;
+        }
         setError(reply->errorString());
         return;
     }

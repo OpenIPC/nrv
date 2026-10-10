@@ -1,4 +1,8 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import axios, {
+  AxiosInstance,
+  AxiosError,
+  InternalAxiosRequestConfig,
+} from 'axios';
 import type {
   AccessController,
   AccessDoor,
@@ -8,8 +12,34 @@ import type {
   LoginResult,
   Recording,
   RecordingsPage,
+  SipAccountBrief,
+  SipGroupBrief,
   StreamInfo,
 } from '../types';
+import type { SipLineInfo } from './sipClient';
+
+/**
+ * Логин и пароль, сохранённые для автоматического повторного входа.
+ *
+ * Нужны потому, что токен живёт сутки, а обновить его на сервере нечем:
+ * эндпоинта refresh нет. Без этих данных приложение через день требовало
+ * удалить сервер и добавить его заново.
+ */
+export interface ApiCredentials {
+  username: string;
+  password: string;
+}
+
+/** Что клиент сообщает наружу, когда состояние сессии меняется. */
+export interface ApiClientCallbacks {
+  /** Токен получен автоматически — его нужно сохранить на устройстве. */
+  onTokenRefreshed?: (token: string) => void;
+  /** Войти автоматически не удалось: нужен ручной вход. */
+  onAuthLost?: () => void;
+}
+
+/** Конфиг запроса с пометкой о попытке повторного входа. */
+type RetryableConfig = InternalAxiosRequestConfig & { _authRetried?: boolean };
 
 /**
  * Клиент REST API сервера NVR.
@@ -24,6 +54,8 @@ export class ApiClient {
   constructor(
     public readonly baseUrl: string,
     token: string | null = null,
+    private credentials: ApiCredentials | null = null,
+    private callbacks: ApiClientCallbacks = {},
   ) {
     this.token = token;
     this.http = axios.create({
@@ -44,11 +76,61 @@ export class ApiClient {
       }
       return config;
     });
+
+    // Автоматический повторный вход при истёкшем токене.
+    //
+    // 401 приходит сюда обычным ответом, а не исключением: выше задан
+    // validateStatus, пропускающий коды ниже 500 — ошибки разбираются в
+    // методах, чтобы показывать понятный текст. Поэтому статус проверяем
+    // сами.
+    //
+    // Попытка ровно одна на запрос: если и пароль уже не подходит, вход не
+    // поможет, а зацикливание здесь хуже ошибки.
+    this.http.interceptors.response.use(async (response) => {
+      const config = response.config as RetryableConfig;
+      if (response.status !== 401 || config.url === '/auth/login') {
+        return response;
+      }
+
+      if (config._authRetried || !this.credentials) {
+        // Сессия была, но войти заново нечем — просим показать экран входа.
+        // Если же запрос шёл вообще без токена (первый вход), молчим:
+        // сообщение про истёкший срок здесь было бы ложным.
+        if (config.headers?.Authorization) {
+          this.callbacks.onAuthLost?.();
+        }
+        return response;
+      }
+
+      config._authRetried = true;
+      try {
+        const fresh = await this.login(
+          this.credentials.username,
+          this.credentials.password,
+        );
+        this.setToken(fresh.token);
+        this.callbacks.onTokenRefreshed?.(fresh.token);
+        config.headers.Authorization = `Bearer ${fresh.token}`;
+        return await this.http.request(config);
+      } catch {
+        // Сохранённые данные больше не подходят: сменили пароль или сняли
+        // права. Просим показать экран входа, но сервер из списка НЕ
+        // удаляем — адрес и логин по-прежнему верны, вводить нужно только
+        // пароль.
+        this.callbacks.onAuthLost?.();
+        return response;
+      }
+    });
   }
 
   /** Обновляет токен доступа (после входа или выхода). */
   setToken(token: string | null): void {
     this.token = token;
+  }
+
+  /** Запоминает учётные данные для автоматического входа. */
+  setCredentials(credentials: ApiCredentials | null): void {
+    this.credentials = credentials;
   }
 
   /** Вход в систему. */
@@ -85,6 +167,44 @@ export class ApiClient {
       throw toApiError(response.status, response.data, new Error('cameras'));
     }
     return (response.data ?? []) as Camera[];
+  }
+
+  /**
+   * Реквизиты собственной телефонной линии.
+   *
+   * Сервер выдаёт их вместе с номером: у каждого, кто входит в систему,
+   * есть свой внутренний номер, и приложению не нужно ничего настраивать
+   * руками. Пароль приходит только сюда — в разделе домофонии он скрыт.
+   */
+  async getMyLine(): Promise<SipLineInfo | null> {
+    const response = await this.http.get('/sip/my-line');
+    // 404 означает «телефония не настроена на этом сервере» — это не сбой
+    // приложения: звонков просто нет, и экран это покажет словами.
+    if (response.status === 404) {
+      return null;
+    }
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('sip-line'));
+    }
+    return response.data as SipLineInfo;
+  }
+
+  /** Абоненты домофонии: панели, трубки, камеры с кнопкой вызова. */
+  async listSipAccounts(): Promise<SipAccountBrief[]> {
+    const response = await this.http.get('/sip/accounts');
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('sip-accounts'));
+    }
+    return (response.data ?? []) as SipAccountBrief[];
+  }
+
+  /** Группы вызова: звонок в группу поднимает всех её участников. */
+  async listSipGroups(): Promise<SipGroupBrief[]> {
+    const response = await this.http.get('/sip/groups');
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('sip-groups'));
+    }
+    return (response.data ?? []) as SipGroupBrief[];
   }
 
   /** Адреса потоков одной камеры. */

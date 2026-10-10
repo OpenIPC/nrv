@@ -21,6 +21,12 @@ class MainApplication : Application(), ReactApplication {
               // модули приложения нужно регистрировать вручную:
               // автоподключение ищет их только в node_modules.
               add(DeviceInfoPackage())
+              // Служба переднего плана: держит линию SIP живой, когда
+              // приложение свёрнуто или экран погашен.
+              add(SipForegroundPackage())
+              // Звук звонка: громкая связь и рингтон (своё вместо
+              // InCallManager, который падал на Android 14).
+              add(CallAudioPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

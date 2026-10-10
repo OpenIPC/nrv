@@ -29,6 +29,10 @@ SKIP_BUILD=0
 SKIP_PREPARE=0
 UNINSTALL=0
 UPDATE=0
+# Включать ли SIP-домофонию (контейнер Asterisk с обоими драйверами SIP).
+# По умолчанию выключена: телефония нужна не всем, а Asterisk занимает
+# и место, и порты, и требует настройки устройств на объекте.
+ENABLE_SIP="${NVR_ENABLE_SIP:-0}"
 # На чём считать детекцию: auto (по наличию видеокарты), gpu или cpu.
 DETECT_MODE="${NVR_DETECT_MODE:-auto}"
 
@@ -51,6 +55,7 @@ usage() {
   --skip-prepare  не готовить систему (apt, chrony, проверки портов и места)
   --skip-agent    не ставить агент хоста (время и сеть будут недоступны)
   --skip-build    не пересобирать образы (быстрее, если код не менялся)
+  --sip           включить SIP-домофонию (Asterisk: панели, трубки, приложения)
   --uninstall     удалить службы, контейнеры и каталог агента
   -h, --help      эта справка
 
@@ -70,6 +75,7 @@ while [ $# -gt 0 ]; do
         --skip-prepare) SKIP_PREPARE=1; shift ;;
         --skip-agent) SKIP_AGENT=1; shift ;;
         --skip-build) SKIP_BUILD=1; shift ;;
+        --sip) ENABLE_SIP=1; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Неизвестный параметр: $1" >&2; usage >&2; exit 2 ;;
@@ -336,10 +342,83 @@ else
     rm -f docker-compose.override.yml
 fi
 
+# --------------------------------------------------------------- домофония
+
+# Файлы accounts/*.conf Asterisk читает, но они не в репозитории: там пароли
+# устройств и службы управления. Установщик создаёт те из них, что нужны до
+# первого запуска.
+SIP_ACCOUNTS_DIR="${PROJECT_DIR}/asterisk/config/accounts"
+
+if [ "$ENABLE_SIP" -eq 1 ]; then
+    say "SIP-домофония"
+
+    mkdir -p "$SIP_ACCOUNTS_DIR"
+
+    # Пароль AMI: при повторной установке оставляем прежний. Asterisk читает
+    # его из manager.conf, и новый пароль в .env при старом файле означал бы,
+    # что сервер не сможет перезагрузить конфигурацию — а причина была бы
+    # не видна: в интерфейсе всё сохраняется.
+    AMI_SECRET=""
+    if [ -s "${SIP_ACCOUNTS_DIR}/manager.conf" ]; then
+        AMI_SECRET="$(sed -n 's/^secret *= *//p' "${SIP_ACCOUNTS_DIR}/manager.conf" | head -1)"
+    fi
+    if [ -z "$AMI_SECRET" ]; then
+        AMI_SECRET="$(random_secret)"
+    fi
+
+    cat > "${SIP_ACCOUNTS_DIR}/manager.conf" <<EOF
+; Файл создан установщиком (install.sh --sip). В репозиторий не попадает:
+; в нём пароль управления Asterisk.
+;
+; Права минимальные: только перезагрузка конфигурации (command) и чтение
+; состояния (system, report) — больше серверу не нужно.
+[nvr]
+secret = ${AMI_SECRET}
+read = command,system,report
+write = command,system
+EOF
+
+    # Пользователь ARI нужен, потому что модуль SIP по WebSocket
+    # (res_pjsip_transport_websocket) зависит от res_ari и без него
+    # не загружается — тогда приложения не смогут подключиться вовсе.
+    ARI_SECRET=""
+    if [ -s "${SIP_ACCOUNTS_DIR}/ari_users.conf" ]; then
+        ARI_SECRET="$(sed -n 's/^password *= *//p' "${SIP_ACCOUNTS_DIR}/ari_users.conf" | head -1)"
+    fi
+    if [ -z "$ARI_SECRET" ]; then
+        ARI_SECRET="$(random_secret)"
+    fi
+
+    cat > "${SIP_ACCOUNTS_DIR}/ari_users.conf" <<EOF
+; Файл создан установщиком (install.sh --sip).
+[nvr]
+type = user
+read_only = no
+password = ${ARI_SECRET}
+EOF
+
+    # Права 640: файлы читает Asterisk, и больше их читать незачем.
+    chmod 640 "${SIP_ACCOUNTS_DIR}/manager.conf" "${SIP_ACCOUNTS_DIR}/ari_users.conf"
+
+    set_env ASTERISK_CONFIG_DIR /etc/asterisk
+    set_env ASTERISK_AMI_SECRET "$AMI_SECRET"
+    set_env ASTERISK_ARI_SECRET "$ARI_SECRET"
+    # Профиль compose сохраняем в .env: тогда Asterisk поднимается и ручной
+    # командой, и службой автозапуска — без отдельного флага в каждой.
+    set_env COMPOSE_PROFILES sip
+    echo "Asterisk будет запущен вместе с остальными контейнерами."
+else
+    # Телефония выключена — убираем профиль, чтобы контейнер Asterisk не
+    # поднимался: он занял бы порт 5060 и диапазон RTP.
+    set_env ASTERISK_CONFIG_DIR ""
+    if grep -q '^COMPOSE_PROFILES=' .env; then
+        sed -i '/^COMPOSE_PROFILES=/d' .env
+    fi
+fi
+
 # ------------------------------------------------------------------- запуск
 
 say "Сборка и запуск контейнеров"
-
 if [ "$SKIP_BUILD" -eq 1 ]; then
     $COMPOSE up -d --remove-orphans
 else
