@@ -239,3 +239,49 @@ type SipRule struct {
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// Чем закончился вызов. Значения хранятся в базе, поэтому строки, а не
+// числа: в журнале и в уведомлении они читаются глазами, и «missed»
+// понятнее, чем 2.
+const (
+	// CallAnswered — разговор состоялся.
+	CallAnswered = "answered"
+	// CallMissed — звонили, но трубку не сняли.
+	CallMissed = "missed"
+	// CallBusy — абонент занят.
+	CallBusy = "busy"
+	// CallUnavailable — номер недоступен: устройство не на связи или
+	// такого номера нет в плане набора.
+	CallUnavailable = "unavailable"
+)
+
+// SipCall — одна запись журнала звонков.
+//
+// Запись создаётся по событиям Asterisk, а не по нашим представлениям:
+// только Asterisk знает, что вызов действительно был и чем он закончился.
+type SipCall struct {
+	ID uuid.UUID `json:"id"`
+	// CallID — Linkedid вызова из Asterisk: общий для всех его событий.
+	CallID string `json:"call_id"`
+
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+
+	FromNumber string `json:"from_number"`
+	FromName   string `json:"from_name"`
+	ToNumber   string `json:"to_number"`
+	ToName     string `json:"to_name"`
+	// ToAccountID — абонент, которому звонили. Может быть пустым: номер
+	// мог не принадлежать ни одному заведённому абоненту (например, номер
+	// группы), и терять из-за этого запись журнала нельзя.
+	ToAccountID *uuid.UUID `json:"to_account_id,omitempty"`
+
+	Result      string `json:"result"`
+	TalkSeconds int    `json:"talk_seconds"`
+	// Notified — уведомление отправлено либо отправлять было некуда.
+	Notified bool `json:"notified"`
+	// ClipPath — запись вызова со звуком в хранилище сервера.
+	ClipPath string `json:"clip_path,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+}

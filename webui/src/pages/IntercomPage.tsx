@@ -5,6 +5,8 @@ import {
   sipAPI,
   type SipAccount,
   type SipAccountKind,
+  type SipCall,
+  type SipCallResult,
   type SipGroup,
   type SipGroupStrategy,
   type SipRule,
@@ -19,6 +21,7 @@ import {
   Filter,
   Phone,
   PhoneIncoming,
+  PhoneMissed,
   Plus,
   RefreshCw,
   Save,
@@ -37,7 +40,7 @@ import {
  * в одной простыне вместе с группами, правилами и настройками сервера
  * неудобно. Вкладка «Абоненты» — рабочая, остальные меняют редко.
  */
-type Tab = 'accounts' | 'groups' | 'rules' | 'settings'
+type Tab = 'accounts' | 'groups' | 'rules' | 'calls' | 'settings'
 
 export default function IntercomPage() {
   const { t } = useTranslation()
@@ -117,6 +120,7 @@ export default function IntercomPage() {
     { key: 'accounts', label: t('intercomPage.tabAccounts'), icon: <Phone size={15} /> },
     { key: 'groups', label: t('intercomPage.tabGroups'), icon: <Users size={15} /> },
     { key: 'rules', label: t('intercomPage.tabRules'), icon: <Filter size={15} /> },
+    { key: 'calls', label: t('intercomPage.tabCalls'), icon: <PhoneIncoming size={15} /> },
     { key: 'settings', label: t('intercomPage.tabSettings'), icon: <Settings size={15} /> },
   ]
 
@@ -222,15 +226,143 @@ export default function IntercomPage() {
       {tab === 'rules' && (
         <RulesTab rules={rules} groups={groups} accounts={accounts} canManage={canManage} reload={load} fail={fail} />
       )}
+      {tab === 'calls' && <CallsTab />}
       {tab === 'settings' && <SettingsTab canManage={canManage} fail={fail} server={schema?.server || ''} />}
     </div>
   )
 }
 
+/* ============================ Вкладка: журнал звонков ============================ */
+
+/**
+ * Журнал звонков.
+ *
+ * По умолчанию показываем только неудавшиеся: журнал открывают, чтобы
+ * понять, кто звонил, пока оператора не было. Полный список — переключателем.
+ */
+function CallsTab() {
+  const { t } = useTranslation()
+  const toast = useToast()
+  const [calls, setCalls] = useState<SipCall[]>([])
+  const [onlyMissed, setOnlyMissed] = useState(true)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await sipAPI.calls(onlyMissed)
+      setCalls(res.data)
+    } catch {
+      toast.error(t('intercomPage.callsFailed'))
+    } finally {
+      setLoading(false)
+    }
+  }, [onlyMissed, t, toast])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+          <input
+            type="checkbox"
+            checked={onlyMissed}
+            onChange={(e) => setOnlyMissed(e.target.checked)}
+          />
+          {t('intercomPage.callsOnlyMissed')}
+        </label>
+        <button className="btn btn-outline btn-sm" style={{ marginLeft: 'auto' }} onClick={() => void load()}>
+          <RefreshCw size={15} />
+          {t('intercomPage.refresh')}
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="spinner" />
+      ) : calls.length === 0 ? (
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+          {t('intercomPage.callsEmpty')}
+        </p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>{t('intercomPage.callsWhen')}</th>
+                <th>{t('intercomPage.callsFrom')}</th>
+                <th>{t('intercomPage.callsTo')}</th>
+                <th>{t('intercomPage.callsResult')}</th>
+                <th>{t('intercomPage.callsTalk')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calls.map((call) => (
+                <tr key={call.id}>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {new Date(call.started_at).toLocaleString()}
+                  </td>
+                  <td>{describeParty(call.from_name, call.from_number)}</td>
+                  <td>{describeParty(call.to_name, call.to_number)}</td>
+                  <td>
+                    <CallResult result={call.result} />
+                  </td>
+                  <td>
+                    {call.result === 'answered'
+                      ? formatTalk(call.talk_seconds)
+                      : call.clip_path
+                        // Значок записи показываем только там, где она есть:
+                        // пустая иконка выглядела бы как потерянная запись.
+                        ? `🎬 ${t('intercomPage.callsClip')}`
+                        : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Подпись участника вызова: имя важнее номера, но номер нужен для сверки. */
+function describeParty(name: string, number: string): string {
+  if (name && number) return `${name} (${number})`
+  return name || number || '—'
+}
+
+/** Длительность разговора в читаемом виде. */
+function formatTalk(seconds: number): string {
+  if (seconds <= 0) return '—'
+  const min = Math.floor(seconds / 60)
+  const sec = seconds % 60
+  return min > 0 ? `${min} м ${sec} с` : `${sec} с`
+}
+
+/** Результат вызова с цветом: пропущенные и недоступные видно сразу. */
+function CallResult({ result }: { result: SipCallResult }) {
+  const { t } = useTranslation()
+  const styles: Record<SipCallResult, { color: string; label: string }> = {
+    answered: { color: 'var(--success, #22c55e)', label: t('intercomPage.resultAnswered') },
+    missed: { color: 'var(--warning, #f59e0b)', label: t('intercomPage.resultMissed') },
+    busy: { color: 'var(--warning, #f59e0b)', label: t('intercomPage.resultBusy') },
+    unavailable: { color: 'var(--text-secondary)', label: t('intercomPage.resultUnavailable') },
+  }
+  const item = styles[result] ?? styles.missed
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: item.color }}>
+      {result !== 'answered' && <PhoneMissed size={14} />}
+      {item.label}
+    </span>
+  )
+}
+
 /* ============================ Вкладка: абоненты ============================ */
 
-function AccountsTab({
-  schema,
+function AccountsTab({  schema,
   accounts,
   total,
   canManage,

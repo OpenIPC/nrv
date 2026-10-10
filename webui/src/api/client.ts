@@ -1393,10 +1393,33 @@ export interface SipRule {
   created_at: string
 }
 
+/** Чем закончился звонок. */
+export type SipCallResult = 'answered' | 'missed' | 'busy' | 'unavailable'
+
+/** Одна запись журнала звонков домофонии. */
+export interface SipCall {
+  id: string
+  /** Идентификатор вызова в Asterisk: общий для всех его событий. */
+  call_id: string
+  started_at: string
+  ended_at?: string
+  from_number: string
+  from_name: string
+  to_number: string
+  to_name: string
+  to_account_id?: string | null
+  result: SipCallResult
+  /** Длительность разговора в секундах. Ноль для пропущенных. */
+  talk_seconds: number
+  notified: boolean
+  /** Путь к записи вызова. Пусто, если записи нет. */
+  clip_path?: string
+  created_at: string
+}
+
 export interface SipSchema {
   /** Управляет ли сервер конфигурацией Asterisk на этой установке. */
-  configured: boolean
-  /**
+  configured: boolean  /**
    * Доступна ли автонастройка устройств по сети. Выключена, если сервер
    * не смог определить свой адрес для устройств.
    */
@@ -1452,6 +1475,18 @@ export const sipAPI = {
   updateRule: (id: string, data: Partial<SipRule>) =>
     api.put<SipRule>(`/sip/rules/${id}`, data),
   deleteRule: (id: string) => api.delete(`/sip/rules/${id}`),
+
+  /**
+   * Журнал звонков домофонии.
+   *
+   * onlyMissed оставлен флагом, а не значением фильтра: выборка
+   * «кто звонил, а я не снял» — самая частая, и ради неё открывают
+   * журнал чаще всего.
+   */
+  calls: (onlyMissed = false, limit = 100) =>
+    api.get<SipCall[]>('/sip/calls', {
+      params: { only_missed: onlyMissed ? 'true' : undefined, limit },
+    }),
 
   /**
    * Прописать абонента в самом устройстве (трубки Fanvil).

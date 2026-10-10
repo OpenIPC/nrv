@@ -201,7 +201,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			WithProvisioning(sipProvisioner, cfg.PublicURL).
 			// Линия учётной записи и адрес WebSocket-транспорта: без них
 			// мобильное приложение не сможет зарегистрироваться.
-			WithUserLines(userLines, cfg.AsteriskWSPort)
+			WithUserLines(userLines, cfg.AsteriskWSPort).
+			// Журнал звонков: его ведёт наблюдатель по событиям Asterisk.
+			WithCalls(postgres.NewSipCallRepo(cfg.DB))
 	}
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
@@ -738,6 +740,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Post("/sip/provision", sipH.ProvisionDevice)
 
 				r.Get("/sip/accounts", sipH.ListAccounts)
+				// Журнал звонков: пропущенные и состоявшиеся вызовы.
+				// Его ведёт наблюдатель по событиям Asterisk.
+				r.Get("/sip/calls", sipH.Calls)
 				r.Post("/sip/accounts", sipH.CreateAccount)
 				// Файл настроек линии — для импорта в устройство вручную.
 				r.Get("/sip/accounts/{id}/config-file", sipH.ConfigFile)

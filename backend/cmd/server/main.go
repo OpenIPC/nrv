@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -511,6 +512,31 @@ func main() {
 		// пересоздании осталась бы прежней.
 		if err := sipBuilder.Sync(context.Background()); err != nil {
 			log.Error().Err(err).Msg("не удалось собрать конфигурацию SIP при старте")
+		}
+
+		// Наблюдение за вызовами: по событиям Asterisk видно, кто кому
+		// звонил и чем закончилось. О пропущенных вызовах сообщаем в
+		// Telegram и MAX, состоявшиеся пишем в журнал.
+		//
+		// Нужен не только пароль AMI, но и право читать события звонков
+		// (read = call в manager.conf): без него события просто не придут,
+		// и наблюдатель молча простоял бы впустую.
+		if cfg.AsteriskAMISecret != "" {
+			directory := service.NewSipDirectory(sipRepo)
+			watcher := service.NewIntercomCallWatcher(
+				postgres.NewSipCallRepo(db), directory,
+				missedCallNotifierAdapter{svc: notifier},
+			).WithClipRecorder(service.NewIntercomClipRecorder(cameraSvc, recorderSvc))
+
+			stream := service.NewAMIEventStream(
+				cfg.AsteriskAMIAddr, cfg.AsteriskAMIUser, cfg.AsteriskAMISecret,
+			)
+			go func() {
+				if err := watcher.Run(context.Background(), stream); err != nil &&
+					!errors.Is(err, context.Canceled) {
+					log.Error().Err(err).Msg("наблюдение за вызовами остановлено")
+				}
+			}()
 		}
 	}
 

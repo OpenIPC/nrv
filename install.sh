@@ -380,11 +380,12 @@ if [ "$ENABLE_SIP" -eq 1 ]; then
 ; Файл создан установщиком (install.sh --sip). В репозиторий не попадает:
 ; в нём пароль управления Asterisk.
 ;
-; Права минимальные: только перезагрузка конфигурации (command) и чтение
-; состояния (system, report) — больше серверу не нужно.
+; Права минимальные: перезагрузка конфигурации (command), чтение состояния
+; (system, report) и события звонков (call). Последнее нужно для уведомлений
+; о пропущенных вызовах: без категории call сервер не видит звонков вообще.
 [nvr]
 secret = ${AMI_SECRET}
-read = command,system,report
+read = command,system,report,call
 write = command,system
 EOF
 

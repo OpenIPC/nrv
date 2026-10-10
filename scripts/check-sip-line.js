@@ -22,10 +22,19 @@ globalThis.WebSocket = require('../mobile/node_modules/ws');
 // по сигнализации (ушёл ли INVITE и что ответила станция).
 globalThis.window = globalThis;
 
-const number = process.argv[2] || '301';
-const password = process.argv[3];
-const target = process.argv[4];
-const server = process.argv[5] || '192.168.1.111';
+// Разбор аргументов: флаг --hold может стоять в любом месте, поэтому
+// сначала вынимаем его вместе со значением, а остальные аргументы считаем
+// позиционными. Иначе флаг сдвигал бы номер сервера, и скрипт подключался
+// бы к «ws://90:8088/ws».
+const rawArgs = process.argv.slice(2);
+const holdIndex = rawArgs.indexOf('--hold');
+const holdSeconds = holdIndex >= 0 ? Number(rawArgs[holdIndex + 1] || 60) : 0;
+const positionalArgs = rawArgs.filter((_, index) => index !== holdIndex && index !== holdIndex + 1);
+
+const number = positionalArgs[0] || '301';
+const password = positionalArgs[1];
+const target = positionalArgs[2];
+const server = positionalArgs[3] || '192.168.1.111';
 const wsUrl = `ws://${server}:8088/ws`;
 
 if (!password) {
@@ -64,6 +73,11 @@ const finish = (code) => {
 
 ua.on('registered', () => {
   console.log(`РЕГИСТРАЦИЯ: линия ${number} на связи (${wsUrl})`);
+  if (holdSeconds > 0) {
+    console.log(`ДЕРЖУ ЛИНИЮ: ${holdSeconds} с`);
+    setTimeout(() => finish(0), holdSeconds * 1000);
+    return;
+  }
   if (!target) {
     finish(0);
     return;
@@ -120,6 +134,7 @@ ua.start();
 // Страховка от вечного ожидания: если станция молчит, скрипт должен
 // закончиться сам, а не висеть в терминале.
 setTimeout(() => {
+  if (holdSeconds > 0) return; // в режиме удержания срок задаётся отдельно
   console.error('ТАЙМАУТ: ответа от Asterisk нет');
   finish(1);
 }, 20000);

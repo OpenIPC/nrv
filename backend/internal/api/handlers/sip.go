@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -41,6 +42,9 @@ type SipHandler struct {
 	// Приложение подключается именно туда, и другого способа войти в
 	// телефонную сеть у него нет.
 	wsPort int
+	// calls — журнал звонков. Может быть nil: без настроенного AMI
+	// наблюдатель за вызовами не работает, и журнала тоже нет.
+	calls *postgres.SipCallRepo
 }
 
 // NewSipHandler создаёт обработчик. builder может быть nil — тогда
@@ -61,6 +65,43 @@ func (h *SipHandler) WithProvisioning(fanvil *service.FanvilProvisioner, publicU
 func (h *SipHandler) WithStatus(status service.SipStatusSource) *SipHandler {
 	h.status = status
 	return h
+}
+
+// WithCalls подключает журнал звонков.
+//
+// Может быть nil: журнал ведёт наблюдатель за вызовами, а он работает
+// только когда настроен AMI. Без журнала раздел домофонии остаётся
+// работоспособным — просто без списка вызовов.
+func (h *SipHandler) WithCalls(calls *postgres.SipCallRepo) *SipHandler {
+	h.calls = calls
+	return h
+}
+
+// Calls отдаёт журнал звонков.
+//
+// Параметр only_missed оставлен флагом, а не значением фильтра: выборка
+// «кто звонил, а я не снял» — самая частая, и она же нужна интерфейсу
+// для счётчика пропущенных.
+func (h *SipHandler) Calls(w http.ResponseWriter, r *http.Request) {
+	if h.calls == nil {
+		writeJSON(w, http.StatusOK, []domain.SipCall{})
+		return
+	}
+
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	onlyMissed := r.URL.Query().Get("only_missed") == "true"
+
+	calls, err := h.calls.List(r.Context(), limit, onlyMissed)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, calls)
 }
 
 // WithUserLines подключает выдачу линий учётным записям и порт WebSocket.
