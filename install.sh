@@ -128,17 +128,9 @@ say "Исходники"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [ -f "${SCRIPT_DIR}/docker-compose.yml" ]; then
-    # Скрипт запущен из репозитория: работаем с ним, копировать ничего
-    # не нужно — так установка с флешки или из распакованного архива
-    # не требует сети.
-    PROJECT_DIR="$SCRIPT_DIR"
-    echo "Использую каталог репозитория: $PROJECT_DIR"
-elif [ -f "${INSTALL_DIR}/docker-compose.yml" ] && [ "$UPDATE" -eq 0 ]; then
-    PROJECT_DIR="$INSTALL_DIR"
-    echo "Использую уже установленный каталог: $PROJECT_DIR"
-else
-    # Установка по сети: исходников рядом нет.
+# Скачивание исходников — отдельная функция: один и тот же путь нужен и при
+# установке по сети, и при обновлении, и расходиться им нельзя.
+fetch_sources() {
     command -v curl >/dev/null 2>&1 || apt-get install -y -qq curl
     command -v tar >/dev/null 2>&1 || apt-get install -y -qq tar
 
@@ -161,9 +153,28 @@ else
     fi
     cp -a "$INNER"/. "$INSTALL_DIR"/
     rm -rf "$TMP_DIR"
+    echo "Исходники разложены: $INSTALL_DIR"
+}
 
+# Порядок веток важен. Обновление проверяется ПЕРВЫМ: иначе запуск
+# `bash install.sh --update` из самого каталога установки попадал бы в ветку
+# «использую каталог репозитория», работал бы по прежнему коду — и
+# обновления не происходило бы вовсе, оставаясь незаметным.
+if [ "$UPDATE" -eq 1 ]; then
+    fetch_sources
     PROJECT_DIR="$INSTALL_DIR"
-    echo "Исходники разложены: $PROJECT_DIR"
+elif [ -f "${SCRIPT_DIR}/docker-compose.yml" ]; then
+    # Скрипт запущен из репозитория: работаем с ним, копировать ничего
+    # не нужно — так установка с флешки или из распакованного архива
+    # не требует сети.
+    PROJECT_DIR="$SCRIPT_DIR"
+    echo "Использую каталог репозитория: $PROJECT_DIR"
+elif [ -f "${INSTALL_DIR}/docker-compose.yml" ]; then
+    PROJECT_DIR="$INSTALL_DIR"
+    echo "Использую уже установленный каталог: $PROJECT_DIR"
+else
+    fetch_sources
+    PROJECT_DIR="$INSTALL_DIR"
 fi
 
 cd "$PROJECT_DIR"
