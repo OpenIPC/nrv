@@ -234,7 +234,10 @@ export default function CamerasPage() {
       ) : (
         <div className="grid grid-3">
           {cameras.map((cam) => {
-            const isOnline = cam.status === 'online' || cam.status === 'recording'
+            // Выключенная камера — не «нет связи»: её сняли с работы
+            // намеренно, и показывать её аварией нельзя.
+            const isDisabled = !cam.enabled
+            const isOnline = !isDisabled && (cam.status === 'online' || cam.status === 'recording')
             const hasMainStream = !!(cam.main_stream || cam.rtsp_url)
 
             return (
@@ -251,9 +254,9 @@ export default function CamerasPage() {
                       он определяет, какие настройки на камере существуют. */}
                   <VendorBadge vendor={cam.vendor} verbose />
                 </div>
-                <span className={`badge badge-${isOnline ? (cam.status === 'recording' ? 'recording' : 'online') : 'offline'}`}>
+                <span className={`badge badge-${isDisabled ? 'offline' : isOnline ? (cam.status === 'recording' ? 'recording' : 'online') : 'offline'}`}>
                   <span className={`badge-dot badge-dot-${isOnline ? 'online' : 'offline'}`} />
-                  {cam.status}
+                  {isDisabled ? t('cameraPage.disabled') : cam.status}
                 </span>
               </div>
 

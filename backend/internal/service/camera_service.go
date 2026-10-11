@@ -433,8 +433,11 @@ func (s *CameraService) Create(ctx context.Context, req domain.CreateCameraReque
 		MAC:        req.MAC,
 		Firmware:   req.Firmware,
 		Status:     "offline",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		// Новая камера всегда включена: заводят её именно для того, чтобы
+		// смотреть. Выключение — отдельное действие в карточке.
+		Enabled:   true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 	// Производитель определяем сразу при заведении камеры, а не в момент
 	// показа карточки.
@@ -579,6 +582,13 @@ func (s *CameraService) RestoreStreams(ctx context.Context) {
 	restored := 0
 	for i := range cameras {
 		cam := cameras[i]
+		if !cam.Enabled {
+			// Камера выключена: поток поднимать не нужно, а оставшийся
+			// с прошлого запуска путь снимаем — иначе медиасервер снова
+			// начнёт тянуть с камеры RTSP.
+			s.stopCameraStreams(ctx, &cam)
+			continue
+		}
 		mainRTSP := cam.MainStream
 		if mainRTSP == "" {
 			mainRTSP = cam.RTSPUrl
@@ -784,6 +794,15 @@ func (s *CameraService) Update(ctx context.Context, id uuid.UUID, req domain.Upd
 		cam.PTZ = *req.PTZ
 	}
 
+	// Включение и выключение камеры. Сравниваем со текущим значением,
+	// чтобы понять, надо ли трогать потоки: одно только сохранение
+	// карточки не должно ничего перезапускать.
+	enabledChanged := false
+	if req.Enabled != nil && *req.Enabled != cam.Enabled {
+		cam.Enabled = *req.Enabled
+		enabledChanged = true
+	}
+
 	// Смена номера канала меняет внешний адрес потока. Запоминаем
 	// прежний номер: по нему нужно снять старый адрес, иначе он
 	// продолжит отдавать поток и внешняя система получит не ту камеру.
@@ -800,6 +819,18 @@ func (s *CameraService) Update(ctx context.Context, id uuid.UUID, req domain.Upd
 		} else {
 			cam.ChannelNumber = req.ChannelNumber
 			newChannel = *req.ChannelNumber
+		}
+	}
+
+	// Статус выключенной камеры — «выключена», а не «пропала»: иначе она
+	// попадёт в статистику как неисправная, а монитор будет искать причину
+	// недоступности там, где её нет. При включении возвращаем «offline» —
+	// монитор перепроверит связь сам.
+	if enabledChanged {
+		if cam.Enabled {
+			cam.Status = "offline"
+		} else {
+			cam.Status = "disabled"
 		}
 	}
 
@@ -832,7 +863,7 @@ func (s *CameraService) Update(ctx context.Context, id uuid.UUID, req domain.Upd
 
 	// Если изменились потоки или креды — перерегистрируем в go2rtc.
 	// Удаляем синхронно, чтобы не было гонки: add после remove.
-	if changed {
+	if changed && cam.Enabled {
 		_ = s.removeStreamPath(cam.ID.String())
 		_ = s.removeStreamPath(cam.ID.String() + "_sub")
 		_ = s.removeStreamPath(AudioStreamName(cam.ID))
@@ -861,7 +892,46 @@ func (s *CameraService) Update(ctx context.Context, id uuid.UUID, req domain.Upd
 		}
 	}
 
+	// Выключенную камеру снимаем с потоков, включённую поднимаем обратно.
+	//
+	// Без остановки выключение было бы только записью в базу: пока путь
+	// живёт в медиасервере, камера продолжает отдавать RTSP-сессию, а
+	// публикатор кадров тянет из неё кадры — то есть нагрузка на канал и на
+	// саму камеру остаётся, ради снятия которой всё и делается.
+	if enabledChanged {
+		if cam.Enabled {
+			s.registerStreams(cam, "", "")
+			if s.externalRTSP != nil && cam.ChannelNumber != nil {
+				if err := s.externalRTSP.Republish(ctx, cam.ID, *cam.ChannelNumber, *cam.ChannelNumber); err != nil {
+					log.Warn().Err(err).Str("camera_id", cam.ID.String()[:8]).
+						Msg("камера включена, но внешний адрес не восстановлен")
+				}
+			}
+		} else {
+			s.stopCameraStreams(ctx, cam)
+		}
+	}
+
 	return cam, nil
+}
+
+// stopCameraStreams снимает камеру с потоков: убирает пути из медиасервера
+// и снимает внешнюю публикацию.
+//
+// Выключенная камера не должна отдавать ни одной сессии. Отдельный метод,
+// а не строчки внутри Update, потому что то же самое нужно при
+// восстановлении потоков после перезапуска сервера.
+func (s *CameraService) stopCameraStreams(ctx context.Context, cam *domain.Camera) {
+	_ = s.removeStreamPath(cam.ID.String())
+	_ = s.removeStreamPath(cam.ID.String() + "_sub")
+	_ = s.removeStreamPath(AudioStreamName(cam.ID))
+
+	if s.externalRTSP != nil && cam.ChannelNumber != nil {
+		if err := s.externalRTSP.Unpublish(ctx, *cam.ChannelNumber); err != nil {
+			log.Warn().Int("канал", *cam.ChannelNumber).Err(err).
+				Msg("не удалось снять внешний адрес выключенной камеры")
+		}
+	}
 }
 
 // ExternalChannels возвращает каналы, опубликованные для внешнего доступа,

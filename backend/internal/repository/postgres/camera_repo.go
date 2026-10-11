@@ -28,7 +28,7 @@ func (r *CameraRepo) List(ctx context.Context) ([]domain.Camera, error) {
 			COALESCE(firmware, '') as firmware,
 			COALESCE(vendor, 'unknown') as vendor,
 			site_id, COALESCE(wg_ip::text, '') as wg_ip, status, hw_info, settings,
-			channel_number, created_at, updated_at
+			channel_number, enabled, created_at, updated_at
 		FROM cameras ORDER BY created_at DESC
 	`)
 	if err != nil {
@@ -42,7 +42,7 @@ func (r *CameraRepo) List(ctx context.Context) ([]domain.Camera, error) {
 		var hwInfo, settings []byte
 		if err := rows.Scan(&c.ID, &c.Name, &c.RTSPUrl, &c.MainStream, &c.SubStream, &c.IP, &c.MAC, &c.Firmware, &c.Vendor,
 			&c.SiteID, &c.WGIP,
-			&c.Status, &hwInfo, &settings, &c.ChannelNumber, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			&c.Status, &hwInfo, &settings, &c.ChannelNumber, &c.Enabled, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if hwInfo != nil {
@@ -81,11 +81,11 @@ func (r *CameraRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Camera,
 			COALESCE(firmware, '') as firmware,
 			COALESCE(vendor, 'unknown') as vendor,
 			site_id, COALESCE(wg_ip::text, '') as wg_ip, status, hw_info, settings,
-			channel_number, created_at, updated_at
+			channel_number, enabled, created_at, updated_at
 		FROM cameras WHERE id = $1
 	`, id).Scan(&c.ID, &c.Name, &c.RTSPUrl, &c.MainStream, &c.SubStream, &c.IP, &c.MAC, &c.Firmware, &c.Vendor,
 		&c.SiteID, &c.WGIP,
-		&c.Status, &hwInfo, &settings, &c.ChannelNumber, &c.CreatedAt, &c.UpdatedAt)
+		&c.Status, &hwInfo, &settings, &c.ChannelNumber, &c.Enabled, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func (r *CameraRepo) ListByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.C
 			COALESCE(firmware, '') as firmware,
 			COALESCE(vendor, 'unknown') as vendor,
 			site_id, COALESCE(wg_ip::text, '') as wg_ip, status, hw_info, settings,
-			channel_number, created_at, updated_at
+			channel_number, enabled, created_at, updated_at
 		FROM cameras WHERE id = ANY($1)
 	`, ids)
 	if err != nil {
@@ -134,7 +134,7 @@ func (r *CameraRepo) ListByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.C
 		if err := rows.Scan(&c.ID, &c.Name, &c.RTSPUrl, &c.MainStream, &c.SubStream,
 			&c.IP, &c.MAC, &c.Firmware, &c.Vendor, &c.SiteID, &c.WGIP,
 			&c.Status, &hwInfo, &settings, &c.ChannelNumber,
-			&c.CreatedAt, &c.UpdatedAt); err != nil {
+			&c.Enabled, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if hwInfo != nil {
@@ -153,12 +153,12 @@ func (r *CameraRepo) Create(ctx context.Context, cam *domain.Camera) error {
 	hwInfo, _ := json.Marshal(cam.HWInfo)
 	settings, _ := json.Marshal(cam.Settings)
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO cameras (id, name, rtsp_url, main_stream, sub_stream, ip, mac, firmware, vendor, site_id, wg_ip, status, hw_info, settings, channel_number, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')::inet, $12, $13, $14, $15, $16, $17)
+			INSERT INTO cameras (id, name, rtsp_url, main_stream, sub_stream, ip, mac, firmware, vendor, site_id, wg_ip, status, hw_info, settings, channel_number, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')::inet, $12, $13, $14, $15, $16, $17, $18)
 	`, cam.ID, cam.Name, cam.RTSPUrl, cam.MainStream, cam.SubStream, cam.IP, cam.MAC, cam.Firmware,
 		vendorOrDefault(cam.Vendor),
 		cam.SiteID, cam.WGIP,
-		cam.Status, hwInfo, settings, cam.ChannelNumber, cam.CreatedAt, cam.UpdatedAt)
+		cam.Status, hwInfo, settings, cam.ChannelNumber, cam.Enabled, cam.CreatedAt, cam.UpdatedAt)
 	return err
 }
 
@@ -181,10 +181,10 @@ func (r *CameraRepo) Update(ctx context.Context, cam *domain.Camera) error {
 	_, err := r.db.Exec(ctx, `
 		UPDATE cameras SET name=$2, rtsp_url=$3, main_stream=$4, sub_stream=$5, ip=$6, mac=$7, firmware=$8,
 		vendor=$9, site_id=$10, wg_ip=NULLIF($11, '')::inet, status=$12,
-		hw_info=$13, settings=$14, channel_number=$15, updated_at=$16 WHERE id=$1
+		hw_info=$13, settings=$14, channel_number=$15, enabled=$16, updated_at=$17 WHERE id=$1
 	`, cam.ID, cam.Name, cam.RTSPUrl, cam.MainStream, cam.SubStream, cam.IP, cam.MAC, cam.Firmware,
 		vendorOrDefault(cam.Vendor), cam.SiteID, cam.WGIP,
-		cam.Status, hwInfo, settings, cam.ChannelNumber, cam.UpdatedAt)
+		cam.Status, hwInfo, settings, cam.ChannelNumber, cam.Enabled, cam.UpdatedAt)
 	return err
 }
 
@@ -242,6 +242,9 @@ func (r *CameraRepo) ListForStatusCheck(ctx context.Context) ([]domain.Camera, e
 		       COALESCE(sub_stream, '') as sub_stream,
 		       status, settings
 		FROM cameras
+		-- Выключенные камеры в проверку не берём: они недоступны намеренно,
+		-- и тревога «камера пропала» по ним была бы ложной.
+		WHERE enabled
 	`)
 	if err != nil {
 		return nil, err

@@ -105,7 +105,13 @@ export default function DashboardPage() {
       label: t('dashboardPage.totalCameras'),
       value: s.total_cameras,
       icon: Video,
-      sub: t('dashboardPage.onlineCount', { count: s.online_cameras }),
+      // Выключенные камеры показываем отдельно: они есть в системе, но в
+      // работе не участвуют, и путать их с рабочими нельзя.
+      sub:
+        t('dashboardPage.onlineCount', { count: s.online_cameras }) +
+        (s.disabled_cameras > 0
+          ? ` · ${t('dashboardPage.disabledCount', { count: s.disabled_cameras })}`
+          : ''),
     },
     { label: t('dashboardPage.events24h'), value: s.total_events_24h, icon: AlertTriangle },
     {

@@ -282,6 +282,10 @@ def load_cameras(db_url: str) -> list[dict]:
                 FROM cameras c
                 LEFT JOIN detection_settings d ON d.camera_id = c.id
                 WHERE COALESCE(NULLIF(c.sub_stream, ''), NULLIF(c.main_stream, ''), c.rtsp_url) IS NOT NULL
+                  -- Выключенные камеры не публикуются: для них не запускается
+                  -- ни одного процесса ffmpeg, то есть снята и нагрузка на
+                  -- камеру, и работа декодирования на процессоре.
+                  AND c.enabled
                 ORDER BY c.created_at
             """)
             return [

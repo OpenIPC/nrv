@@ -28,6 +28,12 @@ type Camera struct {
 	WGIP   string     `json:"wg_ip,omitempty"`
 	Status string     `json:"status"` // online, offline, recording
 	PTZ    bool       `json:"ptz"`    // поддерживает ли камера поворот (ONVIF PTZ)
+	// Enabled — камера включена в работу. Выключенная остаётся в списке
+	// (со своей историей и настройками), но к ней не обращаются: поток не
+	// поднимается, детекция и запись не идут, мониторинг не считает её
+	// пропавшей. Нужно для камер на ремонте и для ограничения нагрузки
+	// при испытаниях.
+	Enabled bool `json:"enabled"`
 	// ChannelNumber — номер канала для внешнего RTSP-доступа. В адресе
 	// потока он идёт со смещением на минус один: канал 1 это cameras/0.
 	// nil означает, что канал не назначен и камера по внешнему адресу
@@ -932,6 +938,10 @@ type UpdateCameraRequest struct {
 	Username *string `json:"username,omitempty"`
 	Password *string `json:"password,omitempty"`
 	PTZ      *bool   `json:"ptz,omitempty"`
+	// Enabled — включить или выключить камеру. Указатель, а не bool:
+	// «не передано» и «выключить» — разные вещи, и с обычным bool
+	// любое сохранение карточки выключало бы камеру.
+	Enabled *bool `json:"enabled,omitempty"`
 	// ChannelNumber — номер канала для внешнего RTSP-доступа.
 	ChannelNumber *int `json:"channel_number,omitempty"`
 }
@@ -1167,6 +1177,10 @@ type Stats struct {
 	DiskTotalGB    float64 `json:"disk_total_gb"`
 	ACSOnline      int     `json:"acs_online"`
 	ACSTotal       int     `json:"acs_total"`
+	// DisabledCameras — камеры, выключенные вручную. Отдельно от online и
+	// от общего числа: выключенная камера не «пропала», и в отчёте о
+	// неисправностях её быть не должно.
+	DisabledCameras int `json:"disabled_cameras"`
 
 	// Показатели сервера. Считаются по разнице двух замеров, поэтому
 	// при первом запросе после запуска загрузка процессора и скорость

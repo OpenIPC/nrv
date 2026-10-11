@@ -65,9 +65,12 @@ func (h *StatsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	stats := domain.Stats{}
 
-	// Количество камер
+	// Количество камер. Всего — вместе с выключенными: они есть в системе,
+	// и оператор должен видеть, сколько камер он отключил сам. А вот в
+	// «онлайн» выключенные не идут — иначе цифра выглядела бы поломкой.
 	h.db.QueryRow(ctx, `SELECT COUNT(*) FROM cameras`).Scan(&stats.TotalCameras)
-	h.db.QueryRow(ctx, `SELECT COUNT(*) FROM cameras WHERE status = 'online'`).Scan(&stats.OnlineCameras)
+	h.db.QueryRow(ctx, `SELECT COUNT(*) FROM cameras WHERE status = 'online' AND enabled`).Scan(&stats.OnlineCameras)
+	h.db.QueryRow(ctx, `SELECT COUNT(*) FROM cameras WHERE NOT enabled`).Scan(&stats.DisabledCameras)
 
 	// События за 24 часа
 	h.db.QueryRow(ctx,

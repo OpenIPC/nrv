@@ -80,6 +80,9 @@ export interface Camera {
   wg_ip?: string
   status: 'online' | 'offline' | 'recording'
   ptz?: boolean
+  // enabled — камера включена в работу. Выключенная остаётся в списке со
+  // своей историей, но поток не поднимается и детекция не идёт.
+  enabled: boolean
   // Номер канала для внешнего RTSP-доступа. В адресе потока идёт
   // со смещением на минус один: канал 1 → cameras/0.
   channel_number?: number
@@ -1134,6 +1137,9 @@ export interface Stats {
   disk_total_gb: number
   acs_online: number
   acs_total: number
+  // disabled_cameras — камеры, выключенные вручную: они не «пропали», и в
+  // числе рабочих их показывать нельзя.
+  disabled_cameras: number
   // Показатели сервера. Загрузка процессора и скорость сети считаются по
   // разнице двух замеров, поэтому сразу после запуска бэкенда они нулевые.
   cpu_usage_percent: number
@@ -1572,6 +1578,8 @@ export const camerasAPI = {
     ip?: string; mac?: string; firmware?: string; vendor?: string; status?: string;
     username?: string; password?: string; wg_ip?: string; ptz?: boolean;
     channel_number?: number;
+    // enabled — включить или выключить камеру.
+    enabled?: boolean;
   }) => api.patch<Camera>(`/cameras/${id}`, data),
   delete: (id: string) => api.delete(`/cameras/${id}`),
   // Перезапуск стримера камеры (служба Majestic на OpenIPC)

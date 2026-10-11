@@ -21,7 +21,7 @@ import CameraNetworkCard from '../components/CameraNetworkCard'
 import CameraDeviceCard from '../components/CameraDeviceCard'
 import {
   ArrowLeft, RefreshCw, Wifi, WifiOff, Radio, Info,
-  Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, Loader2, Crosshair, Volume2, Sliders,
+  Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, PowerOff, Loader2, Crosshair, Volume2, Sliders,
   Clock, ScrollText, Activity, Layers,
 } from 'lucide-react'
 
@@ -73,6 +73,8 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
   const [liveTransport, setLiveTransport] = useState<'webrtc' | 'mse' | null>(null)
   // Какая команда выполняется сейчас: блокируем все кнопки, пока идёт одна.
   const [busy, setBusy] = useState<'restart' | 'reboot' | 'recreate' | 'ntp' | 'logs' | 'majestic' | null>(null)
+  // Переключение «включена/выключена»: показываем, что запрос идёт.
+  const [toggling, setToggling] = useState(false)
 
   // Состояние времени камеры. Читаем сразу при открытии карточки: если
   // камера ходит за временем в интернет, это лучше увидеть сразу, а не
@@ -174,6 +176,27 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
       loadMajestic()
     }
     toast.success(t('cameraPage.dataUpdated'))
+  }
+
+  // Включение и выключение камеры.
+  //
+  // Выключение снимает камеру с потоков целиком: медиасервер перестаёт
+  // держать RTSP-сессию, публикатор кадров — читать кадры, детекция и
+  // запись не идут. Это нужно и для камеры на ремонте, и когда часть камер
+  // намеренно держат выключенными, чтобы не грузить сеть и видеокарту.
+  const toggleEnabled = async () => {
+    if (!camera) return
+    const next = !camera.enabled
+    setToggling(true)
+    try {
+      await camerasAPI.update(camera.id, { enabled: next })
+      await refetch()
+      toast.success(next ? t('cameraPage.enabledToast') : t('cameraPage.disabledToast'))
+    } catch {
+      toast.error(t('cameraPage.toggleFailed'))
+    } finally {
+      setToggling(false)
+    }
   }
 
   // Проверка стримера по требованию. Нужна, когда камера не показывает
@@ -340,6 +363,9 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
   }
 
   const isOnline = camera.status === 'online' || camera.status === 'recording'
+  // Выключенная камера — не «пропала»: и вид, и подпись у неё свои,
+  // иначе выключение выглядело бы аварией.
+  const isDisabled = !camera.enabled
 
   return (
     <div>
@@ -358,9 +384,9 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
         <div>
           <h1 style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {camera.name}
-            <span className={`badge badge-${isOnline ? 'online' : 'offline'}`}>
-              <span className={`badge-dot badge-dot-${isOnline ? 'online' : 'offline'}`} />
-              {camera.status}
+            <span className={`badge badge-${isDisabled ? 'offline' : isOnline ? 'online' : 'offline'}`}>
+              <span className={`badge-dot badge-dot-${isDisabled ? 'offline' : isOnline ? 'online' : 'offline'}`} />
+              {isDisabled ? t('cameraPage.disabled') : camera.status}
             </span>
             {/* Производитель в заголовке — не украшение. Он объясняет,
                 почему ниже часть разделов выглядит иначе: на не-OpenIPC
@@ -373,9 +399,18 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
             <VendorBadge vendor={camera.vendor} />
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-            {isOnline ? t('cameraPage.active') : t('cameraPage.offline')}
+            {isDisabled ? t('cameraPage.disabledHint') : isOnline ? t('cameraPage.active') : t('cameraPage.offline')}
           </p>
         </div>
+        <button
+          className={camera.enabled ? 'btn btn-outline btn-sm' : 'btn btn-primary btn-sm'}
+          onClick={toggleEnabled}
+          disabled={toggling}
+          style={{ marginRight: 8 }}
+        >
+          {toggling ? <Loader2 size={16} className="spin" /> : camera.enabled ? <PowerOff size={16} /> : <Power size={16} />}
+          {camera.enabled ? t('cameraPage.disable') : t('cameraPage.enable')}
+        </button>
         <button className="btn btn-outline btn-sm" onClick={handleRefresh}>
           <RefreshCw size={16} />
           {t('cameraPage.refresh')}
