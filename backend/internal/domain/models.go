@@ -1167,4 +1167,55 @@ type Stats struct {
 	DiskTotalGB    float64 `json:"disk_total_gb"`
 	ACSOnline      int     `json:"acs_online"`
 	ACSTotal       int     `json:"acs_total"`
+
+	// Показатели сервера. Считаются по разнице двух замеров, поэтому
+	// при первом запросе после запуска загрузка процессора и скорость
+	// сети приходят нулевыми — интервал усреднения ещё не набран.
+	CPUUsagePercent float64 `json:"cpu_usage_percent"`
+	CPUCores        int     `json:"cpu_cores"`
+	Load1           float64 `json:"load1"`
+	Load5           float64 `json:"load5"`
+	Load15          float64 `json:"load15"`
+	MemTotalMB      float64 `json:"mem_total_mb"`
+	MemUsedMB       float64 `json:"mem_used_mb"`
+	MemUsedPercent  float64 `json:"mem_used_percent"`
+	UptimeSec       int64   `json:"uptime_sec"`
+
+	// Сеть: активный интерфейс, скорость линка и текущий трафик.
+	//
+	// Интерфейс определяется по маршруту по умолчанию, а не по списку
+	// известных имён: в другой установке адаптер называется иначе.
+	NetInterface     string  `json:"net_interface"`
+	NetLinkSpeedMbps float64 `json:"net_link_speed_mbps"`
+	NetUp            bool    `json:"net_up"`
+	NetRxMbps        float64 `json:"net_rx_mbps"`
+	NetTxMbps        float64 `json:"net_tx_mbps"`
+	NetRxTotalGB     float64 `json:"net_rx_total_gb"`
+	NetTxTotalGB     float64 `json:"net_tx_total_gb"`
+	NetRxErrors      uint64  `json:"net_rx_errors"`
+	NetTxErrors      uint64  `json:"net_tx_errors"`
+
+	// Видеокарты и датчики температуры приходят со службы на хосте: в
+	// контейнере ни карты, ни датчиков не видно. Пустой список означает,
+	// что данных нет, а не что карта не загружена.
+	GPUs    []GPUStat `json:"gpus"`
+	CPUTemp *float64  `json:"cpu_temp"`
+
+	// Домофония: сколько абонентов заведено и сколько на связи. Число
+	// онлайн берётся у Asterisk, а не из нашего журнала: регистрация —
+	// факт состояния SIP, а не событие нашей базы.
+	SIPTotal  int `json:"sip_total"`
+	SIPOnline int `json:"sip_online"`
+}
+
+// GPUStat — состояние одной видеокарты для панели показателей.
+//
+// Числовые поля — указатели: nvidia-smi отдаёт «N/A» там, где датчика
+// нет, и ноль загрузки нужно отличать от отсутствия данных.
+type GPUStat struct {
+	Name          string   `json:"name"`
+	Utilization   *float64 `json:"utilization"`
+	MemoryUsedMB  *float64 `json:"memory_used_mb"`
+	MemoryTotalMB *float64 `json:"memory_total_mb"`
+	Temperature   *float64 `json:"temperature"`
 }

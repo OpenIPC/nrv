@@ -18,6 +18,7 @@ import (
 	miniorepo "github.com/nvr/backend/internal/repository/minio"
 	"github.com/nvr/backend/internal/repository/postgres"
 	"github.com/nvr/backend/internal/service"
+	"github.com/nvr/backend/internal/sysinfo"
 	"github.com/nvr/backend/internal/tunnel"
 )
 
@@ -94,8 +95,17 @@ type RouterConfig struct {
 	// Отдельно от Notifier: уведомление в мессенджер и вебхук решают
 	// разные задачи — первое адресовано человеку, второе чужой программе.
 	WebhookSvc *service.WebhookService
-	// HostAgent обращается к службе на хосте для смены времени и сети
+	// HostAgent обращается к службе на хосте для смены времени и сети.
+	// Её же панель управления спрашивает о видеокартах и температуре:
+	// в контейнере этих датчиков не видно.
 	HostAgent *hostagent.Client
+	// SysReader снимает показатели сервера для панели управления.
+	//
+	// Держим отдельный читатель от того, что отдан монитору: скорость
+	// сети и загрузка процессора считаются по разнице двух замеров, и
+	// два потребителя одного читателя сдвигали бы замеры друг другу —
+	// оба видели бы нули через раз.
+	SysReader *sysinfo.Reader
 	// SIPRepo и SipBuilder — домофония: абоненты, группы вызова, правила.
 	//
 	// Сборщик конфигурации Asterisk может быть nil: телефония выключена
@@ -207,7 +217,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	}
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
-	statsH := handlers.NewStatsHandler(cfg.DB)
+	statsH := handlers.NewStatsHandler(cfg.DB, cfg.SysReader, cfg.HostAgent, cfg.SipStatus)
 	detH := handlers.NewDetectionSettingsHandler(postgres.NewDetectionSettingsRepo(cfg.DB))
 	if cfg.RetentionSvc != nil {
 		detH.WithRetention(cfg.RetentionSvc)

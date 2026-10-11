@@ -1134,6 +1134,43 @@ export interface Stats {
   disk_total_gb: number
   acs_online: number
   acs_total: number
+  // Показатели сервера. Загрузка процессора и скорость сети считаются по
+  // разнице двух замеров, поэтому сразу после запуска бэкенда они нулевые.
+  cpu_usage_percent: number
+  cpu_cores: number
+  load1: number
+  load5: number
+  load15: number
+  mem_total_mb: number
+  mem_used_mb: number
+  mem_used_percent: number
+  uptime_sec: number
+  // Сеть: активный интерфейс, скорость линка и текущий трафик.
+  // net_link_speed_mbps = 0 означает «адаптер не сообщает скорость» —
+  // так ведут себя виртуальные адаптеры.
+  net_interface: string
+  net_link_speed_mbps: number
+  net_up: boolean
+  net_rx_mbps: number
+  net_tx_mbps: number
+  net_rx_total_gb: number
+  net_tx_total_gb: number
+  net_rx_errors: number
+  net_tx_errors: number
+  // gpus пуст, если данных о видеокартах нет: служба на хосте недоступна
+  // или карта не установлена. Это не то же самое, что нулевая загрузка.
+  gpus: GPUStat[]
+  cpu_temp: number | null
+  sip_total: number
+  sip_online: number
+}
+
+export interface GPUStat {
+  name: string
+  utilization: number | null
+  memory_used_mb: number | null
+  memory_total_mb: number | null
+  temperature: number | null
 }
 
 export interface StreamInfo {

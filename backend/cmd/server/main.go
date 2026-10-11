@@ -540,6 +540,11 @@ func main() {
 		}
 	}
 
+	// Панель управления показывает загрузку процессора и сети. Читатель
+	// здесь свой, а не общий с монитором: обе величины считаются по
+	// разнице двух замеров, и общий читатель сдвигал бы замеры монитору.
+	statsReader := sysinfo.NewReader(cfg.RecordBufferDir)
+
 	// Инициализация роутера
 	router := api.NewRouter(api.RouterConfig{
 		CameraSvc:        cameraSvc,
@@ -578,6 +583,7 @@ func main() {
 		Notifier:   notifier,
 		WebhookSvc: webhookSvc,
 		HostAgent:  hostAgent,
+		SysReader:  statsReader,
 		SIPRepo:    sipRepo,
 		SipBuilder: sipBuilder,
 		SipStatus:  sipStatus,

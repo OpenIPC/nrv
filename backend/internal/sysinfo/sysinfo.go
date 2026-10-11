@@ -1,8 +1,9 @@
-// Пакет sysinfo читает состояние самого сервера: процессор, память, диск.
+// Пакет sysinfo читает состояние самого сервера: процессор, память, диск и
+// сеть.
 //
 // Читаем файлы /proc и statfs, а не тянем стороннюю библиотеку: нужны
-// ровно три величины, и своя реализация избавляет от зависимости, которую
-// пришлось бы обновлять ради безопасности.
+// ровно несколько величин, и своя реализация избавляет от зависимости,
+// которую пришлось бы обновлять ради безопасности.
 //
 // Температура и состояние видеокарты сюда не входят: в контейнере этих
 // данных нет, их отдаёт служба на хосте (см. hostagent).
@@ -10,6 +11,7 @@ package sysinfo
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -54,11 +56,38 @@ type Disk struct {
 	UsedPercent float64
 }
 
+// Network — состояние сетевого адаптера.
+//
+// Смотрим один интерфейс — тот, через который идёт трафик (маршрут по
+// умолчанию), а не сумму по всем: у сервера есть ещё docker-мосты, и их
+// трафик к сети дома отношения не имеет.
+type Network struct {
+	// Interface — имя активного интерфейса.
+	Interface string
+	// LinkSpeedMbps — скорость соединения в Мбит/с; 0, если адаптер её
+	// не сообщает (бывает у виртуальных).
+	LinkSpeedMbps float64
+	// Up — поднят ли линк.
+	Up bool
+	// RxMbps и TxMbps — текущая скорость обмена в Мбит/с. Считается по
+	// разнице с предыдущим замером, поэтому в первом снимке равна нулю.
+	RxMbps float64
+	TxMbps float64
+	// RxTotalGB и TxTotalGB — сколько всего принято и отдано.
+	RxTotalGB float64
+	TxTotalGB float64
+	// RxErrors и TxErrors — счётчики ошибок. Растут при проблемах с кабелем
+	// или портом коммутатора.
+	RxErrors uint64
+	TxErrors uint64
+}
+
 // Snapshot — состояние сервера на момент замера.
 type Snapshot struct {
 	CPU       CPU
 	Memory    Memory
 	Disk      Disk
+	Network   Network
 	UptimeSec int64
 	TakenAt   time.Time
 }
@@ -73,12 +102,20 @@ type cpuSample struct {
 	at    time.Time
 }
 
-// Reader читает состояние сервера и помнит предыдущий замер процессора.
+// netSample — предыдущий замер сетевого адаптера.
+type netSample struct {
+	rx uint64
+	tx uint64
+	at time.Time
+}
+
+// Reader читает состояние сервера и помнит предыдущие замеры.
 type Reader struct {
 	diskPath string
 
 	mu      sync.Mutex
 	prevCPU cpuSample
+	prevNet netSample
 }
 
 // NewReader собирает читателя состояния сервера.
@@ -101,11 +138,128 @@ func (r *Reader) Snapshot() Snapshot {
 		CPU:       r.readCPU(now),
 		Memory:    r.readMemory(),
 		Disk:      r.readDisk(),
+		Network:   r.readNetwork(now),
 		UptimeSec: readUptime(),
 		TakenAt:   now,
 	}
 
 	return snap
+}
+
+// readNetwork читает состояние активного сетевого адаптера.
+func (r *Reader) readNetwork(now time.Time) Network {
+	net := Network{}
+
+	iface := readDefaultInterface()
+	if iface == "" {
+		return net
+	}
+
+	net.Interface = iface
+	net.LinkSpeedMbps = readLinkSpeed(iface)
+	net.Up = readOperState(iface) == "up"
+
+	rx, tx, rxErr, txErr, err := readNetDev(iface)
+	if err != nil {
+		return net
+	}
+
+	net.RxErrors, net.TxErrors = rxErr, txErr
+	net.RxTotalGB = float64(rx) / (1024 * 1024 * 1024)
+	net.TxTotalGB = float64(tx) / (1024 * 1024 * 1024)
+
+	// Скорость считаем по разнице с прошлым замером: в /proc/net/dev лежат
+	// накопленные счётчики, а не текущая скорость.
+	prev := r.prevNet
+	r.prevNet = netSample{rx: rx, tx: tx, at: now}
+
+	// Счётчики могут обнулиться (перезагрузка, пересоздание интерфейса) —
+	// тогда разница отрицательная, и показывать её нельзя.
+	if !prev.at.IsZero() && rx >= prev.rx && tx >= prev.tx {
+		if seconds := now.Sub(prev.at).Seconds(); seconds > 0.5 {
+			net.RxMbps = float64(rx-prev.rx) * 8 / 1e6 / seconds
+			net.TxMbps = float64(tx-prev.tx) * 8 / 1e6 / seconds
+		}
+	}
+
+	return net
+}
+
+// readDefaultInterface возвращает интерфейс маршрута по умолчанию.
+func readDefaultInterface() string {
+	file, err := os.Open("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Scan() // строка заголовка
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 {
+			continue
+		}
+		// Destination 00000000 — это маршрут по умолчанию.
+		if fields[1] == "00000000" {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
+// readNetDev читает счётчики интерфейса из /proc/net/dev.
+func readNetDev(iface string) (rx, tx, rxErr, txErr uint64, err error) {
+	file, err := os.Open("/proc/net/dev")
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		name, rest, ok := strings.Cut(scanner.Text(), ":")
+		if !ok || strings.TrimSpace(name) != iface {
+			continue
+		}
+
+		fields := strings.Fields(rest)
+		// Столбцы: приём — байты, пакеты, ошибки, …; передача — с девятого.
+		if len(fields) < 11 {
+			return 0, 0, 0, 0, fmt.Errorf("неожиданный формат /proc/net/dev для %s", iface)
+		}
+
+		rx, _ = strconv.ParseUint(fields[0], 10, 64)
+		rxErr, _ = strconv.ParseUint(fields[2], 10, 64)
+		tx, _ = strconv.ParseUint(fields[8], 10, 64)
+		txErr, _ = strconv.ParseUint(fields[10], 10, 64)
+		return rx, tx, rxErr, txErr, nil
+	}
+	return 0, 0, 0, 0, fmt.Errorf("интерфейс %s не найден в /proc/net/dev", iface)
+}
+
+// readLinkSpeed читает скорость соединения в Мбит/с.
+func readLinkSpeed(iface string) float64 {
+	raw, err := os.ReadFile("/sys/class/net/" + iface + "/speed")
+	if err != nil {
+		return 0
+	}
+	// У виртуальных адаптеров и при опущенном линке значение бывает
+	// отрицательным («-1») — это «неизвестно», а не скорость.
+	value, err := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
+	if err != nil || value <= 0 {
+		return 0
+	}
+	return value
+}
+
+// readOperState читает состояние линка: up, down или unknown.
+func readOperState(iface string) string {
+	raw, err := os.ReadFile("/sys/class/net/" + iface + "/operstate")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 // readCPU считает загрузку процессора по разнице с предыдущим замером.
