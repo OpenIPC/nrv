@@ -36,6 +36,14 @@ ENABLE_SIP="${NVR_ENABLE_SIP:-0}"
 # На чём считать детекцию: auto (по наличию видеокарты), gpu или cpu.
 DETECT_MODE="${NVR_DETECT_MODE:-auto}"
 
+# Ожидание блокировки apt.
+#
+# Блокировку держит не только наш установщик: её занимают обновления системы,
+# unattended-upgrades или второй запуск установки. Без этой опции apt падает
+# сразу, и шаг молча пропускается — так на новой машине не поставился
+# nvidia-container-toolkit, и сервер поднялся без видеокарты, хотя она есть.
+APT_WAIT="-o DPkg::Lock::Timeout=180"
+
 usage() {
     # Свой текст справки печатаем только когда скрипт есть на диске:
     # при запуске через `curl | bash` файла $0 не существует.
@@ -215,7 +223,7 @@ say "Проверка Docker"
 install_docker() {
     echo "Устанавливаю Docker из репозитория системы…"
     apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install -y -qq \
         docker.io docker-compose ca-certificates curl
     systemctl enable --now docker
 }
@@ -344,7 +352,7 @@ install_nvidia_toolkit() {
     local keyring=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
     local list=/etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpg curl || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install -y -qq gpg curl || return 1
     install -m 0755 -d /usr/share/keyrings
 
     if ! curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
@@ -361,7 +369,7 @@ install_nvidia_toolkit() {
     fi
 
     apt-get update -qq || return 1
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nvidia-container-toolkit || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install -y -qq nvidia-container-toolkit || return 1
 
     # Настройка для нашего Docker и его перезапуск: до этого карту он не
     # увидит, и контейнеры останутся ждать драйвер.
