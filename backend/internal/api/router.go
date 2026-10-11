@@ -127,6 +127,9 @@ type RouterConfig struct {
 	InstallDir    string
 	UpdateRepoURL string
 	UpdateBranch  string
+	// AppVersion — версия сервера: попадает в файл переноса настроек,
+	// чтобы по нему было видно, какой сервер его снял.
+	AppVersion string
 }
 
 func NewRouter(cfg RouterConfig) *chi.Mux {
@@ -218,6 +221,22 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
 	statsH := handlers.NewStatsHandler(cfg.DB, cfg.SysReader, cfg.HostAgent, cfg.SipStatus)
+	// Перенос настроек: выгрузка на другой сервер и приём файла с него.
+	//
+	// После импорта настройки надо применить заново: конфигурация
+	// Asterisk собирается в файлы, а пути потоков живут в медиасервере,
+	// и без этого сервер продолжил бы работать по прежним данным.
+	configH := handlers.NewConfigHandler(cfg.DB, cfg.AppVersion, func(ctx context.Context) error {
+		if cfg.SipBuilder != nil {
+			if err := cfg.SipBuilder.Sync(ctx); err != nil {
+				return err
+			}
+		}
+		if cfg.CameraSvc != nil {
+			cfg.CameraSvc.RestoreStreams(ctx)
+		}
+		return nil
+	})
 	detH := handlers.NewDetectionSettingsHandler(postgres.NewDetectionSettingsRepo(cfg.DB))
 	if cfg.RetentionSvc != nil {
 		detH.WithRetention(cfg.RetentionSvc)
@@ -731,6 +750,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			// Статистика
 			r.Get("/stats", statsH.Get)
+
+			// Перенос настроек на другой сервер и приём настроек с него.
+			// Это редкая и тяжёлая операция: импорт переписывает всю
+			// конфигурацию сразу, поэтому доступен только тому, у кого есть
+			// право менять настройки сервера.
+			r.Get("/config/export", configH.Export)
+			r.Post("/config/import", configH.Import)
 
 			// Сканер камер
 			r.Post("/scanner/scan", scannerH.Scan)

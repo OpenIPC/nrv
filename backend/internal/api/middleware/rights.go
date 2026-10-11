@@ -89,6 +89,10 @@ var routeRules = []Rule{
 	// Обслуживание.
 	{Prefix: "/api/v1/logs", Perm: domain.PermLogsView},
 	{Prefix: "/api/v1/settings", Perm: domain.PermSettingsManage},
+	// Перенос настроек на другой сервер: импорт переписывает конфигурацию
+	// целиком — камеры, СКУД, домофонию и учётные записи сразу, — поэтому
+	// право то же, что и на настройки сервера.
+	{Prefix: "/api/v1/config", Perm: domain.PermSettingsManage},
 	{Prefix: "/api/v1/notifications", Perm: domain.PermSettingsManage},
 	{Prefix: "/api/v1/webhooks", Perm: domain.PermSettingsManage},
 	{Prefix: "/api/v1/rtsp", Perm: domain.PermSettingsManage},

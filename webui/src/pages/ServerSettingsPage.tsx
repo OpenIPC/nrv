@@ -4,9 +4,10 @@ import { hostAPI, type HostStatus, type NetworkInterface, type TimeState } from 
 import { useToast } from '../context/ToastContext'
 import LanguageCard from '../components/LanguageCard'
 import UpdatesPanel from '../components/UpdatesPanel'
+import ConfigTransferPanel from '../components/ConfigTransferPanel'
 import {
   Clock, Network, Server, Loader2, Save, RefreshCw, CheckCircle2, XCircle,
-  AlertTriangle, Wifi, Globe, Info, ShieldAlert, Timer, Download,
+  AlertTriangle, Wifi, Globe, Info, ShieldAlert, Timer, Download, ArrowLeftRight,
 } from 'lucide-react'
 
 const cardStyle: React.CSSProperties = {
@@ -85,8 +86,8 @@ export default function ServerSettingsPage() {
 
   const [status, setStatus] = useState<HostStatus | null>(null)
   const [loading, setLoading] = useState(true)
-  // Какая вкладка открыта: общие настройки или обновления.
-  const [tab, setTab] = useState<'general' | 'updates'>('general')
+  // Какая вкладка открыта: общие настройки, обновления или перенос.
+  const [tab, setTab] = useState<'general' | 'updates' | 'transfer'>('general')
   const [zones, setZones] = useState<string[]>([])
   const [savingTime, setSavingTime] = useState(false)
   const [savingNet, setSavingNet] = useState(false)
@@ -289,10 +290,20 @@ export default function ServerSettingsPage() {
           <Download size={15} />
           {t('serverPage.tabUpdates')}
         </button>
+        <button
+          onClick={() => setTab('transfer')}
+          className={tab === 'transfer' ? 'btn btn-primary' : 'btn'}
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <ArrowLeftRight size={15} />
+          {t('serverPage.tabTransfer')}
+        </button>
       </div>
 
       {tab === 'updates' ? (
         <UpdatesPanel />
+      ) : tab === 'transfer' ? (
+        <ConfigTransferPanel />
       ) : (
         <>
       {!available && (

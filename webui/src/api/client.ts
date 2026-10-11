@@ -2367,6 +2367,66 @@ export const statsAPI = {
   get: () => api.get<Stats>('/stats'),
 }
 
+// --- Перенос настроек между серверами ---
+
+/**
+ * Файл настроек целиком.
+ *
+ * Таблицы читаются как «сырой» JSON: его содержимое разбирает сервер, а
+ * клиенту достаточно показать состав файла — сколько строк в каждом
+ * разделе.
+ */
+export interface ConfigBundle {
+  format: string
+  version: number
+  app_version?: string
+  exported_at: string
+  tables: Record<string, unknown[]>
+  counts: Record<string, number>
+  // Таблицы с данными, которые в файл не попадают: архив, события, логи.
+  excluded: string[]
+}
+
+/** Итог по одному разделу настроек. */
+export interface ConfigTableReport {
+  name: string
+  in_file: number
+  added: number
+  updated: number
+  // replaced — сколько прежних записей пришлось убрать, потому что такие
+  // же уже были заведены на этом сервере под другими идентификаторами.
+  replaced: number
+}
+
+export interface ConfigImportReport {
+  preview: boolean
+  format: string
+  version: number
+  app_version?: string
+  exported_at?: string
+  tables: ConfigTableReport[]
+  added: number
+  updated: number
+  replaced: number
+  warnings?: string[]
+}
+
+export const transferAPI = {
+  /** Скачать файл настроек для переноса на другой сервер. */
+  exportFile: () => api.get<Blob>('/config/export', { responseType: 'blob' }),
+  /**
+   * Применить файл настроек. Отправляем текст файла как есть, а не
+   * разобранный JSON: лишнее преобразование — лишняя причина расхождений.
+   * В режиме preview сервер отвечает отчётом, не меняя базу.
+   */
+  importFile: (text: string, preview: boolean) =>
+    api.post<ConfigImportReport>(
+      `/config/import${preview ? '?preview=1' : ''}`,
+      text,
+      { headers: { 'Content-Type': 'application/json' } }
+    ),
+}
+
 // --- Настройки AI-детекции ---
 
 export interface Point {
