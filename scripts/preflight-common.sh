@@ -85,7 +85,7 @@ preflight_disk() {
         dir=/var/lib/containerd
     fi
 
-    free_mb="$(df -Pm "$dir" 2>/dev/null | awk 'NR == 2 {print $4}')"
+    free_mb="$(df -Pm "$dir" 2>/dev/null | awk 'NR == 2 {print $4}' || true)"
     echo "--- Место на диске ---"
     if [ -z "${free_mb:-}" ]; then
         # Каталога может не быть до первой установки Docker — это не повод

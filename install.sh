@@ -313,6 +313,51 @@ detect_gpu() {
     command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1
 }
 
+# install_nvidia_toolkit — научить Docker отдавать карту контейнеру.
+#
+# Проброс делает не сам Docker и не драйвер, а nvidia-container-toolkit: без
+# него запуск с резервированием nvidia падает целиком — вместе с камерами и
+# архивом, а не только у детектора.
+#
+# В Debian и Ubuntu пакета нет, он ставится из репозитория NVIDIA, поэтому
+# добавляем источники здесь. Отказ не считаем смертельным: сервер работает
+# и без карты, детекция просто идёт на процессоре — об этом сообщаем и
+# возвращаем ошибку, чтобы вызывающий выбрал процессорный режим.
+install_nvidia_toolkit() {
+    if command -v nvidia-ctk >/dev/null 2>&1; then
+        echo "nvidia-container-toolkit уже установлен."
+        return 0
+    fi
+
+    echo "Ставлю nvidia-container-toolkit (проброс видеокарты)…"
+    local keyring=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    local list=/etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gpg curl || return 1
+    install -m 0755 -d /usr/share/keyrings
+
+    if ! curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+        | gpg --dearmor -o "$keyring" 2>/dev/null; then
+        echo "Не удалось получить ключ репозитория NVIDIA." >&2
+        return 1
+    fi
+
+    # Список пакетов NVIDIA отдаётся без ключа подписи — подставляем его сами.
+    if ! curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+        | sed "s#deb https://#deb [signed-by=${keyring}] https://#g" > "$list"; then
+        echo "Не удалось получить список пакетов NVIDIA." >&2
+        return 1
+    fi
+
+    apt-get update -qq || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nvidia-container-toolkit || return 1
+
+    # Настройка для нашего Docker и его перезапуск: до этого карту он не
+    # увидит, и контейнеры останутся ждать драйвер.
+    nvidia-ctk runtime configure --runtime=docker >/dev/null || return 1
+    systemctl restart docker
+}
+
 # Обновления сервера из репозитория.
 #
 # Каталог установки и адрес репозитория записываем в .env: их читает
@@ -336,6 +381,18 @@ esac
 
 if [ "$WANT_GPU" -eq 1 ]; then
     echo "Видеокарта NVIDIA найдена — детекция пойдёт на ней."
+    # Без проброса карты в контейнер запуск с резервированием nvidia падает
+    # целиком, поэтому сначала готовим toolkit, и только потом решение о
+    # GPU-сборке. Не вышло — работаем на процессоре, а не падаем.
+    if ! install_nvidia_toolkit; then
+        echo
+        echo "Видеокарта есть, но проброс в контейнер настроить не удалось."
+        echo "Чтобы сервер поднялся, детекция пойдёт на процессоре."
+        WANT_GPU=0
+    fi
+fi
+
+if [ "$WANT_GPU" -eq 1 ]; then
     set_env AI_DEVICE cuda
     set_env AI_BASE_IMAGE "nvidia/cuda:12.6.2-cudnn-runtime-ubuntu24.04"
     set_env AI_TORCH_INDEX_URL "https://download.pytorch.org/whl/cu126"
