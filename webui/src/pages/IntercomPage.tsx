@@ -1037,6 +1037,69 @@ function SettingsTab({
             </p>
           </div>
           <div>
+            <Label>{t('intercomSettings.turnServer')}</Label>
+            <input
+              style={{ width: '100%' }}
+              value={settings.turn_server}
+              disabled={!canManage}
+              placeholder="83.243.73.86"
+              onChange={(e) => setSettings({ ...settings, turn_server: e.target.value })}
+            />
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>
+              {t('intercomSettings.turnServerHint')}
+            </p>
+          </div>
+          {/* Порт и TLS-порт рядом: их меняют вместе и редко. */}
+          <div>
+            <Label>{t('intercomSettings.turnPorts')}</Label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                style={{ width: '100%' }}
+                type="number"
+                min={1024}
+                max={65535}
+                value={settings.turn_port}
+                disabled={!canManage}
+                onChange={(e) => setSettings({ ...settings, turn_port: Number(e.target.value) })}
+              />
+              <span style={{ color: 'var(--text-secondary)' }}>—</span>
+              <input
+                style={{ width: '100%' }}
+                type="number"
+                min={1024}
+                max={65535}
+                value={settings.turn_tls_port}
+                disabled={!canManage}
+                onChange={(e) => setSettings({ ...settings, turn_tls_port: Number(e.target.value) })}
+              />
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>
+              {t('intercomSettings.turnPortsHint')}
+            </p>
+          </div>
+          <div>
+            <Label>{t('intercomSettings.turnCredentials')}</Label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                style={{ width: '100%' }}
+                value={settings.turn_username}
+                disabled={!canManage}
+                placeholder="nvr"
+                onChange={(e) => setSettings({ ...settings, turn_username: e.target.value })}
+              />
+              <input
+                style={{ width: '100%' }}
+                type="text"
+                value={settings.turn_password}
+                disabled={!canManage}
+                onChange={(e) => setSettings({ ...settings, turn_password: e.target.value })}
+              />
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>
+              {t('intercomSettings.turnCredentialsHint')}
+            </p>
+          </div>
+          <div>
             <Label>{t('intercomSettings.rtpRange')}</Label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input
@@ -1070,6 +1133,8 @@ function SettingsTab({
           {t('intercomSettings.portsHint', {
             ws: 8088,
             rtp: `${settings.rtp_port_start}-${settings.rtp_port_end}`,
+            turn: settings.turn_port,
+            turnTls: settings.turn_tls_port,
           })}
         </p>
       </div>

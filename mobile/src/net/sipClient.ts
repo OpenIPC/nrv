@@ -61,6 +61,28 @@ export interface SipLineInfo {
   video_codec?: string;
   enabled: boolean;
   registered?: boolean | null;
+  /**
+   * ICE-серверы (STUN и TURN) для медиа звонка.
+   *
+   * Список собирает сервер: там же лежат учётные данные TURN, и менять их
+   * нужно вместе с настройками телефонии, а не пересборкой приложения.
+   * Пустой список — прямой путь между телефоном и станцией: он работает,
+   * пока обе стороны в одной сети. В чужой сети прямой путь часто не
+   * прокладывается, и звонок соединяется без звука и видео.
+   */
+  ice_servers?: SipIceServer[];
+}
+
+/**
+ * ICE-сервер в формате WebRTC.
+ *
+ * urls — массив адресов: для TURN там перечислены варианты доставки
+ * (UDP, TCP, TLS), и клиент сам выбирает первый доступный.
+ */
+export interface SipIceServer {
+  urls: string[];
+  username?: string;
+  credential?: string;
 }
 
 /** Состояние регистрации линии. */
@@ -261,6 +283,17 @@ export class SipClient {
   }
 
   /**
+   * Конфигурация ICE для JsSIP.
+   *
+   * Возвращаем всегда, даже пустой список: у JsSIP значение по умолчанию —
+   * тоже пустой список, а явная передача избавляет от случая, когда список
+   * «где-то есть», но в конкретный звонок не попал.
+   */
+  private pcConfig(): { iceServers: SipIceServer[] } {
+    return { iceServers: this.line.ice_servers ?? [] };
+  }
+
+  /**
    * Звонит на номер или группу.
    *
    * Видео включаем, если оно разрешено на сервере и есть в звонке: панель на
@@ -278,11 +311,12 @@ export class SipClient {
 
     const wantVideo = options.video ?? this.line.video;
     try {
-      // pcConfig не передаём: список ICE-серверов пуст по умолчанию, а лишний
-      // параметр — лишний повод для сборки WebRTC споткнуться. Если звонок
-      // понадобится извне сети, сюда добавится внешний адрес Asterisk.
+      // ICE-серверы приходят с сервера вместе с реквизитами линии. Без них
+      // звонок из чужой сети соединяется, но остаётся без звука и видео:
+      // прямой путь между телефоном и станцией там не прокладывается.
       ua.call(`sip:${target}@${this.line.server}`, {
         mediaConstraints: { audio: true, video: wantVideo },
+        pcConfig: this.pcConfig(),
       });
     } catch (error) {
       this.update({
@@ -316,6 +350,7 @@ export class SipClient {
           audio: true,
           video: wantVideo,
         },
+        pcConfig: this.pcConfig(),
       });
     } catch (error) {
       this.update({

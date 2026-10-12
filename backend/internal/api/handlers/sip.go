@@ -700,6 +700,35 @@ func (h *SipHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TURN тоже попадает в конфигурацию приложения как адрес, поэтому те же
+	// ограничения: пробелы и слэши превратили бы его в нерабочую строку.
+	in.TurnServer = strings.TrimSpace(in.TurnServer)
+	in.TurnUsername = strings.TrimSpace(in.TurnUsername)
+	in.TurnPassword = strings.TrimSpace(in.TurnPassword)
+	if strings.ContainsAny(in.TurnServer, " \t\r\n/") {
+		writeError(w, http.StatusBadRequest, "адрес TURN не должен содержать пробелов")
+		return
+	}
+	if in.TurnPort == 0 {
+		in.TurnPort = 3478
+	}
+	if in.TurnTLSPort == 0 {
+		in.TurnTLSPort = 5349
+	}
+	if in.TurnPort < 1024 || in.TurnPort > 65535 || in.TurnTLSPort < 1024 || in.TurnTLSPort > 65535 {
+		writeError(w, http.StatusBadRequest,
+			"неверный порт TURN: допустимы значения от 1024 до 65535")
+		return
+	}
+	// TURN без пароля — открытый ретранслятор: им воспользуется любой, кто
+	// узнает адрес, и канал будет забит чужим трафиком. Поэтому пару
+	// логин/пароль требуем сразу, а не оставляем на «потом поправлю».
+	if in.TurnServer != "" && (in.TurnUsername == "" || in.TurnPassword == "") {
+		writeError(w, http.StatusBadRequest,
+			"для TURN нужны логин и пароль: без них ретранслятором сможет пользоваться кто угодно")
+		return
+	}
+
 	// Диапазон портов: пустое значение (ноль) заменяем на прежнее, а границы
 	// проверяем — с неверными Asterisk не запустится, и пропадут сразу все
 	// звонки, а не только новые настройки.
@@ -820,9 +849,11 @@ func (h *SipHandler) MyLine(w http.ResponseWriter, r *http.Request) {
 	}
 
 	video, codec := false, ""
-	if settings, err := h.repo.GetSettings(r.Context()); err == nil {
-		video = settings.VideoEnabled
-		codec = settings.VideoCodec
+	var settings *domain.SipSettings
+	if s, err := h.repo.GetSettings(r.Context()); err == nil {
+		settings = s
+		video = s.VideoEnabled
+		codec = s.VideoCodec
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -838,7 +869,53 @@ func (h *SipHandler) MyLine(w http.ResponseWriter, r *http.Request) {
 		"video_codec":  codec,
 		"enabled":      line.Enabled,
 		"registered":   h.isRegistered(r, line),
+		// Приложение само решать ничего не должно: набор ICE-серверов
+		// задаёт сервер, потому что только он знает свой внешний адрес и
+		// заведённые учётные данные TURN.
+		"ice_servers": buildIceServers(settings),
 	})
+}
+
+// buildIceServers собирает список ICE-серверов для приложения в формате
+// WebRTC (RTCPeerConnection).
+//
+// Список намеренно собирается на сервере: приложение не должно знать
+// учётные данные TURN, а они меняются вместе с настройками телефонии.
+// Возвращаются адреса по возрастанию шансов пройти через чужую сеть —
+// сначала прямой путь, затем TURN по UDP/TCP, и последним TURN поверх TLS:
+// он проходит чаще всего, но заметно дороже по задержке.
+func buildIceServers(s *domain.SipSettings) []map[string]any {
+	servers := []map[string]any{}
+	if s == nil {
+		return servers
+	}
+	if stun := strings.TrimSpace(s.StunServer); stun != "" {
+		if !strings.Contains(stun, ":") {
+			stun += ":3478"
+		}
+		servers = append(servers, map[string]any{"urls": []string{"stun:" + stun}})
+	}
+	turnHost := strings.TrimSpace(s.TurnServer)
+	if turnHost == "" {
+		return servers
+	}
+	turnPort := s.TurnPort
+	if turnPort == 0 {
+		turnPort = 3478
+	}
+	urls := []string{
+		fmt.Sprintf("turn:%s:%d?transport=udp", turnHost, turnPort),
+		fmt.Sprintf("turn:%s:%d?transport=tcp", turnHost, turnPort),
+	}
+	if s.TurnTLSPort > 0 {
+		urls = append(urls, fmt.Sprintf("turns:%s:%d?transport=tcp", turnHost, s.TurnTLSPort))
+	}
+	entry := map[string]any{"urls": urls}
+	if s.TurnUsername != "" {
+		entry["username"] = s.TurnUsername
+		entry["credential"] = s.TurnPassword
+	}
+	return append(servers, entry)
 }
 
 // isRegistered сообщает, на связи ли линия прямо сейчас.

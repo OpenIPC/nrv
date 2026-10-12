@@ -1400,6 +1400,20 @@ export interface SipSettings {
   ring_timeout: number
   /** Адрес STUN-сервера; пусто — внешний адрес через него не ищется. */
   stun_server: string
+  /**
+   * Адрес TURN-сервера; пусто — ретрансляция не используется.
+   *
+   * Нужен для чужих сетей: там прямой путь между телефоном и сервером
+   * не прокладывается, и звонок соединяется без звука и видео.
+   */
+  turn_server: string
+  /** Порт TURN для UDP и TCP (обычно 3478). */
+  turn_port: number
+  /** Порт TURN поверх TLS (обычно 5349). */
+  turn_tls_port: number
+  /** Логин и пароль TURN: без них ретранслятор открыт для всех. */
+  turn_username: string
+  turn_password: string
   /** Диапазон портов разговора — его же пробрасывают на роутере. */
   rtp_port_start: number
   rtp_port_end: number

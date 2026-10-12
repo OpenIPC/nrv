@@ -2439,11 +2439,20 @@ export default {
     stunServer: 'STUN server',
     stunServerHint:
       'Needed for calls from a mobile network: the station learns its external address through STUN and offers it to the phone. Leave empty if the apps are used only at home.',
+    turnServer: 'TURN server',
+    turnServerHint:
+      'Relay for calls from foreign networks. Some networks block incoming UDP packets or hide the client port, so the call connects but stays silent. TURN passes audio and video through standard ports. Leave empty if the apps are used only at home.',
+    turnPorts: 'TURN ports (UDP/TCP and TLS)',
+    turnPortsHint:
+      'The first port serves UDP and TCP, the second serves TLS. Some networks allow only secure traffic, so the TLS variant goes through as ordinary protected traffic.',
+    turnCredentials: 'TURN login and password',
+    turnCredentialsHint:
+      'Without credentials the relay is open to anyone and will be filled with foreign traffic. The app receives these credentials from the server and does not store them itself.',
     rtpRange: 'Call ports',
     rtpRangeHint:
       'Port range used for audio and video. This is the range to forward on the router; one call takes one port in each direction.',
     portsHint:
-      'For calls from outside, two ports are forwarded on the router: {{ws}}/tcp for app connections and {{rtp}}/udp for audio and video. The web interface and camera viewing use their own ports.',
+      'For calls from outside, these ports are forwarded on the router: {{ws}}/tcp for app connections, {{rtp}}/udp for audio and video, {{turn}}/udp+tcp and {{turnTls}}/tcp for the TURN relay. The web interface and camera viewing use their own ports.',
   },
 
   externalAccessPage: {
