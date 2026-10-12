@@ -98,8 +98,12 @@ type RouterConfig struct {
 	// HostAgent обращается к службе на хосте для смены времени и сети.
 	// Её же панель управления спрашивает о видеокартах и температуре:
 	// в контейнере этих датчиков не видно.
-	HostAgent *hostagent.Client
-	// SysReader снимает показатели сервера для панели управления.
+	HostAgent *hostagent.Client // TurnCertsDir — каталог сертификата TURN-сервера. Из него интерфейс
+	// показывает срок действия сертификата; выпуск выполняет агент
+	// на хосте.
+	//
+	// Пусто — сертификата нет, и это штатное состояние установки без TURN.
+	TurnCertsDir string // SysReader снимает показатели сервера для панели управления.
 	//
 	// Держим отдельный читатель от того, что отдан монитору: скорость
 	// сети и загрузка процессора считаются по разнице двух замеров, и
@@ -216,7 +220,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// мобильное приложение не сможет зарегистрироваться.
 			WithUserLines(userLines, cfg.AsteriskWSPort).
 			// Журнал звонков: его ведёт наблюдатель по событиям Asterisk.
-			WithCalls(postgres.NewSipCallRepo(cfg.DB))
+			WithCalls(postgres.NewSipCallRepo(cfg.DB)).
+			// Сертификат для TURN: состояние читаем из файла, а выпуск
+			// выполняет служба на хосте — контейнеру для этого нужны
+			// права, которых у него быть не должно.
+			WithTurnCertificate(cfg.HostAgent, cfg.TurnCertsDir, cfg.InstallDir)
 	}
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
@@ -792,6 +800,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				// Настройки телефонии сервера: внешний адрес, видеозвонки.
 				r.Get("/sip/settings", sipH.GetSettings)
 				r.Put("/sip/settings", sipH.UpdateSettings)
+				// Сертификат для TURN: GET — состояние, POST — выпуск.
+				// Отдельным маршрутом, а не частью сохранения настроек:
+				// выпуск — долгая операция с обращением в интернет, и
+				// смешивать её с сохранением формы нельзя.
+				r.Get("/sip/turn-certificate", sipH.TurnCertificate)
+				r.Post("/sip/turn-certificate", sipH.IssueTurnCertificate)
 				r.Put("/sip/accounts/{id}", sipH.UpdateAccount)
 				r.Delete("/sip/accounts/{id}", sipH.DeleteAccount)
 

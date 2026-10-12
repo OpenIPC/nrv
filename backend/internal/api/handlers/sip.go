@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nvr/backend/internal/api/middleware"
 	"github.com/nvr/backend/internal/domain"
+	"github.com/nvr/backend/internal/hostagent"
 	"github.com/nvr/backend/internal/repository/postgres"
 	"github.com/nvr/backend/internal/service"
 	"github.com/rs/zerolog/log"
@@ -45,6 +46,17 @@ type SipHandler struct {
 	// calls — журнал звонков. Может быть nil: без настроенного AMI
 	// наблюдатель за вызовами не работает, и журнала тоже нет.
 	calls *postgres.SipCallRepo
+	// turnAgent — служба на хосте, которая выпускает сертификат для TURN.
+	//
+	// Может быть nil: без неё кнопка выпуска вернёт понятную ошибку,
+	// а настройки и статус сертификата продолжат работать.
+	turnAgent *hostagent.Client
+	// turnCertsDir — каталог с сертификатом (смонтирован только на чтение).
+	// Пусто — сертификата нет, и интерфейс так и покажет.
+	turnCertsDir string
+	// installDir — каталог установки: агенту он нужен, чтобы найти скрипт
+	// выпуска сертификата.
+	installDir string
 }
 
 // NewSipHandler создаёт обработчик. builder может быть nil — тогда
@@ -114,6 +126,18 @@ func (h *SipHandler) WithUserLines(lines service.UserLineProvisioner, wsPort int
 	if h.wsPort == 0 {
 		h.wsPort = 8088
 	}
+	return h
+}
+
+// WithTurnCertificate подключает выпуск сертификата для TURN-сервера.
+//
+// Агент может быть nil — тогда выпуск из интерфейса недоступен, но настройки
+// и состояние уже выпущенного сертификата видны: это штатное состояние для
+// установки без службы агента (например, при запуске бэкенда без установки).
+func (h *SipHandler) WithTurnCertificate(agent *hostagent.Client, certsDir, installDir string) *SipHandler {
+	h.turnAgent = agent
+	h.turnCertsDir = certsDir
+	h.installDir = installDir
 	return h
 }
 
@@ -729,6 +753,33 @@ func (h *SipHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Домен для сертификата — это имя внутри сертификата. Телефон сверяет
+	// с ним то, к чему подключается, поэтому пробелы и слэши сделали бы TLS
+	// нерабочим по совершенно неочевидной причине.
+	in.TurnCertDomain = strings.TrimSpace(in.TurnCertDomain)
+	if strings.ContainsAny(in.TurnCertDomain, " \t\r\n/") {
+		writeError(w, http.StatusBadRequest, "домен для сертификата не должен содержать пробелов")
+		return
+	}
+	// Имя в сертификате и адрес TURN должны совпадать: клиент проверяет имя,
+	// к которому подключается. Если оператор задал домен для сертификата, но
+	// оставил адрес TURN пустым — подставляем домен: иначе TLS не заработает,
+	// а причину этого в интерфейсе не видно.
+	if in.TurnCertDomain != "" && strings.TrimSpace(in.TurnServer) == "" {
+		in.TurnServer = in.TurnCertDomain
+	}
+
+	in.DuckDNSToken = strings.TrimSpace(in.DuckDNSToken)
+	if strings.ContainsAny(in.DuckDNSToken, " \t\r\n") {
+		writeError(w, http.StatusBadRequest, "токен DuckDNS не должен содержать пробелов")
+		return
+	}
+	in.ACMEEmail = strings.TrimSpace(in.ACMEEmail)
+	if strings.ContainsAny(in.ACMEEmail, " \t\r\n") {
+		writeError(w, http.StatusBadRequest, "почта для Let's Encrypt не должна содержать пробелов")
+		return
+	}
+
 	// Диапазон портов: пустое значение (ноль) заменяем на прежнее, а границы
 	// проверяем — с неверными Asterisk не запустится, и пропадут сразу все
 	// звонки, а не только новые настройки.
@@ -762,8 +813,96 @@ func (h *SipHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, saved)
 }
 
-// Sync пересобирает конфигурацию Asterisk вручную.
+// TurnCertificate отдаёт состояние сертификата TURN-сервера.
 //
+// Читаем файл, а не запись в базе: coturn пользуется именно файлом, и только
+// он говорит правду о том, что сейчас работает. Сертификат могли выпустить
+// скриптом из командной строки, и тогда база отстала бы.
+//
+// Отдельно сообщаем, доступна ли служба на хосте: без неё кнопка выпуска не
+// сработает, и честнее сказать это заранее, чем после нажатия.
+func (h *SipHandler) TurnCertificate(w http.ResponseWriter, r *http.Request) {
+	cert, err := service.ReadTurnCertificate(h.turnCertsDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if settings, err := h.repo.GetSettings(r.Context()); err == nil {
+		cert.Error = settings.TurnCertError
+	}
+
+	agentReady := false
+	if h.turnAgent != nil {
+		agentReady = h.turnAgent.Available(r.Context())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"certificate":     cert,
+		"agent_available": agentReady,
+	})
+}
+
+// IssueTurnCertificate выпускает (или продлевает) сертификат на хосте.
+//
+// Работу выполняет служба агента: нужны права root — запустить acme.sh,
+// записать файлы в каталог установки и перезапустить coturn. Контейнер
+// бэкенда намеренно работает без таких прав, поэтому здесь только запрос.
+//
+// Данные берём из сохранённых настроек, а не из тела запроса: их вводит
+// оператор на странице домофонии, и второй источник тех же значений только
+// добавил бы способ их рассогласовать.
+func (h *SipHandler) IssueTurnCertificate(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.repo.GetSettings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	domain := strings.TrimSpace(settings.TurnCertDomain)
+	if domain == "" {
+		writeError(w, http.StatusBadRequest,
+			"не задан домен для сертификата: заполните его в настройках")
+		return
+	}
+	if strings.TrimSpace(settings.DuckDNSToken) == "" {
+		writeError(w, http.StatusBadRequest,
+			"не задан токен DuckDNS: без него домен нельзя подтвердить и сертификат не выпишут")
+		return
+	}
+	if h.turnAgent == nil {
+		writeError(w, http.StatusConflict,
+			"выпуск сертификата недоступен: служба управления хостом не подключена")
+		return
+	}
+
+	output, err := h.turnAgent.IssueTurnCertificate(r.Context(), hostagent.TurnCertRequest{
+		Dir:    h.installDir,
+		Domain: domain,
+		Token:  strings.TrimSpace(settings.DuckDNSToken),
+		Email:  strings.TrimSpace(settings.ACMEEmail),
+	})
+	if err != nil {
+		// Причину сохраняем: оператор увидит её и после перезапуска сервера,
+		// а не только в момент нажатия кнопки.
+		_ = h.repo.SetTurnCertError(r.Context(), err.Error())
+		writeError(w, http.StatusBadGateway, "не удалось выпустить сертификат: "+err.Error())
+		return
+	}
+	_ = h.repo.SetTurnCertError(r.Context(), "")
+
+	cert, err := service.ReadTurnCertificate(h.turnCertsDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"certificate": cert,
+		// Журнал отдаём как есть: в нём видно, продлил acme.sh сертификат
+		// или счёл его ещё годным.
+		"output": output,
+	})
+}
+
+// Sync пересобирает конфигурацию Asterisk вручную.
 // Нужен, когда конфигурацию правили на устройстве напрямую или когда
 // предыдущая сборка упала: оператор должен иметь возможность повторить
 // сборку, не меняя ни одной записи.

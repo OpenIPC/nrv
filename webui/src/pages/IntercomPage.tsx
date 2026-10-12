@@ -12,6 +12,7 @@ import {
   type SipRule,
   type SipSchema,
   type SipSettings,
+  type TurnCertificateState,
 } from '../api/client'
 import { useToast } from '../context/ToastContext'
 import { usePermissions } from '../context/PermissionsContext'
@@ -948,6 +949,25 @@ function SettingsTab({
   const toast = useToast()
   const [settings, setSettings] = useState<SipSettings | null>(null)
   const [saving, setSaving] = useState(false)
+  const [cert, setCert] = useState<TurnCertificateState | null>(null)
+  const [certBusy, setCertBusy] = useState(false)
+
+  // Состояние сертификата спрашиваем отдельно от настроек: сертификат живёт
+  // в файле, и его срок меняется не тогда, когда правится форма.
+  const loadCert = useCallback(async () => {
+    try {
+      const res = await sipAPI.turnCertificate()
+      setCert(res.data)
+    } catch {
+      // Недоступно — значит сертификат не настроен или нет прав. Молчим:
+      // блок сам объяснит, что сертификата нет, вместо красной ошибки.
+      setCert(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadCert()
+  }, [loadCert])
 
   useEffect(() => {
     void (async () => {
@@ -974,8 +994,42 @@ function SettingsTab({
     }
   }
 
-  if (!settings) return <div className="spinner" />
+  /**
+   * Выпускает сертификат для TURN.
+   *
+   * Настройки сохраняем перед выпуском: сервер берёт домен и токен из базы,
+   * а оператор к этому моменту мог их только что вписать в форму. Иначе
+   * выпуск упал бы с «не задан домен» сразу после его ввода.
+   */
+  const issueCert = async () => {
+    if (!settings) return
+    setCertBusy(true)
+    try {
+      await sipAPI.updateSettings(settings)
+      await sipAPI.issueTurnCertificate()
+      toast.success(t('intercomSettings.certIssued'))
+      await loadCert()
+    } catch (e: any) {
+      fail(e, t('intercomSettings.certFailed'))
+      // Ошибку сохраняет сервер, поэтому перечитываем состояние: причина
+      // отказа останется видна и после перезагрузки страницы.
+      await loadCert()
+    } finally {
+      setCertBusy(false)
+    }
+  }
 
+  // Строка состояния сертификата. Показываем и домен, и сколько дней
+  // осталось: одно только «действует» не подсказывает, пора ли обновлять.
+  const certStatus = cert?.certificate.present
+    ? t('intercomSettings.certValid', {
+        domain: cert.certificate.domain,
+        days: cert.certificate.days_left,
+        date: new Date(cert.certificate.not_after).toLocaleDateString(),
+      })
+    : t('intercomSettings.certAbsent')
+
+  if (!settings) return <div className="spinner" />
   return (
     <>
       <div className="card" style={{ marginBottom: 16, padding: 12, background: 'var(--bg-secondary)' }}>
@@ -1137,6 +1191,76 @@ function SettingsTab({
             turnTls: settings.turn_tls_port,
           })}
         </p>
+      </div>
+
+      {/* Сертификат для TURN. Нужен только для защищённого пути: без него
+          работает TURN по TCP на 3478, и в чужих сетях этого обычно хватает. */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h3 style={{ fontSize: 15, marginBottom: 12 }}>{t('intercomSettings.certTitle')}</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+          <div>
+            <Label>{t('intercomSettings.certDomain')}</Label>
+            <input
+              style={{ width: '100%' }}
+              value={settings.turn_cert_domain}
+              disabled={!canManage}
+              placeholder="nvr.duckdns.org"
+              onChange={(e) => setSettings({ ...settings, turn_cert_domain: e.target.value })}
+            />
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>
+              {t('intercomSettings.certDomainHint')}
+            </p>
+          </div>
+          <div>
+            <Label>{t('intercomSettings.duckdnsToken')}</Label>
+            <input
+              style={{ width: '100%' }}
+              type="password"
+              value={settings.duckdns_token}
+              disabled={!canManage}
+              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              onChange={(e) => setSettings({ ...settings, duckdns_token: e.target.value })}
+            />
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>
+              {t('intercomSettings.duckdnsTokenHint')}
+            </p>
+          </div>
+          <div>
+            <Label>{t('intercomSettings.acmeEmail')}</Label>
+            <input
+              style={{ width: '100%' }}
+              value={settings.acme_email}
+              disabled={!canManage}
+              placeholder="admin@example.ru"
+              onChange={(e) => setSettings({ ...settings, acme_email: e.target.value })}
+            />
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>
+              {t('intercomSettings.acmeEmailHint')}
+            </p>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-primary"
+            // Кнопка неактивна без службы на хосте: выпуск выполняет она,
+            // и нажимать впустую незачем.
+            disabled={!canManage || certBusy || (cert !== null && !cert.agent_available)}
+            onClick={issueCert}
+          >
+            {certBusy ? t('intercomSettings.certIssuing') : t('intercomSettings.certIssue')}
+          </button>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{certStatus}</span>
+        </div>
+        {cert !== null && !cert.agent_available && (
+          <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.5 }}>
+            {t('intercomSettings.certAgentUnavailable')}
+          </p>
+        )}
+        {cert?.certificate.error && (
+          <p style={{ fontSize: 11, color: 'var(--danger, #e5484d)', marginTop: 6, lineHeight: 1.5 }}>
+            {t('intercomSettings.certLastError')}: {cert.certificate.error}
+          </p>
+        )}
       </div>
 
       {/* Видеозвонки. */}

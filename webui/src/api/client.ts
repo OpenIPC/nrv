@@ -1414,6 +1414,19 @@ export interface SipSettings {
   /** Логин и пароль TURN: без них ретранслятор открыт для всех. */
   turn_username: string
   turn_password: string
+  /**
+   * Домен, на который выпускается сертификат для TLS.
+   *
+   * Должен совпадать с адресом TURN выше: сертификат выписан на имя,
+   * и телефон сверяет с ним то, к чему подключается.
+   */
+  turn_cert_domain: string
+  /** Токен DuckDNS: им сервер подтверждает домен для Let's Encrypt. */
+  duckdns_token: string
+  /** Почта для Let's Encrypt: на неё приходят письма о сертификате. */
+  acme_email: string
+  /** Последняя ошибка выпуска сертификата; пусто — ошибок не было. */
+  turn_cert_error: string
   /** Диапазон портов разговора — его же пробрасывают на роутере. */
   rtp_port_start: number
   rtp_port_end: number
@@ -1492,6 +1505,34 @@ export interface SipSchema {
   strategies: { value: SipGroupStrategy; label: string }[]
 }
 
+/** Состояние сертификата TURN-сервера. */
+export interface TurnCertificate {
+  /** Есть ли сертификат вообще. */
+  present: boolean
+  /** Имя из сертификата. */
+  domain: string
+  /** Кто выдал (Let's Encrypt). */
+  issuer: string
+  /** До какого времени действует. */
+  not_after: string
+  /** Сколько дней осталось: понятнее даты без счётчика. */
+  days_left: number
+  /** Последняя ошибка выпуска, если была. */
+  error?: string
+}
+
+/** Ответ на запрос состояния сертификата. */
+export interface TurnCertificateState {
+  certificate: TurnCertificate
+  /**
+   * Доступна ли служба на хосте.
+   *
+   * Без неё кнопка выпуска не сработает, поэтому интерфейс гасит её
+   * заранее и объясняет причину, а не показывает ошибку после нажатия.
+   */
+  agent_available: boolean
+}
+
 export const sipAPI = {
   // Справочники и признак того, что конфигурация управляется сервером.
   schema: () => api.get<SipSchema>('/sip/schema'),
@@ -1521,6 +1562,24 @@ export const sipAPI = {
   clearSwitch: (id: string) => api.delete(`/sip/accounts/${id}/switch`),
 
   settings: () => api.get<SipSettings>('/sip/settings'),
+  /**
+   * Состояние сертификата для TURN.
+   *
+   * Отдельным запросом, а не в настройках: сертификат живёт в файле,
+   * и его состояние не нужно тянуть при каждом открытии формы.
+   */
+  turnCertificate: () => api.get<TurnCertificateState>('/sip/turn-certificate'),
+  /**
+   * Выпускает или продлевает сертификат.
+   *
+   * Операция небыстрая (обращение к Let's Encrypt), поэтому вызывается
+   * кнопкой, а не вместе с сохранением настроек.
+   */
+  issueTurnCertificate: () =>
+    api.post<{ certificate: TurnCertificate; output: string }>(
+      '/sip/turn-certificate',
+      {},
+    ),
   updateSettings: (data: Partial<SipSettings>) =>
     api.put<SipSettings>('/sip/settings', data),
 

@@ -1460,6 +1460,101 @@ def update_status(payload):
     }
 
 
+# --- Сертификат для TURN -------------------------------------------------
+#
+# Выпуск сертификата живёт здесь, а не в бэкенде: нужны права root —
+# запустить acme.sh, записать файлы в каталог установки и перезапустить
+# coturn. Всё это делает скрипт scripts/turn-cert.sh, и повторять его логику
+# в агенте нельзя: выпуск из интерфейса и продление по расписанию должны
+# делать ровно одно и то же.
+#
+# Домен проверяем здесь, а не надеемся на интерфейс: агент выполняет команды
+# от root, и мусор из запроса попал бы прямо в аргументы скрипта.
+DOMAIN_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,250}[A-Za-z0-9])?$")
+TOKEN_RE = re.compile(r"^[A-Za-z0-9-]{8,100}$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Сколько ждать выпуска. Первый запуск скачивает образ acme.sh и обращается
+# к Let's Encrypt, поэтому лимит с запасом.
+TURN_CERT_TIMEOUT = 240
+
+
+def env_upsert(path: Path, values: dict) -> None:
+    """Записывает переменные в .env, не трогая остальные строки.
+
+    Своя реализация, а не sed: в файле есть комментарии и значения с
+    символами, которые sed принял бы за разделители.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    remaining = dict(values)
+    result = []
+    for line in lines:
+        key = None
+        if "=" in line and not line.lstrip().startswith("#"):
+            key = line.split("=", 1)[0].strip()
+        if key in remaining:
+            result.append(f"{key}={remaining.pop(key)}")
+        else:
+            result.append(line)
+    for key, value in remaining.items():
+        result.append(f"{key}={value}")
+    path.write_text("\n".join(result) + "\n", encoding="utf-8")
+
+
+def turn_cert_issue(payload):
+    """Выпускает сертификат для TURN-сервера.
+
+    Домен и токен берутся из настроек, введённых в интерфейсе, и здесь же
+    оказываются в файлах установки — оттуда их берёт продление по
+    расписанию, которому база данных недоступна.
+    """
+    domain = str(payload.get("domain") or "").strip()
+    token = str(payload.get("token") or "").strip()
+    email = str(payload.get("email") or "").strip()
+    install_dir = payload.get("dir") or INSTALL_DIR_DEFAULT
+
+    if not DOMAIN_RE.match(domain):
+        return {"ok": False, "error": "некорректный домен"}
+    if not TOKEN_RE.match(token):
+        return {"ok": False, "error": "некорректный токен DuckDNS"}
+    if email and not EMAIL_RE.match(email):
+        return {"ok": False, "error": "некорректная почта"}
+
+    script = Path(install_dir) / "scripts" / "turn-cert.sh"
+    if not script.is_file():
+        return {"ok": False, "error": f"не найден скрипт выпуска: {script}"}
+
+    # Токен кладём в файл, который читает скрипт: так он не попадает
+    # в аргументы командной строки, видные в списке процессов, и оказывается
+    # там же, откуда его берёт продление по расписанию.
+    token_file = Path(install_dir) / "turn" / ".duckdns-token"
+    try:
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(token + "\n", encoding="utf-8")
+        os.chmod(token_file, 0o600)
+        # Домен и почту дублируем в .env: иначе после смены домена
+        # в интерфейсе продление продолжало бы продлевать старый.
+        env_values = {"TURN_DOMAIN": domain}
+        if email:
+            env_values["ACME_EMAIL"] = email
+        env_upsert(Path(install_dir) / ".env", env_values)
+    except OSError as exc:
+        return {"ok": False, "error": f"не удалось сохранить настройки: {exc}"}
+
+    env = {"TURN_DOMAIN": domain}
+    if email:
+        env["ACME_EMAIL"] = email
+
+    code, out, err = run(["bash", str(script), "issue"],
+                         timeout=TURN_CERT_TIMEOUT, env=env, check=False)
+    output = "\n".join(part for part in (out, err) if part).strip()
+    if code != 0:
+        return {"ok": False, "error": output or f"выпуск завершился с кодом {code}"}
+
+    # Вывод acme.sh длинный: в интерфейсе нужен итог, а не весь журнал.
+    return {"ok": True, "output": output[-4000:]}
+
+
 # ------------------------------------------------------------- обработка
 
 
@@ -1481,6 +1576,7 @@ HANDLERS = {
     "update_apply": apply_update,
     "update_rollback": rollback_update,
     "update_status": update_status,
+    "turn_cert_issue": turn_cert_issue,
     "ping": lambda payload: {"ok": True, "pong": True},
 }
 

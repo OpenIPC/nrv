@@ -36,6 +36,11 @@ const (
 	// updateTimeout — проверка обновлений: агент забирает изменения из
 	// репозитория в интернете, и на медленном канале это долго.
 	updateTimeout = 200 * time.Second
+	// certificateTimeout — выпуск сертификата: агент скачивает образ acme.sh,
+	// ходит к Let's Encrypt и обновляет DNS-запись. Первый запуск с загрузкой
+	// образа занимает больше минуты, и обрывать его нельзя: сертификат может
+	// остаться выпущенным, а служба — нет.
+	certificateTimeout = 240 * time.Second
 )
 
 // Client обращается к агенту через локальный сокет.
@@ -93,6 +98,10 @@ func (c *Client) call(ctx context.Context, action string, payload map[string]any
 		// Проверка обновлений обращается к репозиторию в интернете:
 		// это единственное действие, которое может длиться минутами.
 		deadline = time.Now().Add(updateTimeout)
+	case "turn_cert_issue":
+		// Выпуск сертификата ходит в Let's Encrypt и может скачивать образ
+		// acme.sh, поэтому лимит здесь свой.
+		deadline = time.Now().Add(certificateTimeout)
 	}
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl

@@ -79,11 +79,13 @@ func (r *SipRepo) GetSettings(ctx context.Context) (*domain.SipSettings, error) 
 	err := r.db.QueryRow(ctx, `
 		SELECT external_address, local_net, video_enabled, video_codec, ring_timeout,
 		       stun_server, turn_server, turn_port, turn_tls_port, turn_username,
-		       turn_password, rtp_port_start, rtp_port_end, updated_at
+		       turn_password, turn_cert_domain, duckdns_token, acme_email,
+		       turn_cert_error, rtp_port_start, rtp_port_end, updated_at
 		FROM sip_settings WHERE id = 1`).
 		Scan(&s.ExternalAddress, &s.LocalNet, &s.VideoEnabled, &s.VideoCodec,
 			&s.RingTimeout, &s.StunServer, &s.TurnServer, &s.TurnPort, &s.TurnTLSPort,
-			&s.TurnUsername, &s.TurnPassword, &s.RtpPortStart, &s.RtpPortEnd, &s.UpdatedAt)
+			&s.TurnUsername, &s.TurnPassword, &s.TurnCertDomain, &s.DuckDNSToken,
+			&s.ACMEEmail, &s.TurnCertError, &s.RtpPortStart, &s.RtpPortEnd, &s.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Строку создаёт миграция, но пустая таблица не должна валить
 		// страницу настроек: отдаём значения по умолчанию.
@@ -108,8 +110,9 @@ func (r *SipRepo) UpdateSettings(ctx context.Context, s *domain.SipSettings) err
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO sip_settings (id, external_address, local_net, video_enabled, video_codec,
 		                         ring_timeout, stun_server, turn_server, turn_port, turn_tls_port,
-		                         turn_username, turn_password, rtp_port_start, rtp_port_end, updated_at)
-		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+		                         turn_username, turn_password, turn_cert_domain, duckdns_token,
+		                         acme_email, rtp_port_start, rtp_port_end, updated_at)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
 		ON CONFLICT (id) DO UPDATE SET
 			external_address = EXCLUDED.external_address,
 			local_net = EXCLUDED.local_net,
@@ -122,14 +125,33 @@ func (r *SipRepo) UpdateSettings(ctx context.Context, s *domain.SipSettings) err
 			turn_tls_port = EXCLUDED.turn_tls_port,
 			turn_username = EXCLUDED.turn_username,
 			turn_password = EXCLUDED.turn_password,
+			turn_cert_domain = EXCLUDED.turn_cert_domain,
+			duckdns_token = EXCLUDED.duckdns_token,
+			acme_email = EXCLUDED.acme_email,
 			rtp_port_start = EXCLUDED.rtp_port_start,
 			rtp_port_end = EXCLUDED.rtp_port_end,
 			updated_at = now()`,
 		s.ExternalAddress, s.LocalNet, s.VideoEnabled, s.VideoCodec, s.RingTimeout,
 		s.StunServer, s.TurnServer, s.TurnPort, s.TurnTLSPort, s.TurnUsername,
-		s.TurnPassword, s.RtpPortStart, s.RtpPortEnd)
+		s.TurnPassword, s.TurnCertDomain, s.DuckDNSToken, s.ACMEEmail,
+		s.RtpPortStart, s.RtpPortEnd)
 	if err != nil {
 		return fmt.Errorf("update sip settings: %w", err)
+	}
+	return nil
+}
+
+// SetTurnCertError записывает итог последней попытки выпустить сертификат.
+//
+// Отдельным методом, а не через UpdateSettings: выпуск запускается своей
+// кнопкой и не должен затирать настройки, которые оператор правит в этот
+// момент. Пустая строка означает, что ошибки нет.
+func (r *SipRepo) SetTurnCertError(ctx context.Context, message string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE sip_settings SET turn_cert_error = $1, updated_at = now()
+		WHERE id = 1`, message)
+	if err != nil {
+		return fmt.Errorf("записать ошибку выпуска сертификата: %w", err)
 	}
 	return nil
 }

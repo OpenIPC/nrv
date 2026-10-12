@@ -2453,6 +2453,25 @@ export default {
       'Port range used for audio and video. This is the range to forward on the router; one call takes one port in each direction.',
     portsHint:
       'For calls from outside, these ports are forwarded on the router: {{ws}}/tcp for app connections, {{rtp}}/udp for audio and video, {{turn}}/udp+tcp and {{turnTls}}/tcp for the TURN relay. The web interface and camera viewing use their own ports.',
+    certTitle: 'Certificate for TURN',
+    certDomain: 'Certificate domain',
+    certDomainHint:
+      'The name the certificate is issued for — usually the same as the TURN address above. They must match: the phone checks the name it connects to and rejects a secure connection if it differs.',
+    duckdnsToken: 'DuckDNS token',
+    duckdnsTokenHint:
+      'From your account page on duckdns.org. The server uses it to prove the domain to Let\u2019s Encrypt and to update the DNS record, so port 80 does not need to be forwarded.',
+    acmeEmail: 'Email for Let\u2019s Encrypt',
+    acmeEmailHint:
+      'Expiry and revocation notices go there. Optional, but without it there is nowhere to learn about a problem.',
+    certIssue: 'Issue certificate',
+    certIssuing: 'Issuing…',
+    certIssued: 'Certificate is ready',
+    certFailed: 'Could not issue the certificate',
+    certValid: 'Valid until {{date}}, {{days}} days left (domain {{domain}})',
+    certAbsent: 'No certificate — the secure path is off, TURN runs over TCP on 3478',
+    certAgentUnavailable:
+      'The host management service is unavailable: issuing from the interface will not work. Check the nvr-agent service on the server.',
+    certLastError: 'Last error',
   },
 
   externalAccessPage: {

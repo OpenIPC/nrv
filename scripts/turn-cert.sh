@@ -55,6 +55,23 @@ require_env() {
 
 token() { tr -d '\r\n' < "$TOKEN_FILE"; }
 
+# Выпускает или продлевает сертификат через acme.sh и разбирает код возврата.
+#
+# Ноль — всё хорошо. Двойка — «сертификат ещё действует, продлевать нечего»:
+# так acme.sh отвечает на повторный выпуск. Для оператора, который нажал
+# кнопку на уже выпущенном сертификате, это обычный итог, а не ошибка;
+# остальные коды — настоящая неудача (домен не подтвердился, кончился лимит).
+run_acme() {
+    local code=0
+    docker run --rm -v "$ACME_DIR:/acme.sh" -e DuckDNS_Token="$(token)" \
+        "$ACME_IMAGE" "$@" || code=$?
+    case "$code" in
+        0) return 0 ;;
+        2) echo "сертификат ещё действует — продлевать нечего"; return 0 ;;
+        *) die "acme.sh завершился с кодом $code" ;;
+    esac
+}
+
 # Проверка токена: тем же запросом, которым потом обновляется A-запись.
 # DuckDNS отвечает на него словами OK / KO, поэтому проверка честная.
 cmd_check() {
@@ -74,8 +91,7 @@ cmd_check() {
 cmd_issue() {
     require_env
     mkdir -p "$ACME_DIR" "$CERTS_DIR"
-    docker run --rm -v "$ACME_DIR:/acme.sh" -e DuckDNS_Token="$(token)" "$ACME_IMAGE" \
-        --issue --server letsencrypt -m "${ACME_EMAIL:-postmaster@$DOMAIN}" \
+    run_acme --issue --server letsencrypt -m "${ACME_EMAIL:-postmaster@$DOMAIN}" \
         --dns dns_duckdns -d "$DOMAIN" --keylength 2048
     install_cert
 }
@@ -85,8 +101,7 @@ cmd_renew() {
     mkdir -p "$ACME_DIR"
     # --cron сам понимает, пора ли продлевать, и обращается к Let's Encrypt
     # только при необходимости — cron можно запускать хоть каждый день.
-    docker run --rm -v "$ACME_DIR:/acme.sh" -e DuckDNS_Token="$(token)" "$ACME_IMAGE" \
-        --cron --home /acme.sh
+    run_acme --cron --home /acme.sh
     install_cert
 }
 

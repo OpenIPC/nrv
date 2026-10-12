@@ -217,6 +217,22 @@ type SipSettings struct {
 	// на боевой установке он всегда требует логин и пароль.
 	TurnUsername string `json:"turn_username"`
 	TurnPassword string `json:"turn_password"`
+	// TurnCertDomain — домен, на который выпускается сертификат для TLS.
+	//
+	// Обычно это то же имя, что и адрес TURN выше, и это не совпадение:
+	// сертификат выписан на имя, значит клиент должен подключаться именно
+	// к нему. Если имена разойдутся, телефон отвергнет соединение.
+	TurnCertDomain string `json:"turn_cert_domain"`
+	// DuckDNSToken — токен аккаунта DuckDNS.
+	//
+	// По нему сервер подтверждает домен для Let's Encrypt и обновляет
+	// A-запись, поэтому пробрасывать порт 80 для выпуска не нужно.
+	DuckDNSToken string `json:"duckdns_token"`
+	// ACMEEmail — почта для Let's Encrypt: на неё приходят письма об
+	// истечении и отзыве сертификата.
+	ACMEEmail string `json:"acme_email"`
+	// TurnCertError — последняя ошибка выпуска сертификата; пусто — ошибок не было.
+	TurnCertError string `json:"turn_cert_error"`
 	// RtpPortStart и RtpPortEnd — диапазон портов, по которым идёт звук и
 	// видео разговора.
 	//
@@ -225,6 +241,27 @@ type SipSettings struct {
 	RtpPortStart int       `json:"rtp_port_start"`
 	RtpPortEnd   int       `json:"rtp_port_end"`
 	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// TurnCertificate — состояние сертификата для TURN-сервера.
+//
+// Данные берутся из самого файла сертификата, а не из базы: файл — это то,
+// чем пользуется coturn, и только он говорит правду о том, что сейчас на
+// сервере. База может отстать, если сертификат заменили вручную.
+type TurnCertificate struct {
+	// Present — есть ли сертификат.
+	Present bool `json:"present"`
+	// Domain — имя из сертификата (CN или SAN).
+	Domain string `json:"domain"`
+	// Issuer — кто выдал сертификат.
+	Issuer string `json:"issuer"`
+	// NotAfter — до какого времени действует.
+	NotAfter time.Time `json:"not_after"`
+	// DaysLeft — сколько дней осталось. Интерфейс показывает именно это:
+	// дата без счётчика не говорит, пора ли что-то делать.
+	DaysLeft int `json:"days_left"`
+	// Error — последняя ошибка выпуска, если она была.
+	Error string `json:"error,omitempty"`
 }
 
 // SipGroup — группа вызова.
