@@ -33,6 +33,10 @@ TOKEN_FILE="$ROOT/turn/.duckdns-token"
 ACME_DIR="$ROOT/turn/.acme"
 CERTS_DIR="$ROOT/turn/certs"
 CONTAINER="${TURN_CONTAINER:-gigacode-turn-1}"
+# Кто читает сертификат при старте. Оба сервиса берут один и тот же файл:
+# TURN — для защищённого пути, прокси — для панели по HTTPS. Обновлённый
+# сертификат они увидят только после перезапуска.
+CERT_CONSUMERS="${CERT_CONSUMERS:-$CONTAINER gigacode-proxy-1}"
 ACME_IMAGE="${ACME_IMAGE:-neilpang/acme.sh}"
 LOG_FILE="$ACME_DIR/renew.log"
 
@@ -138,12 +142,16 @@ install_cert() {
     fi
     echo "сертификат обновлён в $CERTS_DIR"
 
-    if docker inspect "$CONTAINER" >/dev/null 2>&1; then
-        docker restart "$CONTAINER" >/dev/null
-        echo "контейнер $CONTAINER перезапущен"
-    else
-        echo "контейнер $CONTAINER не найден — перезапустите его вручную" >&2
-    fi
+    for container in $CERT_CONSUMERS; do
+        if docker inspect "$container" >/dev/null 2>&1; then
+            docker restart "$container" >/dev/null
+            echo "контейнер $container перезапущен"
+        else
+            # Отсутствие контейнера — не ошибка: TURN и прокси включаются
+            # профилями, и на установке может быть только один из них.
+            echo "контейнер $container не запущен — пропускаю"
+        fi
+    done
 }
 
 # Ежедневная проверка в cron. Время ночное: продление обращается к Let's
