@@ -104,6 +104,43 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+// AppInvite — POST /api/v1/users/{id}/app-invite
+//
+// Выдаёт одноразовый код подключения мобильного приложения. Администратор
+// показывает его сотруднику в виде QR-кода, приложение меняет код на токен,
+// и вводить пароль на телефоне не требуется.
+//
+// Код выдаётся тому пользователю, чью карточку открыли, а не вошедшему
+// администратору: подключают устройство сотрудника, а не своё.
+func (h *UserHandler) AppInvite(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+
+	// Кто выдал код — для журнала: при разборе чужих подключений важно
+	// знать, с чьего экрана показали квадратик.
+	var createdBy uuid.UUID
+	if admin := middleware.UserFromContext(r.Context()); admin != nil {
+		createdBy = admin.ID
+	}
+
+	invite, err := h.svc.CreateAppInvite(r.Context(), id, createdBy)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Код показываем с разделителем: его набирают руками, когда камера
+	// не читает экран. В базе он лежит без разделителя, и обмен кода
+	// принимает оба написания.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"code":       service.FormatInviteCode(invite.Code),
+		"expires_at": invite.ExpiresAt,
+	})
+}
+
 // Delete — DELETE /api/v1/users/{id}
 func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))

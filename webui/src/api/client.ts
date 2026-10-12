@@ -2797,6 +2797,42 @@ export const notificationsAPI = {
       max,
       with_snapshot: withSnapshot,
     }, { timeout: 90000 }),
+
+  // --- Канал push (мобильное приложение) ---
+  // Отдельные методы: у канала нет ни токена, ни чата — получатели это
+  // устройства, зарегистрированные приложением. Настраиваются только
+  // правила отбора событий, поэтому и страница у него своя.
+  getPush: () => api.get<PushConfig>('/settings/notifications/push'),
+  updatePush: (push: PushConfig) =>
+    api.patch<PushConfig>('/settings/notifications/push', { push }),
+  // Проверка проходит весь путь до телефона, поэтому времени нужно больше,
+  // чем на ответ мессенджера.
+  testPush: () =>
+    api.post<NotificationTestResult>('/settings/notifications/push/test', {}, { timeout: 90000 }),
+}
+
+/** Настройки push-уведомлений в мобильное приложение. */
+export interface PushConfig {
+  enabled: boolean
+  /**
+   * Поля вложений остались от общей части конфигурации канала.
+   *
+   * В уведомление уходит только текст: картинка и клип лежат на сервере,
+   * приложение скачивает их само по идентификатору события. Поля хранятся,
+   * чтобы настройки push читались тем же компонентом, что и у мессенджеров.
+   */
+  send_snapshot: boolean
+  send_clip: boolean
+  clip_max_mb: number
+  /** Типы событий; пустой список означает «ничего не отправлять». */
+  events: string[]
+  /** Камеры-источники; пустой список — все камеры. */
+  cameras: string[]
+  min_confidence: number
+  quiet_hours_enabled: boolean
+  quiet_hours_from: string
+  quiet_hours_to: string
+  repeat_minutes: number
 }
 
 // --- Распознавание лиц и автомобильных номеров ---
@@ -2900,6 +2936,19 @@ export interface UserAccount {
   created_at?: string
 }
 
+/**
+ * Одноразовый код подключения мобильного приложения.
+ *
+ * Администратор показывает его сотруднику в виде QR-кода в карточке
+ * пользователя: приложение меняет код на токен сессии, и набирать адрес
+ * сервера и пароль на телефоне не приходится.
+ */
+export interface AppInvite {
+  /** Код с разделителем: «ABCD-2345». */
+  code: string
+  expires_at: string
+}
+
 /** Справочник для формы прав: роли, заготовки и полный список прав. */
 export interface UsersSchema {
   roles: string[]
@@ -2936,6 +2985,13 @@ export const usersAPI = {
     }
   ) => api.put<UserAccount>(`/users/${id}`, data),
   remove: (id: string) => api.delete(`/users/${id}`),
+  /**
+   * Выдаёт одноразовый код подключения мобильного приложения.
+   *
+   * Код живёт десять минут и срабатывает один раз: он показывается на
+   * экране в виде QR-кода и легко попадает в чужие руки.
+   */
+  appInvite: (id: string) => api.post<AppInvite>(`/users/${id}/app-invite`, {}),
 }
 
 export const meAPI = {

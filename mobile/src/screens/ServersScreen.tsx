@@ -17,6 +17,7 @@ import {
 import { useApp } from '../state/AppContext';
 import { parseAddress, DEFAULT_PORT } from '../net/address';
 import { ApiClient, describeNetworkError } from '../net/api';
+import QrScanScreen from './QrScanScreen';
 import { colors, radius, spacing } from '../theme';
 import type { ServerProfile } from '../types';
 
@@ -36,6 +37,9 @@ export default function ServersScreen({
   const { servers, current, addServer, selectServer, removeServer, ready } =
     useApp();
   const [showAdd, setShowAdd] = useState(false);
+  // Открыт ли сканер QR-кода: подключение по коду занимает весь экран,
+  // потому что иначе камера не поместится в кадр вместе с подсказками.
+  const [showScan, setShowScan] = useState(false);
   const [checking, setChecking] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, string>>({});
 
@@ -101,7 +105,6 @@ export default function ServersScreen({
           Выберите сервер или добавьте новый по адресу
         </Text>
       </View>
-
       {servers.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyTitle}>Пока нет ни одного сервера</Text>
@@ -166,11 +169,19 @@ export default function ServersScreen({
       )}
 
       <View style={styles.footer}>
+        {/* Сканирование стоит первым: это самый короткий путь и он же —
+            основной на телефоне, где набирать адрес неудобно. */}
         <Pressable
           style={styles.primaryButton}
+          onPress={() => setShowScan(true)}
+        >
+          <Text style={styles.primaryButtonText}>Подключить по QR-коду</Text>
+        </Pressable>
+        <Pressable
+          style={styles.secondaryButton}
           onPress={() => setShowAdd(true)}
         >
-          <Text style={styles.primaryButtonText}>Добавить сервер</Text>
+          <Text style={styles.secondaryButtonText}>Добавить сервер вручную</Text>
         </Pressable>
       </View>
 
@@ -185,6 +196,18 @@ export default function ServersScreen({
         addServer={addServer}
         checkServer={checkServer}
       />
+
+      {showScan && (
+        <View style={styles.overlay}>
+          <QrScanScreen
+            onBack={() => setShowScan(false)}
+            onDone={() => {
+              setShowScan(false);
+              onContinue();
+            }}
+          />
+        </View>
+      )}
     </View>
   );
 }
@@ -212,14 +235,20 @@ function AddServerModal({
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [username, setUsername] = useState('');
+  // Код подключения: его можно ввести руками, когда камера не читает
+  // квадратик с экрана администратора, а адрес сервера уже известен.
+  const [code, setCode] = useState('');
   const [useHttps, setUseHttps] = useState(false);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const { pairWithCode } = useApp();
 
   const reset = () => {
     setName('');
     setAddress('');
     setUsername('');
+    setCode('');
     setUseHttps(false);
     setResult(null);
   };
@@ -263,6 +292,20 @@ function AddServerModal({
       return;
     }
     try {
+      // С кодом подключения сервер и вход делаются одним действием: код
+      // выдаёт администратор, и пароль при этом не нужен вообще.
+      if (code.trim()) {
+        const profile = await pairWithCode({
+          name,
+          address: buildAddress(),
+          username: username || undefined,
+          code: code.trim(),
+        });
+        reset();
+        await onSaved(profile);
+        return;
+      }
+
       const profile = await addServer(name, buildAddress(), username || undefined);
       reset();
       await onSaved(profile);
@@ -351,6 +394,25 @@ function AddServerModal({
           />
           <Text style={styles.hint}>
             Логин подставится на экране входа. Пароль здесь не сохраняется.
+          </Text>
+
+          <Text style={styles.label}>Код подключения (необязательно)</Text>
+          <TextInput
+            style={styles.input}
+            value={code}
+            onChangeText={(value) => {
+              setCode(value);
+              setResult(null);
+            }}
+            placeholder="ABCD-2345"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="characters"
+            autoCorrect={false}
+          />
+          <Text style={styles.hint}>
+            Возьмите его в карточке пользователя: на странице «Пользователи»
+            нажмите «Подключить приложение». С кодом пароль не нужен — вход
+            выполнится сразу.
           </Text>
 
           {result && (
@@ -463,6 +525,16 @@ const styles = StyleSheet.create({
   },
 
   footer: { padding: spacing.lg, paddingTop: spacing.sm },
+  // Сканер закрывает весь экран, а не показывается модальным окном: камере
+  // нужна вся площадь, а подсказки должны читаться поверх изображения.
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.background,
+  },
   primaryButton: {
     backgroundColor: colors.primary,
     borderRadius: radius.md,

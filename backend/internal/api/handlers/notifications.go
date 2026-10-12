@@ -28,6 +28,9 @@ type NotificationHandler struct {
 type SettingsStore interface {
 	GetServerSettings(ctx context.Context) (*domain.ServerSettings, error)
 	UpdateServerSettings(ctx context.Context, req domain.UpdateServerSettingsRequest) (*domain.ServerSettings, error)
+	// UpdatePushSettings пишет настройки канала push отдельным ключом:
+	// иначе сохранение настроек Telegram затирало бы их.
+	UpdatePushSettings(ctx context.Context, cfg domain.PushConfig) error
 }
 
 // NotificationLogStore — доступ к журналу отправок.
@@ -216,6 +219,63 @@ func (h *NotificationHandler) UpdateMax(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, maskMax(settings.Notifications.Max))
+}
+
+// GetPush отдаёт настройки уведомлений в мобильное приложение.
+func (h *NotificationHandler) GetPush(w http.ResponseWriter, r *http.Request) {
+	cur, err := h.settings.GetServerSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, cur.Notifications.Push)
+}
+
+// UpdatePush сохраняет настройки уведомлений в мобильное приложение.
+//
+// Отдельный маршрут, а не часть общих настроек: у канала нет ни токена, ни
+// чата — только правила отбора событий и своё включение.
+func (h *NotificationHandler) UpdatePush(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Push *domain.PushConfig `json:"push"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil || req.Push == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "не переданы настройки уведомлений в приложение"})
+		return
+	}
+
+	cfg := *req.Push
+	if cfg.MinConfidence < 0 || cfg.MinConfidence > 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "порог уверенности должен быть от 0 до 1"})
+		return
+	}
+	if cfg.RepeatMinutes < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "пауза между сообщениями не может быть отрицательной"})
+		return
+	}
+
+	if err := h.settings.UpdatePushSettings(r.Context(), cfg); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, cfg)
+}
+
+// TestPush отправляет пробное уведомление в мобильное приложение.
+//
+// Параметров у вызова нет: настроек у канала, кроме правил отбора, не
+// бывает, а правила приходят готовыми из базы — как и у системных
+// уведомлений.
+func (h *NotificationHandler) TestPush(w http.ResponseWriter, r *http.Request) {
+	cur, err := h.settings.GetServerSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.notifier.TestPush(r.Context(), cur.Notifications.Push))
 }
 
 // TestMax проверяет настройки MAX, отправляя пробное сообщение.

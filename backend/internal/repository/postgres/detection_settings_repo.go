@@ -299,6 +299,12 @@ func applySetting(out *domain.ServerSettings, key string, raw []byte) error {
 		if err := json.Unmarshal(raw, &out.Notifications.Max); err != nil {
 			return fmt.Errorf("decode max settings: %w", err)
 		}
+	case "notifications_push":
+		// Push тоже отдельным ключом: страница настроек у него своя, и
+		// сохранение настроек Telegram не должно его затирать.
+		if err := json.Unmarshal(raw, &out.Notifications.Push); err != nil {
+			return fmt.Errorf("decode push settings: %w", err)
+		}
 	case "notifications_system":
 		// Системные уведомления тоже отдельным ключом: у них свои
 		// пороги, а каналы доставки общие с Telegram и MAX.
@@ -367,6 +373,26 @@ func applyMajesticDefaults(cfg *domain.MajesticWatchConfig) {
 }
 
 // UpdateServerSettings сохраняет переданные секции настроек.
+// UpdatePushSettings сохраняет настройки канала push.
+//
+// Отдельным ключом и отдельным методом: страница настроек у канала своя, и
+// сохранение настроек Telegram не должно его затирать. По той же причине свои
+// значения отдельно держит канал MAX.
+func (r *DetectionSettingsRepo) UpdatePushSettings(ctx context.Context, cfg domain.PushConfig) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("собрать настройки push: %w", err)
+	}
+	_, err = r.db.Exec(ctx, `
+		INSERT INTO server_settings (key, value, updated_at) VALUES ($1, $2::jsonb, now())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+		"notifications_push", string(b))
+	if err != nil {
+		return fmt.Errorf("сохранить настройки push: %w", err)
+	}
+	return nil
+}
+
 func (r *DetectionSettingsRepo) UpdateServerSettings(ctx context.Context, req domain.UpdateServerSettingsRequest) (*domain.ServerSettings, error) {
 	save := func(key string, val any) error {
 		b, err := json.Marshal(val)

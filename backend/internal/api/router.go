@@ -168,6 +168,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// Пользователи и права: сервис один на всё приложение — по нему же
 	// middleware проверяет права на каждом запросе (и держит их в кеше).
 	userSvc := service.NewUserService(cfg.UserRepo, userLines)
+	// Коды подключения приложения: один сервис на две двери — выдача кода
+	// из карточки пользователя и обмен кода на токен при входе.
+	if cfg.DB != nil {
+		userSvc = userSvc.WithInvites(postgres.NewAppInviteRepo(cfg.DB))
+	}
+	authH = authH.WithAppInvites(userSvc)
 	userH := handlers.NewUserHandler(userSvc)
 	cameraH := handlers.NewCameraHandler(cfg.CameraSvc)
 	streamH := handlers.NewStreamHandler(cfg.CameraSvc, cfg.Go2rtcAPI, cfg.Go2rtcPublicHost, tokenAuth)
@@ -261,6 +267,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		postgres.NewNotificationRepo(cfg.DB),
 		cfg.Notifier,
 	)
+	// Регистрация устройств для push: приложение сообщает свой токен при
+	// входе и просит забыть его при выходе.
+	pushH := handlers.NewPushHandler(postgres.NewPushTokenRepo(cfg.DB))
 	webhookH := handlers.NewWebhookHandler(cfg.WebhookSvc)
 
 	// Настройки времени и сети: изменения выполняет служба на хосте,
@@ -294,6 +303,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	r.Route("/api/v1", func(r chi.Router) {
 		// Публичные
 		r.Post("/auth/login", authH.Login)
+		// Вход по коду подключения приложения: код приходит из QR-кода,
+		// который показал администратор. Публичный по той же причине, что
+		// и вход по паролю: токена у клиента ещё нет.
+		r.Post("/auth/qr", authH.QrLogin)
 		// Документация API — доступна публично, чтобы клиенты могли
 		// построить интеграцию до получения учётных данных.
 		r.Get("/docs", docsH.List)
@@ -381,6 +394,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/users", userH.Create)
 			r.Put("/users/{id}", userH.Update)
 			r.Delete("/users/{id}", userH.Delete)
+			// Код подключения мобильного приложения: администратор показывает
+			// его сотруднику как QR-код, чтобы тот не набирал ни адрес сервера,
+			// ни пароль на телефоне.
+			r.Post("/users/{id}/app-invite", userH.AppInvite)
 
 			// Камеры
 			r.Get("/cameras", cameraH.List)
@@ -509,13 +526,23 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/settings/notifications/test", notifyH.Test)
 			r.Get("/settings/notifications/log", notifyH.Log)
 			r.Delete("/settings/notifications/log", notifyH.Cleanup)
-
+			// Устройства для push-уведомлений: приложение регистрирует
+			// свой токен при входе и снимает при выходе.
+			r.Post("/notifications/register", pushH.Register)
+			r.Delete("/notifications/register", pushH.Unregister)
+			r.Get("/notifications/devices", pushH.Devices)
 			// Канал MAX: отдельные настройки, потому что у него свои токен
 			// и chat_id, а прокси не нужен — сервис доступен из России.
 			r.Get("/settings/notifications/max", notifyH.GetMax)
 			r.Patch("/settings/notifications/max", notifyH.UpdateMax)
 			r.Post("/settings/notifications/max/test", notifyH.TestMax)
-
+			// Push в мобильное приложение: своя страница настроек и
+			// отдельная проверка, проходящая весь путь до телефона.
+			r.Get("/settings/notifications/push", notifyH.GetPush)
+			r.Patch("/settings/notifications/push", notifyH.UpdatePush)
+			// Проверка push: проходит весь путь до телефона, иначе
+			// включённый канал легко принять за работающий.
+			r.Post("/settings/notifications/push/test", notifyH.TestPush)
 			// Системные уведомления: пропавшие камеры, перегрузка, память,
 			// диск, перегрев. Отдельный раздел, потому что у него свои
 			// пороги, а каналы доставки общие с Telegram и MAX.

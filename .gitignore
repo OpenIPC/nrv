@@ -173,3 +173,11 @@ turn/certs/
 # Токен DuckDNS: им сервер обновляет DNS-запись и продлевает сертификат
 turn/.duckdns-token
 turn/.acme/
+
+# Настройки Firebase для приложения: содержат идентификаторы проекта,
+# у каждой сборки свои. Где взять — docs/MOBILE.md.
+mobile/android/app/google-services.json
+
+# Ключ сервисного аккаунта Firebase: им сервер отправляет push.
+# У каждой установки свой (см. docs/MOBILE.md).
+secrets/

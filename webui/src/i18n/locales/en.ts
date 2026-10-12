@@ -59,6 +59,17 @@ export default {
     deleted: 'User deleted',
     deleteFailed: 'Could not delete the user',
     confirmDelete: 'Delete user "{{name}}"? Access is revoked immediately.',
+
+    pair: 'Connect the app',
+    pairLoading: 'Preparing the code…',
+    pairFailed: 'Could not issue a connection code',
+    pairTitle: 'Connect the app for "{{name}}"',
+    pairHint:
+      'Open the Open NVR app on the phone, tap "Add server" and point the camera at the code. No address or password to type.',
+    pairCodeHint: 'The code can also be typed in by hand — it works once.',
+    pairExpires: 'Valid until {{time}}',
+    pairRefresh: 'New code',
+    pairClose: 'Done',
     roles: {
       admin: 'Administrator',
       dispatcher: 'Dispatcher',
@@ -1395,6 +1406,7 @@ export default {
 
     channelTelegram: 'Telegram',
     channelMax: 'MAX',
+    channelPush: 'Mobile app',
     channelSystem: 'Server',
 
     sendNotifications: 'Send notifications',
@@ -1411,6 +1423,10 @@ export default {
       'For a channel or a group the id starts with a minus sign. Add the bot to the chat and make it an administrator.',
     maxChatHint:
       'chat or channel id. For a private dialogue add the u prefix — MAX tells chats and users apart.',
+
+    pushWhereDevices:
+      'Recipients are phones with the Open NVR app signed in to this account. Devices register themselves on sign-in and are removed on sign-out.',
+    pushTestHint: 'The test is delivered to every registered phone.',
 
     connection: 'Connection',
     direct: 'Direct',

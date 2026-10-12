@@ -60,6 +60,17 @@ export default {
     deleted: '用户已删除',
     deleteFailed: '无法删除用户',
     confirmDelete: '删除用户“{{name}}”？其访问将立即被撤销。',
+
+    pair: '连接应用',
+    pairLoading: '正在生成代码…',
+    pairFailed: '无法生成连接代码',
+    pairTitle: '为“{{name}}”连接应用',
+    pairHint:
+      '在手机上打开 Open NVR 应用，选择“添加服务器”，将摄像头对准二维码。无需输入地址和密码。',
+    pairCodeHint: '代码也可手动输入——它只能使用一次。',
+    pairExpires: '有效期至 {{time}}',
+    pairRefresh: '新代码',
+    pairClose: '完成',
     roles: {
       admin: '管理员',
       dispatcher: '调度员',
@@ -1338,6 +1349,7 @@ export default {
 
     channelTelegram: 'Telegram',
     channelMax: 'MAX',
+    channelPush: '移动应用',
     channelSystem: '服务器',
 
     sendNotifications: '发送通知',
@@ -1351,6 +1363,10 @@ export default {
     chatId: '发送到哪里（chat_id）',
     telegramChatHint: '频道或群组的 id 以负号开头。把机器人加入会话并设为管理员。',
     maxChatHint: '会话或频道的 id。私聊请加前缀 u——MAX 会区分会话与用户。',
+
+    pushWhereDevices:
+      '接收方是已登录此账号并安装 Open NVR 应用的手机。设备在登录时自动注册，退出时自动注销。',
+    pushTestHint: '测试通知会发送到所有已注册的手机。',
 
     connection: '连接',
     direct: '直连',

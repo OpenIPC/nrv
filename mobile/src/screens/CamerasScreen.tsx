@@ -13,7 +13,7 @@ import { useApp } from '../state/AppContext';
 import { describeNetworkError } from '../net/api';
 import { joinUrl } from '../net/address';
 import { colors, radius, spacing } from '../theme';
-import type { Camera } from '../types';
+import type { Camera, SipCallRecord } from '../types';
 
 /**
  * Интервал обновления кадров в списке камер.
@@ -196,6 +196,7 @@ export default function CamerasScreen({
   onOpenAccess,
   onOpenServers,
   onOpenCalls,
+  onOpenMissed,
 }: {
   onOpenCamera: (camera: Camera) => void;
   onOpenArchive: () => void;
@@ -204,9 +205,12 @@ export default function CamerasScreen({
   onOpenServers: () => void;
   /** Звонки: домофония и своя линия. */
   onOpenCalls: () => void;
+  /** Пропущенные вызовы: журнал недозвонённых попыток. */
+  onOpenMissed: () => void;
 }) {
   const { client, current, token } = useApp();
   const [cameras, setCameras] = useState<Camera[]>([]);
+  const [missedCount, setMissedCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -216,8 +220,22 @@ export default function CamerasScreen({
       if (!client) return;
       if (!silent) setLoading(true);
       try {
-        const list = await client.listCameras();
+        const [list, missed] = await Promise.all([
+          client.listCameras(),
+          // Счётчик пропущенных идёт отдельным запросом и не должен срывать
+          // загрузку камер: у наблюдателя нет прав на журнал звонков, для
+          // него список просто пуст.
+          client
+            .listSipCalls({ onlyMissed: true, limit: 50 })
+            .catch(() => [] as SipCallRecord[]),
+        ]);
         setCameras(list);
+        // За сутки, а не за всё время: в кнопке важен свежий пропущенный
+        // вызов, а цифра из старого журнала только мешала бы.
+        const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+        setMissedCount(
+          missed.filter((call) => new Date(call.started_at).getTime() >= dayAgo).length,
+        );
         setError(null);
       } catch (err) {
         setError(describeNetworkError(err));
@@ -272,6 +290,18 @@ export default function CamerasScreen({
               должно быть не глубже одного касания от списка камер. */}
           <Pressable style={styles.archiveButton} onPress={onOpenCalls}>
             <Text style={styles.archiveButtonText}>Звонки</Text>
+          </Pressable>
+          {/* Пропущенные — с числом за сутки: вызов с калитки легко
+              пропустить, и счётчик на кнопке виден без открытия раздела. */}
+          <Pressable style={styles.archiveButton} onPress={onOpenMissed}>
+            <Text
+              style={[
+                styles.archiveButtonText,
+                missedCount > 0 && styles.archiveButtonTextAlarm,
+              ]}
+            >
+              {missedCount > 0 ? `Пропущенные · ${missedCount}` : 'Пропущенные'}
+            </Text>
           </Pressable>
         </View>
       </View>
@@ -341,6 +371,8 @@ const styles = StyleSheet.create({
   headerButtonText: { color: colors.text, fontSize: 13, fontWeight: '500' },
   headerRow: {
     flexDirection: 'row',
+    // Кнопок стало четыре: на узком экране ряд переносится, а не обрезается.
+    flexWrap: 'wrap',
     gap: spacing.sm,
     marginTop: spacing.md,
   },
@@ -350,9 +382,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    flexGrow: 1,
     alignItems: 'center',
   },
   archiveButtonText: { color: colors.text, fontSize: 15, fontWeight: '500' },
+  // Пропущенные вызовы выделяются цветом: это единственная кнопка, которая
+  // сообщает о том, что уже случилось, а не о разделе.
+  archiveButtonTextAlarm: { color: colors.danger },
 
   list: { padding: spacing.lg, paddingTop: spacing.sm, gap: spacing.md },
   row: { gap: spacing.md },

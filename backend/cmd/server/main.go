@@ -243,6 +243,19 @@ func main() {
 	notificationRepo := postgres.NewNotificationRepo(db)
 	notifier := notify.NewService(detectionSettingsRepo, storageSvc, notificationRepo)
 
+	// Push в мобильное приложение. Ключ Firebase читается из файла, путь
+	// задаётся переменной FCM_CREDENTIALS_FILE; файла нет — канал просто
+	// выключен, и установка работает без него.
+	fcmClient, fcmErr := notify.LoadFCM(cfg.FCMCredentialsFile)
+	if fcmErr != nil {
+		log.Warn().Err(fcmErr).Msg("push-уведомления в приложение недоступны")
+	}
+	notifier.WithPush(fcmClient, postgres.NewPushTokenRepo(db))
+	if fcmClient != nil {
+		log.Info().Str("project", fcmClient.ProjectID()).
+			Msg("push-уведомления в мобильное приложение включены")
+	}
+
 	// Подписки на события для внешних систем (умный дом, мобильное приложение).
 	// Заведены отдельно от уведомлений: здесь получателем выступает программа,
 	// и полезный груз — описание события, а не текст для человека.

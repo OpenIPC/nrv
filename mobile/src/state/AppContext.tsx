@@ -7,6 +7,7 @@ import React, {
   useState,
 } from 'react';
 import { ApiClient } from '../net/api';
+import { startPush, stopPush } from '../net/push';
 import { parseAddress } from '../net/address';
 import {
   clearCredentials,
@@ -66,6 +67,19 @@ interface AppState {
    * (он живёт сутки, а обновить его на сервере нечем).
    */
   signIn: (token: string, username: string, password: string) => Promise<void>;
+  /**
+   * Подключает сервер по коду из QR-кода или введённому руками.
+   *
+   * Отдельный путь от обычного входа: пароля здесь нет вовсе — код уже
+   * означает, что администратор разрешил этому человеку подключиться.
+   * Возвращает добавленный сервер, чтобы экран мог сразу его открыть.
+   */
+  pairWithCode: (params: {
+    address: string;
+    code: string;
+    name?: string;
+    username?: string;
+  }) => Promise<ServerProfile>;
   /** Забывает токен и учётные данные текущего сервера. */
   signOut: () => Promise<void>;
   /** Перечитывает список серверов из хранилища. */
@@ -150,6 +164,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // ради единообразия вызовов из интерфейса.
   }, []);
 
+  /**
+   * Приём уведомлений начинается, когда есть рабочая сессия.
+   *
+   * Токен устройства регистрируется именно здесь: право получать тревоги
+   * выдаётся не телефону, а человеку, который вошёл в систему, и при смене
+   * сервера его нужно регистрировать заново.
+   */
+  useEffect(() => {
+    if (!client || !token) return;
+    void startPush(client);
+  }, [client, token]);
   const addServer = useCallback(
     async (name: string, address: string, username?: string) => {
       const parsed = parseAddress(address);
@@ -244,7 +269,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [current],
   );
 
+  /**
+   * Подключает сервер по коду из QR-кода или введённому руками.
+   *
+   * Порядок шагов важен: сначала сервер становится текущим (addServer), и
+   * только потом мы сохраняем полученный токен. Если сделать наоборот,
+   * сохранение ушло бы в никуда — идентификатора сервера ещё нет.
+   */
+  const pairWithCode = useCallback(
+    async ({
+      address,
+      code,
+      name,
+      username,
+    }: {
+      address: string;
+      code: string;
+      name?: string;
+      username?: string;
+    }) => {
+      const profile = await addServer(name ?? '', address, username);
+
+      // Вход идёт «сырым» клиентом: токена у нас ещё нет, а сервер для этого
+      // запроса один — тот, к которому подключаемся.
+      const fresh = new ApiClient(profile.baseUrl);
+      const result = await fresh.qrLogin(code);
+
+      await saveToken(profile.id, result.token);
+      setToken(result.token);
+      // Подсказка про истёкшую сессию относится к прежнему серверу.
+      setAuthNotice(null);
+      return profile;
+    },
+    [addServer],
+  );
+
   const signOut = useCallback(async () => {
+    // Сначала снимаем регистрацию устройства на сервере: запрос должен уйти
+    // от имени текущей сессии, а после сброса токена его уже нечем послать.
+    // Отсюда и порядок строк, а не удобство чтения.
+    await stopPush();
     setToken(null);
     // Выход — осознанное действие, поэтому сохранённые данные забываем:
     // иначе после выхода приложение вошло бы само обратно.
@@ -268,6 +332,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       selectServer,
       removeServer,
       signIn,
+      pairWithCode,
       signOut,
       reloadServers,
     }),
@@ -282,6 +347,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       selectServer,
       removeServer,
       signIn,
+      pairWithCode,
       signOut,
       reloadServers,
     ],

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import QRCode from 'react-qr-code'
 import { usersAPI, type UserAccount, type UsersSchema } from '../api/client'
 import { usePermissions } from '../context/PermissionsContext'
 import { useToast } from '../context/ToastContext'
@@ -22,6 +23,29 @@ const emptyForm: FormState = {
   permissions: {},
 }
 
+/** Данные открытого окна подключения приложения. */
+interface PairingState {
+  user: UserAccount
+  /** Код с разделителем, как его показываем и набираем руками. */
+  code: string
+  expiresAt: string
+}
+
+/**
+ * Строка, которую приложение читает из QR-кода.
+ *
+ * Адрес сервера берётся из адресной строки панели, а не из настроек: если
+ * администратор открыл панель по внешнему имени, значит телефон дойдёт
+ * туда же, а адрес во внутренней сети выглядел бы как рабочий, но не
+ * работал бы с мобильного интернета.
+ *
+ * Формат описан в docs/MOBILE.md — его читает и приложение.
+ */
+function buildPairingString(serverUrl: string, code: string, username: string): string {
+  const params = new URLSearchParams({ v: '1', url: serverUrl, code, user: username })
+  return `nvr://pair?${params.toString()}`
+}
+
 /**
  * Пользователи сервера и их права.
  *
@@ -40,6 +64,11 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState<FormState | null>(null)
   const [saving, setSaving] = useState(false)
+  // Окно подключения приложения: null — закрыто.
+  const [pairing, setPairing] = useState<PairingState | null>(null)
+  // Какому пользователю сейчас выдают код: кнопка в строке показывает
+  // ожидание, а не молчит, иначе её нажимают второй раз.
+  const [pairingLoading, setPairingLoading] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -167,6 +196,25 @@ export default function UsersPage() {
     }
   }
 
+  /**
+   * Выдаёт новый код подключения и показывает его квадратиком.
+   *
+   * Код берётся у сервера, а не рисуется на месте: он должен быть
+   * одноразовым и просроченным через десять минут, а это можно проверить
+   * только на сервере и только в базе.
+   */
+  const openPairing = async (user: UserAccount) => {
+    setPairingLoading(user.id)
+    try {
+      const res = await usersAPI.appInvite(user.id)
+      setPairing({ user, code: res.data.code, expiresAt: res.data.expires_at })
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || t('usersPage.pairFailed'))
+    } finally {
+      setPairingLoading(null)
+    }
+  }
+
   const enabledCount = (user: UserAccount) =>
     Object.values(user.permissions ?? {}).filter(Boolean).length
 
@@ -211,6 +259,16 @@ export default function UsersPage() {
                       : t('usersPage.permissionCount', { count: enabledCount(user) })}
                   </td>
                   <td style={{ padding: '10px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => openPairing(user)}
+                      disabled={pairingLoading === user.id}
+                      style={{ marginRight: 8 }}
+                    >
+                      {pairingLoading === user.id
+                        ? t('usersPage.pairLoading')
+                        : t('usersPage.pair')}
+                    </button>
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => openEdit(user)}
@@ -331,6 +389,80 @@ export default function UsersPage() {
           </div>
         </div>
       )}
+
+      {/* Подключение мобильного приложения: администратор показывает этот
+          квадратик сотруднику, а тот наводит на него телефон. Ни адрес
+          сервера, ни пароль вводить не нужно. */}
+      {pairing && (
+        <div className="modal-overlay" onClick={() => setPairing(null)}>
+          <div
+            className="modal"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: 420, width: '100%', textAlign: 'center' }}
+          >
+            <h2 style={{ marginTop: 0, marginBottom: 4 }}>
+              {t('usersPage.pairTitle', { name: pairing.user.username })}
+            </h2>
+            <p style={{ color: 'var(--text-muted, #888)', marginTop: 0 }}>
+              {t('usersPage.pairHint')}
+            </p>
+
+            {/* Квадратик на белом фоне: на тёмной теме панели камера читает
+                инвертированный код заметно хуже, а на части телефонов
+                вовсе не читает. */}
+            <div
+              style={{
+                background: '#fff',
+                padding: 16,
+                borderRadius: 12,
+                display: 'inline-block',
+              }}
+            >
+              <QRCode
+                value={buildPairingString(
+                  window.location.origin,
+                  pairing.code,
+                  pairing.user.username
+                )}
+                size={220}
+                level="M"
+              />
+            </div>
+
+            <div style={{ marginTop: 16, fontSize: 26, fontWeight: 700, letterSpacing: 2 }}>
+              {pairing.code}
+            </div>
+            <p style={{ color: 'var(--text-muted, #888)', fontSize: 13 }}>
+              {t('usersPage.pairCodeHint')}
+              <br />
+              {t('usersPage.pairExpires', { time: formatExpiry(pairing.expiresAt) })}
+            </p>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 12 }}>
+              <button className="btn btn-outline" onClick={() => openPairing(pairing.user)}>
+                {t('usersPage.pairRefresh')}
+              </button>
+              <button className="btn btn-primary" onClick={() => setPairing(null)}>
+                {t('usersPage.pairClose')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+/**
+ * Время, до которого действует код.
+ *
+ * Показываем часы и минуты: администратору нужно понять, сколько осталось,
+ * а не в каком часовом поясе записано время на сервере.
+ */
+function formatExpiry(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${hours}:${minutes}`
 }

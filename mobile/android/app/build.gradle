@@ -1,6 +1,10 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+// Подключается последним: плагин Firebase должен видеть готовую конфигурацию
+// Android-приложения. Файл google-services.json лежит в этом же каталоге —
+// в репозитории его нет, у каждой сборки он свой (см. docs/MOBILE.md).
+apply plugin: "com.google.gms.google-services"
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -85,9 +89,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.mobile"
+    namespace "com.open_nvr"
     defaultConfig {
-        applicationId "com.mobile"
+        applicationId "com.open_nvr"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

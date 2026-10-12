@@ -21,9 +21,11 @@ import LiveScreen from './src/screens/LiveScreen';
 import ArchiveScreen from './src/screens/ArchiveScreen';
 import AccessScreen from './src/screens/AccessScreen';
 import CallsScreen from './src/screens/CallsScreen';
+import MissedCallsScreen from './src/screens/MissedCallsScreen';
 import CallOverlay from './src/screens/CallOverlay';
 import TvApp from './src/tv/TvApp';
 import { isTelevision } from './src/tv/device';
+import { subscribePushOpen } from './src/net/push';
 import { colors } from './src/theme';
 import type { Camera } from './src/types';
 
@@ -41,11 +43,26 @@ type Route =
   | { name: 'live'; camera: Camera }
   | { name: 'archive'; camera?: Camera }
   | { name: 'access' }
-  | { name: 'calls' };
+  | { name: 'calls' }
+  | { name: 'missed' };
 
 function Router() {
   const { ready, current, token } = useApp();
   const [route, setRoute] = useState<Route>({ name: 'cameras' });
+
+  /**
+   * Нажатие на уведомление о пропущенном звонке ведёт в журнал.
+   *
+   * Подписка живёт всё время работы приложения: уведомление могут нажать
+   * в любой момент, в том числе когда открыт другой экран.
+   */
+  useEffect(
+    () =>
+      subscribePushOpen((target) => {
+        if (target === 'missed') setRoute({ name: 'missed' });
+      }),
+    [],
+  );
 
   // Пока состояние не прочитано с диска, показывать нечего: иначе экран
   // входа мигнёт перед тем, как приложение вспомнит сохранённый токен.
@@ -98,6 +115,9 @@ function Router() {
     case 'calls':
       return <CallsScreen onBack={() => setRoute({ name: 'cameras' })} />;
 
+    case 'missed':
+      return <MissedCallsScreen onBack={() => setRoute({ name: 'cameras' })} />;
+
     case 'cameras':
     default:
       return (
@@ -106,6 +126,7 @@ function Router() {
           onOpenArchive={() => setRoute({ name: 'archive' })}
           onOpenAccess={() => setRoute({ name: 'access' })}
           onOpenCalls={() => setRoute({ name: 'calls' })}
+          onOpenMissed={() => setRoute({ name: 'missed' })}
           onOpenServers={() => setRoute({ name: 'servers' })}
         />
       );

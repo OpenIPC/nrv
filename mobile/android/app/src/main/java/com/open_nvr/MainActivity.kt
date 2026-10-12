@@ -1,4 +1,4 @@
-package com.mobile
+package com.open_nvr
 
 import android.os.Build
 import android.os.Bundle

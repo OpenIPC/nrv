@@ -318,10 +318,12 @@ cameras and working with the archive.
 
 | Screen | What it does |
 |---|---|
-| **Servers** | A list of saved servers, adding, checking the connection before saving, switching, deletion |
-| **Login** | Login and password; the token is stored separately for each server, so switching between them does not require logging in again |
+| **Servers** | A list of saved servers, adding, checking the connection before saving, switching, deletion. **Pairing by QR code** from the user card — no address or password to type |
+| **Login** | Login and password; the token is stored separately for each server, so switching between them does not require logging in again. With QR pairing the sign-in happens at once |
 | **Cameras** | Tiles with preview frames (refreshed every 10 seconds), online/offline status, pull-to-refresh |
 | **Viewing** | Live video over MSE/WebRTC, switching the main and sub stream, pause, sound |
+| **Calls** | Intercom: the line is pinned to the account, calls to subscribers and groups, answering in the background and on the lock screen |
+| **Missed** | The server's log of unanswered calls: who called, where, when and how it ended. The daily counter is visible on the main screen |
 | **Archive** | A list of recordings with a filter by camera, a built-in player with seeking, loading more on scroll. The reason for the recording is visible at once: plate, face, object |
 
 | Servers | Cameras | Archive: plates | Archive: objects |
@@ -331,6 +333,33 @@ cameras and working with the archive.
 The counter next to a server name shows how many cameras are online out of the
 total: in the screenshot 19 of 22. A camera can be filtered by address, and a
 recording opened straight from the list — for example, "unknown: P263AT54".
+
+#### Pairing by QR code
+
+Connecting a phone needs neither the server address nor the password. On the
+**Users** page the administrator taps **Connect the app** in an employee's row —
+a window with a QR code opens. In the app the employee picks **Servers → Connect
+by QR code** and points the camera at it.
+
+The code works once and lives for ten minutes; it is exchanged for a regular
+session token, and there is no password inside. If the camera cannot read the
+screen, the code can be typed by hand in **Add server manually** — it ignores
+case and the separator. Details — [docs/MOBILE.md](docs/MOBILE.md).
+
+#### Alert notifications
+
+The server sends push notifications to the app: detection events (object, face,
+plate, line crossing) and missed calls from the door panel. The notification
+arrives even when the app is closed — the system shows it; when the app is in
+the foreground, the app's own module shows it. Tapping a call notification
+opens the **Missed** screen.
+
+Settings live on **Notifications → Mobile app**: which events to send, from
+which cameras, the confidence threshold, quiet hours and the repeat interval.
+The **Save and test** button sends a test notification to every registered
+phone. Devices register themselves on sign-in and are removed on sign-out —
+nothing to configure by hand. A Firebase project and a `google-services.json`
+file are required to build the app — [docs/MOBILE.md](docs/MOBILE.md).
 
 ### Android TV
 

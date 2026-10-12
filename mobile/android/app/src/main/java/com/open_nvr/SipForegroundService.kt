@@ -1,4 +1,4 @@
-package com.mobile
+package com.open_nvr
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -37,11 +37,11 @@ class SipForegroundService : Service() {
         private const val WAKELOCK_TAG = "nvr:sip"
 
         /** Запуск и остановка службы — действиями, а не отдельными методами. */
-        const val ACTION_START = "com.mobile.sip.START"
-        const val ACTION_UPDATE = "com.mobile.sip.UPDATE"
-        const val ACTION_STOP = "com.mobile.sip.STOP"
-        const val ACTION_INCOMING = "com.mobile.sip.INCOMING"
-        const val ACTION_CLEAR_INCOMING = "com.mobile.sip.CLEAR_INCOMING"
+        const val ACTION_START = "com.open_nvr.sip.START"
+        const val ACTION_UPDATE = "com.open_nvr.sip.UPDATE"
+        const val ACTION_STOP = "com.open_nvr.sip.STOP"
+        const val ACTION_INCOMING = "com.open_nvr.sip.INCOMING"
+        const val ACTION_CLEAR_INCOMING = "com.open_nvr.sip.CLEAR_INCOMING"
 
         /** Текст уведомления: его меняет JavaScript, когда идёт звонок. */
         const val EXTRA_TITLE = "title"

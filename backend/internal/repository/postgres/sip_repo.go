@@ -158,8 +158,17 @@ func (r *SipRepo) GetAccountByUser(ctx context.Context, userID uuid.UUID) (*doma
 // через chan_pjsip), поэтому номер берётся только из него. Перебираем
 // занятые номера, а не храним счётчик: удалённую учётную запись освободившийся
 // номер должен достаться следующей, иначе номера уползают вверх.
+//
+// Занятыми считаются и закреплённые номера (user_sip_numbers), а не только
+// строки sip_accounts: линия могла быть удалена или пересоздана, а номер за
+// человеком остался — отдать его другому нельзя, иначе вызовы снова уйдут
+// не туда.
 func (r *SipRepo) NextAppNumber(ctx context.Context) (string, error) {
-	rows, err := r.db.Query(ctx, `SELECT number FROM sip_accounts WHERE number LIKE '3%'`)
+	rows, err := r.db.Query(ctx, `
+		SELECT number FROM sip_accounts WHERE number LIKE '3%'
+		UNION
+		SELECT number FROM user_sip_numbers
+	`)
 	if err != nil {
 		return "", fmt.Errorf("read used sip numbers: %w", err)
 	}
@@ -187,6 +196,41 @@ func (r *SipRepo) NextAppNumber(ctx context.Context) (string, error) {
 		}
 	}
 	return "", errors.New("свободных номеров для приложений не осталось (301–399)")
+}
+
+// NumberForUser отдаёт закреплённый за учётной записью номер.
+//
+// Второе значение — найден ли номер. Отсутствие закрепления не ошибка: так
+// выглядят учётные записи, заведённые до появления закрепления, и новые
+// пользователи, которым номер ещё не выдан.
+func (r *SipRepo) NumberForUser(ctx context.Context, userID uuid.UUID) (string, bool, error) {
+	var number string
+	err := r.db.QueryRow(ctx,
+		`SELECT number FROM user_sip_numbers WHERE user_id = $1`, userID).Scan(&number)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read pinned sip number: %w", err)
+	}
+	return number, true, nil
+}
+
+// PinNumber закрепляет номер за учётной записью.
+//
+// Повторный вызов с тем же номером ничего не портит (ON CONFLICT DO NOTHING),
+// а вызов с другим номером намеренно не перезаписывает закрепление: смена
+// номера ломает уже настроенные телефоны, для неё нужен отдельный шаг.
+func (r *SipRepo) PinNumber(ctx context.Context, userID uuid.UUID, number string) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO user_sip_numbers (user_id, number)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id) DO NOTHING
+	`, userID, number)
+	if err != nil {
+		return fmt.Errorf("pin sip number: %w", err)
+	}
+	return nil
 }
 
 // DeleteAccountByUser убирает линию владельца вместе с его учётной записью.
@@ -257,7 +301,12 @@ func (r *SipRepo) UpdateAccount(ctx context.Context, a *domain.SipAccount) error
 			record_missed = $13,
 			notes = $14,
 			vendor = $15,
-			user_id = $16,
+			-- Владелец меняется только если его передали явно. Пустое значение
+			-- означает «оставить прежнего»: правка карточки абонента приходит
+			-- без этого поля — так линия теряла владельца, и человеку выдавали
+			-- новый внутренний номер при том, что телефон у него был настроен
+			-- на прежний.
+			user_id = COALESCE($16, user_id),
 			updated_at = now()
 		WHERE id = $1`,
 		a.ID, a.Number, a.Kind, a.Name,

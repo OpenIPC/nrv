@@ -1,4 +1,4 @@
-package com.mobile
+package com.open_nvr
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule

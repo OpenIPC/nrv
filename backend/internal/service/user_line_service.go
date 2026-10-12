@@ -66,7 +66,7 @@ func (s *UserLineService) EnsureLine(ctx context.Context, user *domain.User) err
 		return err
 	}
 
-	number, err := s.repo.NextAppNumber(ctx)
+	number, err := s.numberFor(ctx, user.ID)
 	if err != nil {
 		return err
 	}
@@ -94,6 +94,35 @@ func (s *UserLineService) EnsureLine(ctx context.Context, user *domain.User) err
 		Msg("учётной записи выдана линия SIP")
 	s.sync()
 	return nil
+}
+
+// numberFor выбирает внутренний номер для учётной записи.
+//
+// Если номер уже закреплён за человеком — возвращается он же. Это главное
+// правило всей выдачи: номер набирают руками и вбивают в телефон, поэтому он
+// должен переживать и удаление линии, и её пересоздание. Раньше номер
+// считался «свободным», как только пропадала строка абонента, и человек
+// получал следующий — при живой трубе, настроенной на прежний.
+//
+// Новый номер берётся только при первом назначении и сразу закрепляется,
+// чтобы следующая выдача (после любого сбоя) дала тот же самый.
+func (s *UserLineService) numberFor(ctx context.Context, userID uuid.UUID) (string, error) {
+	number, pinned, err := s.repo.NumberForUser(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if pinned {
+		return number, nil
+	}
+
+	free, err := s.repo.NextAppNumber(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := s.repo.PinNumber(ctx, userID, free); err != nil {
+		return "", err
+	}
+	return free, nil
 }
 
 // RemoveLine убирает линию владельца.

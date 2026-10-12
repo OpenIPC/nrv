@@ -1,4 +1,4 @@
-package com.mobile
+package com.open_nvr
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule
@@ -6,16 +6,16 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
 /**
- * Регистрация модуля звука звонка.
+ * Регистрация модуля службы переднего плана.
  *
  * Автоподключение ищет библиотеки только в node_modules, поэтому собственный
  * модуль приложения регистрируется вручную — см. MainApplication.
  */
-class CallAudioPackage : ReactPackage {
+class SipForegroundPackage : ReactPackage {
 
     override fun createNativeModules(
         reactContext: ReactApplicationContext,
-    ): List<NativeModule> = listOf(CallAudioModule(reactContext))
+    ): List<NativeModule> = listOf(SipForegroundModule(reactContext))
 
     override fun createViewManagers(
         reactContext: ReactApplicationContext,

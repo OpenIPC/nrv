@@ -1,4 +1,4 @@
-package com.mobile
+package com.open_nvr
 
 import android.app.Application
 import com.facebook.react.PackageList
@@ -27,6 +27,9 @@ class MainApplication : Application(), ReactApplication {
               // Звук звонка: громкая связь и рингтон (своё вместо
               // InCallManager, который падал на Android 14).
               add(CallAudioPackage())
+              // Показ тревог, когда приложение открыто: в фоне уведомления
+              // показывает сама система, на переднем плане — не показывает.
+              add(PushNotifyPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

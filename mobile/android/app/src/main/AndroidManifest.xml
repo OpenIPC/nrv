@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <!--
@@ -117,5 +118,34 @@
         android:name=".SipForegroundService"
         android:exported="false"
         android:foregroundServiceType="dataSync|microphone" />
+
+      <!--
+        Канал, в который система кладёт уведомления Firebase, пока приложение
+        закрыто или свёрнуто.
+
+        Без этой настройки Firebase берёт свой резервный канал
+        (fcm_fallback_notification_channel), который создаёт сама: он не
+        описан в приложении, и его важность нельзя ни назвать по-русски, ни
+        поднять до «важно». Для тревоги это не годится — уведомление о
+        срабатывании должно быть громким и попадать в шторку.
+
+        Цвет и иконка — чтобы уведомление было узнаваемым: системная иконка
+        синего робота в тревоге не помогает.
+
+        tools:replace нужен потому, что библиотека Firebase объявляет те же
+        метаданные пустыми: без замены сборка отклоняет манифест.
+      -->
+      <meta-data
+        android:name="com.google.firebase.messaging.default_notification_channel_id"
+        android:value="nvr_alerts"
+        tools:replace="android:value" />
+      <meta-data
+        android:name="com.google.firebase.messaging.default_notification_icon"
+        android:resource="@mipmap/ic_launcher"
+        tools:replace="android:resource" />
+      <meta-data
+        android:name="com.google.firebase.messaging.default_notification_color"
+        android:resource="@color/nvr_notification"
+        tools:replace="android:resource" />
     </application>
 </manifest>

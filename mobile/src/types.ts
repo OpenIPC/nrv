@@ -191,3 +191,26 @@ export interface SipGroupBrief {
   enabled: boolean;
   members?: Array<{ account_id: string; number: string; display_name?: string }>;
 }
+
+/**
+ * Запись журнала звонков.
+ *
+ * Список отдаёт сервер: приложение показывает по нему пропущенные. Хранить
+ * историю в телефоне нельзя — у человека может быть несколько устройств, а
+ * журнал один, он ведётся на сервере вместе с записью разговоров.
+ */
+export interface SipCallRecord {
+  id: string;
+  /** Общий идентификатор всех событий одного вызова из Asterisk. */
+  call_id: string;
+  started_at: string;
+  ended_at?: string | null;
+  from_number: string;
+  from_name?: string;
+  to_number: string;
+  to_name?: string;
+  /** answered, missed, busy, unavailable — чем закончилась попытка. */
+  result: string;
+  talk_seconds: number;
+  clip_path?: string;
+}

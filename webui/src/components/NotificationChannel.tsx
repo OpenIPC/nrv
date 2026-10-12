@@ -45,6 +45,14 @@ interface ChannelEventRulesProps {
   toggleCamera: (id: string) => void
   /** Показывать ли ежедневный отчёт. Только у Telegram. */
   extra?: React.ReactNode
+  /**
+   * Показывать ли блок «Вложения».
+   *
+   * У push-канала вложений нет: картинка и клип остаются на сервере,
+   * в уведомление уходит только текст. Показывать галочки, которые ни на
+   * что не влияют, — обманывать ожидание.
+   */
+  attachments?: boolean
 }
 
 /**
@@ -55,7 +63,7 @@ interface ChannelEventRulesProps {
  * во всех каналах, и дублирование разметки рано или поздно разошлось бы.
  */
 export function ChannelEventRules({
-  config, cameras, patch, toggleEvent, toggleCamera, extra,
+  config, cameras, patch, toggleEvent, toggleCamera, extra, attachments = true,
 }: ChannelEventRulesProps) {
   const { t } = useTranslation()
   return (
@@ -128,6 +136,7 @@ export function ChannelEventRules({
       </div>
 
       {/* Вложения */}
+      {attachments && (
       <div className="card" style={{ marginBottom: 16 }}>
         <strong style={{ display: 'block', marginBottom: 14 }}>{t('notificationsPage.rulesAttachments')}</strong>
 
@@ -171,6 +180,7 @@ export function ChannelEventRules({
           </div>
         )}
       </div>
+      )}
 
       {/* Расписание */}
       <div className="card" style={{ marginBottom: 16 }}>

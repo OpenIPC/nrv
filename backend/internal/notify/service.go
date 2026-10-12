@@ -56,6 +56,11 @@ type Service struct {
 	// с постбуфером, поэтому событие и файл приходят в разное время.
 	pendingMu sync.Mutex
 	pending   map[string]pendingEvent
+
+	// fcm и devices — канал push в мобильное приложение. Могут быть nil:
+	// установка работает и без приложения, и это штатное состояние.
+	fcm     *FCM
+	devices PushDevices
 }
 
 // pendingEvent — событие, ждущее клип.
@@ -88,6 +93,27 @@ func NewService(settings SettingsSource, files FileReader, logger Logger) *Servi
 // Notify отправляет уведомление о событии, не блокируя вызывающего.
 func (s *Service) Notify(ctx context.Context, ev Event) {
 	go s.send(context.Background(), ev)
+}
+
+// WithPush подключает push-уведомления в мобильное приложение.
+//
+// Клиент Firebase может быть nil (ключ не настроен) — тогда канал просто
+// ничего не делает, а события продолжают уходить в мессенджеры.
+func (s *Service) WithPush(fcm *FCM, devices PushDevices) *Service {
+	s.fcm = fcm
+	s.devices = devices
+	return s
+}
+
+// pushFactory собирает канал push для текущих настроек.
+//
+// Возвращает nil, если канал выключен или не настроен: вызывающий код тогда
+// просто его пропускает.
+func (s *Service) pushFactory(cfg domain.PushConfig) *pushChannel {
+	if !cfg.Enabled || s.fcm == nil || s.devices == nil {
+		return nil
+	}
+	return &pushChannel{fcm: s.fcm, devices: s.devices}
 }
 
 // NotifySystem отправляет сообщение о состоянии сервера.
@@ -288,6 +314,16 @@ func (s *Service) send(ctx context.Context, ev Event) {
 		},
 		buildMaxMessage,
 	)
+
+	// Push отправляется после мессенджеров и независимо от них: отказ
+	// Telegram не должен лишать оператора уведомления на телефон.
+	if ch := s.pushFactory(settings.Notifications.Push); ch != nil {
+		s.deliver(ctx, ev, key, "push", RuleFromCommon(settings.Notifications.Push.Common()), clipData, clipMB, clipErr,
+			settings.Notifications.Push.Common(),
+			func(Rule) channelSender { return *ch },
+			func(Event) string { return "" },
+		)
+	}
 }
 
 // readClip читает клип из хранилища с учётом общего предела размера.
@@ -451,6 +487,34 @@ type TestResult struct {
 	OK       bool   `json:"ok"`
 	ChatName string `json:"chat_name,omitempty"`
 	Error    string `json:"error,omitempty"`
+}
+
+// TestPush проверяет канал push и отправляет пробное уведомление.
+//
+// Проверка сквозная: проходит путь целиком — от ключа Firebase до телефона.
+// Иначе оператор видел бы галочку «включено» и не знал, что устройства ни
+// одного не зарегистрировано.
+func (s *Service) TestPush(ctx context.Context, cfg domain.PushConfig) TestResult {
+	if s.fcm == nil {
+		return TestResult{Error: "ключ Firebase не настроен: push-уведомления недоступны"}
+	}
+	if s.devices == nil {
+		return TestResult{Error: "хранилище устройств недоступно"}
+	}
+
+	ch := s.pushFactory(cfg)
+	if ch == nil {
+		return TestResult{Error: "канал уведомлений в приложение выключен"}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	note, err := ch.test(ctx, false, nil)
+	if err != nil {
+		return TestResult{Error: err.Error()}
+	}
+	return TestResult{OK: true, ChatName: note}
 }
 
 // Test проверяет настройки Telegram и отправляет пробное сообщение.

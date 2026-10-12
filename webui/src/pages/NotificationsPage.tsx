@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
   camerasAPI, notificationsAPI,
-  type TelegramConfig, type MaxConfig, type Camera, type NotificationLogRecord,
+  type TelegramConfig, type MaxConfig, type PushConfig, type Camera, type NotificationLogRecord,
 } from '../api/client'
 import { useToast } from '../context/ToastContext'
 import {
@@ -53,14 +53,33 @@ const EMPTY_MAX: MaxConfig = {
   repeat_minutes: 5,
 }
 
+// У канала push нет ни токена, ни чата: получатели — устройства, которые
+// приложение зарегистрировало на сервере. Поэтому здесь только правила отбора
+// событий и включение канала.
+const EMPTY_PUSH: PushConfig = {
+  enabled: false,
+  // Вложения push не отправляет — см. комментарий к PushConfig.
+  send_snapshot: true,
+  send_clip: false,
+  clip_max_mb: 20,
+  events: ['plate', 'face', 'object'],
+  cameras: [],
+  min_confidence: 0,
+  quiet_hours_enabled: false,
+  quiet_hours_from: '23:00',
+  quiet_hours_to: '07:00',
+  repeat_minutes: 5,
+}
+
 /** Ключи подписей каналов — для журнала и переключателя. */
 const CHANNEL_LABELS: Record<string, string> = {
   telegram: 'notificationsPage.channelTelegram',
   max: 'notificationsPage.channelMax',
+  push: 'notificationsPage.channelPush',
   system: 'notificationsPage.channelSystem',
 }
 
-type Tab = 'telegram' | 'max' | 'system'
+type Tab = 'telegram' | 'max' | 'push' | 'system'
 
 /**
  * Подписи к причинам отказа в журнале отправок.
@@ -97,6 +116,9 @@ export default function NotificationsPage() {
 
   const [telegram, setTelegram] = useState<TelegramConfig>(EMPTY_TELEGRAM)
   const [max, setMax] = useState<MaxConfig>(EMPTY_MAX)
+  // Канал push: его настраивают отдельно от мессенджеров, потому что
+  // получатели — устройства приложения, а не чат.
+  const [push, setPush] = useState<PushConfig>(EMPTY_PUSH)
   // Системные уведомления настраиваются отдельно: здесь не «куда
   // отправлять», а «что считать проблемой сервера».
   const [system, setSystem] = useState<SystemConfig>(DEFAULT_SYSTEM)
@@ -123,10 +145,11 @@ export default function NotificationsPage() {
     Promise.all([
       notificationsAPI.get(),
       notificationsAPI.getMax(),
+      notificationsAPI.getPush(),
       systemAPI.get(),
       camerasAPI.list(),
     ])
-      .then(([tgRes, maxRes, sysRes, camRes]) => {
+      .then(([tgRes, maxRes, pushRes, sysRes, camRes]) => {
         if (cancelled) return
         // Сервер отдаёт пустые списки как null: в Go пустой срез без
         // явной инициализации превращается в null, и обращения к нему
@@ -142,6 +165,12 @@ export default function NotificationsPage() {
           ...maxRes.data,
           events: maxRes.data.events || [],
           cameras: maxRes.data.cameras || [],
+        })
+        setPush({
+          ...EMPTY_PUSH,
+          ...pushRes.data,
+          events: pushRes.data.events || [],
+          cameras: pushRes.data.cameras || [],
         })
         setSystem({
           ...DEFAULT_SYSTEM,
@@ -183,6 +212,12 @@ export default function NotificationsPage() {
     setTestResult(null)
   }, [])
 
+  const patchPush = useCallback(<K extends keyof PushConfig>(key: K, value: PushConfig[K]) => {
+    setPush((prev) => ({ ...prev, [key]: value }))
+    setDirty(true)
+    setTestResult(null)
+  }, [])
+
   /** Обновление поля системных настроек.
    *
    * Принимает имя строкой, а не ключом типа: общий блок правил отдаёт
@@ -214,8 +249,9 @@ export default function NotificationsPage() {
    */
   const patchActive = useCallback((key: string, value: unknown) => {
     if (tab === 'telegram') patchTelegram(key as keyof TelegramConfig, value as never)
-    else patchMax(key as keyof MaxConfig, value as never)
-  }, [tab, patchTelegram, patchMax])
+    else if (tab === 'max') patchMax(key as keyof MaxConfig, value as never)
+    else if (tab === 'push') patchPush(key as keyof PushConfig, value as never)
+  }, [tab, patchTelegram, patchMax, patchPush])
 
   /** Переключение типа события в активном канале. */
   const toggleEventActive = useCallback((value: string) => {
@@ -227,6 +263,7 @@ export default function NotificationsPage() {
     }
     if (tab === 'telegram') setTelegram(update)
     else if (tab === 'max') setMax(update)
+    else if (tab === 'push') setPush(update)
     else setSystem(update)
     setDirty(true)
     setTestResult(null)
@@ -242,6 +279,7 @@ export default function NotificationsPage() {
     }
     if (tab === 'telegram') setTelegram(update)
     else if (tab === 'max') setMax(update)
+    else if (tab === 'push') setPush(update)
     else setSystem(update)
     setDirty(true)
     setTestResult(null)
@@ -257,6 +295,9 @@ export default function NotificationsPage() {
     } else if (tab === 'max') {
       const res = await notificationsAPI.updateMax(max)
       setMax((prev) => ({ ...prev, ...res.data }))
+    } else if (tab === 'push') {
+      const res = await notificationsAPI.updatePush(push)
+      setPush((prev) => ({ ...prev, ...res.data }))
     } else {
       const res = await systemAPI.update(system)
       setSystem((prev) => ({ ...prev, ...res.data }))
@@ -301,7 +342,9 @@ export default function NotificationsPage() {
 
       const res = tab === 'telegram'
         ? await notificationsAPI.test(telegram, telegram.send_snapshot)
-        : await notificationsAPI.testMax(max, max.send_snapshot)
+        : tab === 'max'
+          ? await notificationsAPI.testMax(max, max.send_snapshot)
+          : await notificationsAPI.testPush()
 
       if (res.data.ok) {
         setTestResult({
@@ -340,7 +383,10 @@ export default function NotificationsPage() {
     )
   }
 
-  const cfg = tab === 'telegram' ? telegram : max
+  const cfg = tab === 'telegram' ? telegram : tab === 'max' ? max : push
+  // Токен и чат бывают только у мессенджеров: у push вместо них устройства,
+  // зарегистрированные приложением.
+  const messenger = tab === 'telegram' ? telegram : max
 
   return (
     <div>
@@ -357,7 +403,7 @@ export default function NotificationsPage() {
 
       {/* Переключатель разделов */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {(['telegram', 'max', 'system'] as Tab[]).map((tb) => {
+        {(['telegram', 'max', 'push', 'system'] as Tab[]).map((tb) => {
           const active = tab === tb
           const channelCfg = tb === 'telegram' ? telegram : tb === 'max' ? max : system
           return (
@@ -434,6 +480,11 @@ export default function NotificationsPage() {
           </div>
         )}
 
+        {tab === 'push' ? (
+          <div style={hintStyle}>
+            {t('notificationsPage.pushWhereDevices')}
+          </div>
+        ) : (
         <div style={{
           display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
           gap: 14, marginTop: 14,
@@ -445,8 +496,8 @@ export default function NotificationsPage() {
               <input
                 className="input"
                 type={showToken ? 'text' : 'password'}
-                value={cfg.bot_token}
                 placeholder={tab === 'telegram' ? '123456789:AA...' : t('notificationsPage.maxTokenPlaceholder')}
+                value={messenger.bot_token}
                 onChange={(e) => patchActive('bot_token', e.target.value)}
                 style={{ width: '100%', paddingRight: 34 }}
               />
@@ -475,7 +526,7 @@ export default function NotificationsPage() {
             <label style={labelStyle}>{t('notificationsPage.chatId')}</label>
             <input
               className="input"
-              value={cfg.chat_id}
+              value={messenger.chat_id}
               placeholder={tab === 'telegram' ? '-1001234567890' : '123456789'}
               onChange={(e) => patchActive('chat_id', e.target.value)}
               style={{ width: '100%' }}
@@ -487,9 +538,11 @@ export default function NotificationsPage() {
             </div>
           </div>
         </div>
+        )}
       </div>
 
-      {/* Соединение */}
+      {/* Соединение: только у мессенджеров — у push ни токена, ни прокси. */}
+      {tab !== 'push' && (
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
           <ShieldCheck
@@ -569,14 +622,16 @@ export default function NotificationsPage() {
           </div>
         )}
       </div>
+      )}
 
-      {/* Правила отбора событий: одинаковы для обоих каналов */}
+      {/* Правила отбора событий: одинаковы для всех каналов */}
       <ChannelEventRules
         config={cfg}
         cameras={cameras}
         patch={patchActive}
         toggleEvent={toggleEventActive}
         toggleCamera={toggleCameraActive}
+        attachments={tab !== 'push'}
         extra={tab === 'telegram' ? (
           <label style={{ ...checkStyle, marginTop: 12 }}>
             <input
@@ -602,12 +657,14 @@ export default function NotificationsPage() {
         onClick={runTest}
         label={t('notificationsPage.testAndSave', { channel: t(CHANNEL_LABELS[tab]) })}
         result={testResult}
-        hint={t('notificationsPage.testHint')}
+        hint={tab === 'push'
+          ? t('notificationsPage.pushTestHint')
+          : t('notificationsPage.testHint')}
       />
       </>
       )}
 
-      {/* Журнал отправок: общий для обоих каналов */}
+      {/* Журнал отправок: общий для всех каналов */}
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
           <strong>{t('notificationsPage.logTitle')}</strong>

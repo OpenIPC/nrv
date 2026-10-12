@@ -76,6 +76,17 @@ func (s *Service) sendMissedCall(ctx context.Context, call MissedCall) {
 	if call.Max && maxCfg.Enabled {
 		s.sendMissedCallToMax(ctx, maxCfg, text, clip)
 	}
+
+	// Push уходит в приложение независимо от галочек абонента: устройства
+	// приложения не привязаны к конкретному абоненту (их выбирает человек
+	// в приложении), а пропущенный вызов — это ровно то, ради чего
+	// приложение и ставят на телефон.
+	if ch := s.pushFactory(settings.Notifications.Push); ch != nil {
+		if err := ch.sendMissedCall(ctx, call); err != nil {
+			log.Warn().Err(err).
+				Msg("не удалось отправить уведомление о пропущенном вызове в приложение")
+		}
+	}
 }
 
 // readCallClip читает запись вызова из хранилища.

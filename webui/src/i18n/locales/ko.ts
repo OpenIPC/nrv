@@ -65,6 +65,17 @@ export default {
     deleted: '사용자가 삭제되었습니다',
     deleteFailed: '사용자를 삭제하지 못했습니다',
     confirmDelete: '사용자 "{{name}}"을(를) 삭제하시겠습니까? 접근이 즉시 차단됩니다.',
+
+    pair: '앱 연결',
+    pairLoading: '코드 준비 중…',
+    pairFailed: '연결 코드를 발급하지 못했습니다',
+    pairTitle: '"{{name}}"의 앱 연결',
+    pairHint:
+      '휴대폰에서 Open NVR 앱을 열고 "서버 추가"를 선택한 뒤 카메라를 코드에 맞추십시오. 주소와 비밀번호를 입력할 필요가 없습니다.',
+    pairCodeHint: '코드는 직접 입력할 수도 있습니다 — 한 번만 사용할 수 있습니다.',
+    pairExpires: '{{time}}까지 유효',
+    pairRefresh: '새 코드',
+    pairClose: '완료',
     roles: {
       admin: '관리자',
       dispatcher: '디스패처',
@@ -1368,6 +1379,7 @@ export default {
 
     channelTelegram: 'Telegram',
     channelMax: 'MAX',
+    channelPush: '모바일 앱',
     channelSystem: '서버',
 
     sendNotifications: '알림 보내기',
@@ -1381,6 +1393,10 @@ export default {
     chatId: '어디로 보낼지 (chat_id)',
     telegramChatHint: '채널이나 그룹의 id는 빼기 부호로 시작합니다. 봇을 대화에 추가하고 관리자로 지정하십시오.',
     maxChatHint: '대화 또는 채널의 id. 개인 대화는 앞에 u를 붙이십시오 — MAX는 대화와 사용자를 구분합니다.',
+
+    pushWhereDevices:
+      '수신 대상은 이 계정으로 로그인한 Open NVR 앱이 설치된 휴대폰입니다. 기기는 로그인 시 자동 등록되고 로그아웃 시 해제됩니다.',
+    pushTestHint: '테스트 알림은 등록된 모든 휴대폰으로 전송됩니다.',
 
     connection: '연결',
     direct: '직접 연결',

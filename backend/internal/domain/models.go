@@ -460,6 +460,12 @@ const (
 type NotificationSettings struct {
 	Telegram TelegramConfig `json:"telegram"`
 	Max      MaxConfig      `json:"max"`
+	// Push — уведомления в мобильное приложение через Firebase.
+	//
+	// Отдельный канал, хотя правила отбора событий те же: у него нет ни
+	// чата, ни бота — получатели это зарегистрированные устройства, и
+	// включается он независимо от мессенджеров.
+	Push PushConfig `json:"push"`
 	// System — уведомления о состоянии сервера: пропавшие камеры,
 	// перегрузка, нехватка памяти, перегрев. Отдельно от каналов,
 	// потому что это сообщения о самом сервере, а не о событиях
@@ -518,6 +524,40 @@ type MaxConfig struct {
 // Common возвращает общие поля канала MAX.
 func (c MaxConfig) Common() CommonChannelConfig {
 	return c.CommonChannelConfig
+}
+
+// PushConfig — канал уведомлений в мобильное приложение (Firebase).
+//
+// Получатели здесь не задаются: это все зарегистрированные устройства.
+// В настройках остаются только правила отбора событий — те же, что у
+// мессенджеров, чтобы «о чём сообщать» настраивалось один раз.
+//
+// Вложения не отправляются: push несёт короткий текст и данные для
+// открытия нужного экрана, а снимок приложение загрузит само по ссылке
+// из этих данных.
+type PushConfig struct {
+	CommonChannelConfig
+	// UpdatedAt заполняется при чтении из БД.
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+// Common возвращает общие поля канала push.
+func (c PushConfig) Common() CommonChannelConfig {
+	return c.CommonChannelConfig
+}
+
+// PushToken — устройство, которому можно отправить push-уведомление.
+type PushToken struct {
+	ID uuid.UUID `json:"id"`
+	// UserID — владелец устройства: приложение регистрируется от имени
+	// вошедшего пользователя.
+	UserID uuid.UUID `json:"user_id"`
+	// Token — токен Firebase для этой установки приложения.
+	Token      string    `json:"token"`
+	Platform   string    `json:"platform"`
+	DeviceName string    `json:"device_name"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastSeenAt time.Time `json:"last_seen_at"`
 }
 
 // Common возвращает общие поля канала Telegram.

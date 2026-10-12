@@ -13,6 +13,7 @@ import type {
   Recording,
   RecordingsPage,
   SipAccountBrief,
+  SipCallRecord,
   SipGroupBrief,
   StreamInfo,
 } from '../types';
@@ -189,6 +190,22 @@ export class ApiClient {
     return response.data as SipLineInfo;
   }
 
+  /**
+   * Вход по коду подключения из QR-кода панели.
+   *
+   * Код выдаёт администратор из карточки пользователя: он одноразовый и
+   * живёт десять минут. Пароль здесь не нужен — код уже означает «этому
+   * человеку разрешено подключиться», и заставлять его набирать пароль на
+   * телефоне было бы лишним шагом.
+   */
+  async qrLogin(code: string): Promise<LoginResult> {
+    const response = await this.http.post('/auth/qr', { code });
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('qr-login'));
+    }
+    return response.data as LoginResult;
+  }
+
   /** Абоненты домофонии: панели, трубки, камеры с кнопкой вызова. */
   async listSipAccounts(): Promise<SipAccountBrief[]> {
     const response = await this.http.get('/sip/accounts');
@@ -205,6 +222,64 @@ export class ApiClient {
       throw toApiError(response.status, response.data, new Error('sip-groups'));
     }
     return (response.data ?? []) as SipGroupBrief[];
+  }
+
+  /**
+   * Журнал звонков; с onlyMissed — только неотвеченные.
+   *
+   * Нужен экрану пропущенных: уведомление легко смахнуть, а журнал
+   * остаётся на сервере и общий для всех устройств человека.
+   */
+  async listSipCalls(
+    options: { limit?: number; onlyMissed?: boolean } = {},
+  ): Promise<SipCallRecord[]> {
+    const response = await this.http.get('/sip/calls', {
+      params: {
+        limit: options.limit ?? 50,
+        only_missed: options.onlyMissed ? 'true' : undefined,
+      },
+    });
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('sip-calls'));
+    }
+    return (response.data ?? []) as SipCallRecord[];
+  }
+
+  /**
+   * Сообщает серверу токен устройства для push-уведомлений.
+   *
+   * Вызывается при каждом входе: токен меняется при переустановке и иногда
+   * сам по себе, а сервер должен знать, куда отправлять тревоги. Повторная
+   * регистрация того же токена просто обновляет владельца.
+   */
+  async registerPushToken(
+    token: string,
+    platform: string,
+    deviceName: string,
+  ): Promise<void> {
+    const response = await this.http.post('/notifications/register', {
+      token,
+      platform,
+      device_name: deviceName,
+    });
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('push-register'));
+    }
+  }
+
+  /**
+   * Забывает токен устройства.
+   *
+   * Вызывается при выходе из аккаунта: иначе тревоги продолжали бы
+   * приходить на телефон, с которого человек уже вышел.
+   */
+  async unregisterPushToken(token: string): Promise<void> {
+    const response = await this.http.delete('/notifications/register', {
+      data: { token },
+    });
+    if (response.status !== 200) {
+      throw toApiError(response.status, response.data, new Error('push-unregister'));
+    }
   }
 
   /** Адреса потоков одной камеры. */

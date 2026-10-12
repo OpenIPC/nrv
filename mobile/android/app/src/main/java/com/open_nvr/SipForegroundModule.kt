@@ -1,4 +1,4 @@
-package com.mobile
+package com.open_nvr
 
 import android.content.Context
 import android.content.Intent

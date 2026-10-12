@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"regexp"
@@ -66,6 +67,11 @@ type UserService struct {
 	// установке без телефонии: тогда пользователи заводятся как раньше.
 	lines UserLineProvisioner
 
+	// invites выдаёт коды подключения мобильного приложения. nil — если
+	// мобильного клиента на установке нет; тогда выдача кода отвечает
+	// ошибкой, а не паникой.
+	invites *postgres.AppInviteRepo
+
 	mu    sync.Mutex
 	cache map[uuid.UUID]userCacheEntry
 }
@@ -76,6 +82,16 @@ func NewUserService(repo *postgres.UserRepo, lines UserLineProvisioner) *UserSer
 		lines: lines,
 		cache: make(map[uuid.UUID]userCacheEntry),
 	}
+}
+
+// WithInvites подключает хранилище кодов подключения приложения.
+//
+// Отдельный шаг, а не аргумент конструктора: сервис пользователей работает
+// и без мобильного приложения, и установка без него не должна требовать
+// готового хранилища приглашений.
+func (s *UserService) WithInvites(repo *postgres.AppInviteRepo) *UserService {
+	s.invites = repo
+	return s
 }
 
 // List возвращает всех пользователей.
@@ -123,8 +139,8 @@ func (s *UserService) Create(ctx context.Context, req CreateUserRequest) (*domai
 	}
 	// Линия SIP — часть учётной записи, а не отдельное действие: человек
 	// входит в приложение и должен сразу получить свой номер. Ошибку не
-	// возвращаем: учётная запись уже создана, а линию можно выдать позже
-	// (она досоздаётся при входе владельца в приложение).
+	// возвращаем: учётная запись уже создана, а линию можно выдать позже —
+	// она досоздаётся, когда приложение запрашивает свою линию при входе.
 	if s.lines != nil {
 		if err := s.lines.EnsureLine(ctx, user); err != nil {
 			log.Warn().Err(err).Str("user", user.Username).
@@ -302,4 +318,126 @@ func permissionsForStore(role string, perms map[string]bool) map[string]any {
 		return map[string]any{}
 	}
 	return domain.SanitizePermissions(perms)
+}
+
+// --- Подключение мобильного приложения ---
+
+// appInviteTTL — сколько живёт код подключения.
+//
+// Десять минут — это «показал экран, навёл телефон, считал» с запасом на
+// неудачное освещение. Дольше держать код нельзя: в отличие от пароля он
+// показывается на чужом мониторе и легко попадает в чужую галерею.
+const appInviteTTL = 10 * time.Minute
+
+// inviteAlphabet — символы кода подключения.
+//
+// Без нуля, «O», единицы, «l» и «I»: код набирают руками, когда камера
+// не читает экран, и именно эти пары символов путают чаще всего.
+const inviteAlphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+// inviteCodeLength — длина кода без разделителя.
+//
+// Восемь символов из 32-буквенного алфавита — это 40 бит: подобрать код
+// за десять минут его жизни перебором невозможно, а набрать вручную легко.
+const inviteCodeLength = 8
+
+// CreateAppInvite выдаёт код подключения приложения для пользователя.
+func (s *UserService) CreateAppInvite(
+	ctx context.Context,
+	userID uuid.UUID,
+	createdBy uuid.UUID,
+) (*domain.AppInvite, error) {
+	if s.invites == nil {
+		return nil, errors.New("подключение приложения недоступно: хранилище кодов не настроено")
+	}
+
+	// Код выдаём только существующему пользователю: иначе он вёл бы «в никуда»,
+	// и администратор узнал бы об этом лишь на телефоне, у двери.
+	user, err := s.repo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, errors.New("пользователь не найден")
+	}
+
+	code, err := newInviteCode()
+	if err != nil {
+		return nil, err
+	}
+
+	return s.invites.Create(ctx, user.ID, createdBy, code, appInviteTTL)
+}
+
+// RedeemAppInvite меняет код подключения на пользователя.
+//
+// Возвращает владельца кода: приложение получает ту же учётную запись, что
+// и при входе по паролю, со всеми её правами. Никаких дополнительных
+// ограничений у подключённого таким образом клиента нет и быть не должно —
+// иначе поведение приложения зависело бы от способа входа.
+func (s *UserService) RedeemAppInvite(ctx context.Context, code string) (*domain.User, error) {
+	if s.invites == nil {
+		return nil, errors.New("подключение приложения недоступно")
+	}
+
+	normalized := normalizeInviteCode(code)
+	if normalized == "" {
+		return nil, domain.ErrInviteInvalid
+	}
+
+	invite, err := s.invites.Consume(ctx, normalized)
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := s.repo.GetByID(ctx, invite.UserID)
+	if err != nil {
+		// Пользователя удалили между выдачей кода и его предъявлением.
+		// Код уже помечен использованным, поэтому повторно он не сработает.
+		return nil, domain.ErrInviteInvalid
+	}
+	return user, nil
+}
+
+// FormatInviteCode показывает код так, как его удобно набирать руками.
+//
+// Разделитель ставится только при показе: в базе код хранится без него,
+// чтобы ввод с дефисом и без него приводил к одному и тому же коду.
+func FormatInviteCode(code string) string {
+	if len(code) != inviteCodeLength {
+		return code
+	}
+	return code[:4] + "-" + code[4:]
+}
+
+// normalizeInviteCode приводит код к виду, в котором он записан в базе.
+//
+// Убираются пробелы и дефисы, буквы поднимаются в верхний регистр: код
+// вводят руками с экрана и с чужого листа, и требовать точного совпадения
+// символов в таком месте — лишняя придирка, которая выглядит как «код
+// неверный».
+func normalizeInviteCode(code string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(strings.TrimSpace(code)) {
+		switch r {
+		case ' ', '-', '_':
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// newInviteCode выдаёт новый код подключения.
+//
+// crypto/rand, а не math/rand: код — это право войти в систему, и
+// предсказуемая последовательность означала бы, что чужой код можно
+// вычислить, зная соседний.
+func newInviteCode() (string, error) {
+	buf := make([]byte, inviteCodeLength)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("не удалось получить случайный код: %w", err)
+	}
+	out := make([]byte, inviteCodeLength)
+	for i, b := range buf {
+		out[i] = inviteAlphabet[int(b)%len(inviteAlphabet)]
+	}
+	return string(out), nil
 }
