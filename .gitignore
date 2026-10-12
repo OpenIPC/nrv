@@ -169,3 +169,7 @@ asterisk/config/accounts/*.conf
 
 # Сертификаты TURN-сервера: ключ у каждой установки свой
 turn/certs/
+
+# Токен DuckDNS: им сервер обновляет DNS-запись и продлевает сертификат
+turn/.duckdns-token
+turn/.acme/
