@@ -25,7 +25,7 @@ import messaging from '@react-native-firebase/messaging';
 import type { ApiClient } from './api';
 
 /** Экран, который нужно открыть после нажатия на уведомление. */
-export type PushOpenTarget = 'missed' | null;
+export type PushOpenTarget = 'missed' | 'calls' | null;
 
 type PushOpenListener = (target: PushOpenTarget) => void;
 
@@ -122,7 +122,55 @@ function asText(value: string | object | undefined): string | null {
 
 /** Тип события из данных сообщения: для него выбирается экран. */
 function targetOf(data: PushData | undefined): PushOpenTarget {
-  return data?.type === 'missed_call' ? 'missed' : null;
+  if (data?.type === 'missed_call') {
+    return 'missed';
+  }
+  // Звонок в домофон ведёт на экран звонков, а не в журнал: человеку нужно
+  // ответить или открыть дверь, а не читать, кто звонил.
+  return data?.type === 'incoming_call' ? 'calls' : null;
+}
+
+/**
+ * Сообщение о входящем звонке.
+ *
+ * Сервер присылает его, увидев начало набора на линию приложения. Нужно оно
+ * потому, что в блокировке телефон замораживает приложение и линия пропадает
+ * со станции: без пробуждения звонок не доходит вовсе. Станция в это время
+ * повторяет набор несколько секунд (см. `app-line` в диалплане), поэтому
+ * проснувшемуся приложению достаточно быстро зарегистрироваться — вызов
+ * его уже ждёт.
+ *
+ * Слушатель получает номер линии: у человека их может быть несколько, и
+ * поднимать надо ту, на которую звонят.
+ */
+export function subscribeIncomingCall(listener: (number: string) => void): () => void {
+  incomingCallListeners.add(listener);
+  return () => {
+    incomingCallListeners.delete(listener);
+  };
+}
+
+/**
+ * Сообщает о входящем звонке, пришедшем push-сообщением.
+ *
+ * Вызывается из двух мест: когда приложение открыто (обработчик сообщений
+ * Firebase) и когда оно свёрнуто (фоновый обработчик в pushBackground.ts).
+ * Подписчиков может не быть вовсе — тогда сообщение просто теряется, и линию
+ * поднимет открытие приложения.
+ */
+export function emitIncomingCall(number: string): void {
+  incomingCallListeners.forEach((listener) => listener(number));
+}
+
+/** Подписчики на входящий звонок: их ставит домофония. */
+const incomingCallListeners = new Set<(number: string) => void>();
+
+/** Разбирает данные сообщения о звонке. */
+function incomingCallNumber(data: PushData | undefined): string | null {
+  if (data?.type !== 'incoming_call') {
+    return null;
+  }
+  return asText(data.number) ?? '';
 }
 
 /** Показывает уведомление, когда приложение открыто. */
@@ -200,6 +248,14 @@ export async function startPush(client: ApiClient): Promise<void> {
 
     // Сообщение пришло в открытое приложение.
     messaging().onMessage((message) => {
+      // Звонок не показываем уведомлением: приложение открыто, и вместо
+      // шторки должен появиться экран вызова. Уведомление о звонке показала
+      // бы система сама — но только когда приложение свёрнуто.
+      const callNumber = incomingCallNumber(message.data);
+      if (callNumber !== null) {
+        emitIncomingCall(callNumber);
+        return;
+      }
       showAlert(message);
     }),
 

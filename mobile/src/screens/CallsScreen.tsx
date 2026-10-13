@@ -12,6 +12,7 @@ import {
 import { useApp } from '../state/AppContext';
 import { useSip } from '../state/SipContext';
 import { describeNetworkError } from '../net/api';
+import { describeMicrophone } from '../net/mediaProbe';
 import { colors, radius, spacing } from '../theme';
 import type { SipAccountBrief, SipGroupBrief } from '../types';
 
@@ -39,6 +40,9 @@ export default function CallsScreen({ onBack }: { onBack: () => void }) {
   // роняет приложение на конкретном телефоне, звонок со звуком должен
   // остаться рабочим.
   const [videoOn, setVideoOn] = useState(true);
+  // Состояние микрофона: проверяем при открытии экрана, потому что без него
+  // звонок не уходит, а причина снаружи не видна.
+  const [microphone, setMicrophone] = useState('проверяю…');
 
   const load = useCallback(async () => {
     if (!client) return;
@@ -65,6 +69,21 @@ export default function CallsScreen({ onBack }: { onBack: () => void }) {
     void load();
   }, [load]);
 
+  // Проверка микрофона: она отвечает на вопрос, который снаружи не виден —
+  // может ли этот телефон вообще начать вызов. Занимает не больше секунды,
+  // а на «нет ответа» ждёт шесть секунд, чтобы не подвесить экран.
+  useEffect(() => {
+    let cancelled = false;
+    void describeMicrophone().then((result) => {
+      if (!cancelled) {
+        setMicrophone(result);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // По умолчанию — значение из настроек сервера: владелец включает видео
   // один раз для всей установки, а не на каждом телефоне отдельно.
   useEffect(() => {
@@ -79,7 +98,12 @@ export default function CallsScreen({ onBack }: { onBack: () => void }) {
       case 'registered':
         return `Линия ${line.number} · на связи`;
       case 'connecting':
-        return `Линия ${line.number} · подключение…`;
+        // Причину обрыва показываем и здесь: соединение рвётся в фоне, и
+        // без текста строка «подключение…» выглядела бы как обычный запуск,
+        // хотя на самом деле линия только что была потеряна.
+        return snapshot.registrationError
+          ? `Линия ${line.number} · ${snapshot.registrationError}`
+          : `Линия ${line.number} · подключение…`;
       case 'failed':
         return `Линия ${line.number} · ${snapshot.registrationError || 'нет связи'}`;
       default:
@@ -124,6 +148,25 @@ export default function CallsScreen({ onBack }: { onBack: () => void }) {
           </Pressable>
         )}
       </View>
+
+      {/* Строка диагностики: по ней видно состояние линии без журналов
+          телефона и без журналов станции. Заведена 13.10.2026, когда
+          разбирали «вызов идёт, а на станции его нет»: снаружи это же
+          выглядит как любая другая сетёвая беда, а причина лежала
+          в самом клиенте. Убрать, когда фоновые переподключения перестанут
+          доставлять хлопоты. */}
+      <Text style={styles.diag} numberOfLines={2}>
+        {`линия: ${snapshot.registration}` +
+          ` · транспорт: ${snapshot.diag.connected ? 'есть' : 'нет'}` +
+          ` · перезапусков: ${snapshot.diag.restarts}` +
+          (snapshot.diag.registeredAgo >= 0
+            ? ` · регистрация ${snapshot.diag.registeredAgo} с назад`
+            : '')}
+      </Text>
+      {/* Проверка медиа: без микрофона вызвать никого нельзя, а снаружи это
+          выглядит как «станция не отвечает». Пусть будет видно заранее. */}
+      <Text style={styles.diag} numberOfLines={2}>{`микрофон: ${microphone}`}</Text>
+      <Text style={styles.diag} numberOfLines={3}>{`события: ${snapshot.diag.events.join(' → ')}`}</Text>
 
       {/* Видео можно выключить перед звонком: на слабом телефоне или в
           мобильной сети так надёжнее, а звук остаётся. */}
@@ -248,6 +291,12 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   status: { color: colors.textSecondary, fontSize: 13, flex: 1 },
+  diag: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.xs,
+  },
   retry: { color: colors.primary, fontSize: 13 },
   videoToggle: {
     flexDirection: 'row',

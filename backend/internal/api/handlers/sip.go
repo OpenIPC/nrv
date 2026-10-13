@@ -608,7 +608,7 @@ func (h *SipHandler) GetAccount(w http.ResponseWriter, r *http.Request) {
 	// Что о нём знает Asterisk.
 	var peer *domain.SipPeerInfo
 	if h.status != nil {
-		info, err := h.status.PeerInfo(r.Context(), account.Number, account.Driver)
+		info, err := h.status.PeerInfo(r.Context(), account.Number)
 		if err == nil {
 			peer = info
 			// Адрес устройства подставляем до того, как карточка скопирована:

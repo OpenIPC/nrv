@@ -116,6 +116,13 @@ type Config struct {
 	// Asterisk; сервер сообщает его приложению вместе с номером и паролем,
 	// чтобы настройку не пришлось вписывать руками.
 	AsteriskWSPort int
+	// AsteriskSIPPort — UDP-порт chan_pjsip: на нём подключаются устройства
+	// (панели, мониторы, трубки) и приложения по WebSocket.
+	//
+	// Порт штатный — 5060: раньше его занимал старый драйвер chan_sip, но он
+	// убран целиком (plans/pjsip-realtime-migration.md), а устройствам менять
+	// настройки не пришлось — они подключаются туда же, куда и раньше.
+	AsteriskSIPPort int
 }
 
 func Load() (*Config, error) {
@@ -179,6 +186,7 @@ func Load() (*Config, error) {
 		AsteriskAMIUser:   envStr("ASTERISK_AMI_USER", "nvr"),
 		AsteriskAMISecret: envStr("ASTERISK_AMI_SECRET", ""),
 		AsteriskWSPort:    envInt("ASTERISK_WS_PORT", 8088),
+		AsteriskSIPPort:   envInt("ASTERISK_SIP_PORT", 5060),
 	}
 
 	if cfg.JWTSecret == "change-me-in-production" {

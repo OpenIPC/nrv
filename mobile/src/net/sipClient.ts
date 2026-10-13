@@ -106,9 +106,44 @@ export interface SipCall {
   video: boolean;
   /** Есть ли у вызывающего видео: по нему выбираем, что показывать. */
   remoteVideo: boolean;
+  /**
+   * Идёт предпросмотр: вызывающий уже соединён, но человек ещё не ответил.
+   *
+   * Признак нужен интерфейсу, чтобы отличить «звонит» от «мы видим гостя»:
+   * кнопка ответа в этих состояниях значит одно и то же, а вот подпись
+   * и состав управления — разное.
+   */
+  preview?: boolean;
   /** Время начала разговора: по нему считается длительность. */
   startedAt?: number;
   error?: string;
+}
+
+/**
+ * Диагностика линии для экрана.
+ *
+ * Нужна потому, что снаружи два разных случая выглядят одинаково: линия
+ * оборвалась или линия никогда не поднималась. По журналу станции этого не
+ * различить, а вот по этим четырём значениям видно сразу, где застряло.
+ * Строка маленькая и нужна до тех пор, пока фоновые переподключения на
+ * телефонах не перестанут доставлять хлопоты.
+ */
+export interface SipDiag {
+  /** Что JsSIP отвечает про соединение со станцией. */
+  connected: boolean;
+  /** Сколько раз клиент заводил подключение заново сам. */
+  restarts: number;
+  /**
+   * Последние события стека — цепочкой.
+   *
+   * Именно цепочка, а не одно последнее событие: на попытке вызова важно
+   * видеть всю последовательность — создалась ли сессия, ушёл ли INVITE,
+   * ответила ли станция. Одно последнее событие к моменту прочтения уже
+   * затёрто перезапуском, и по нему ничего не понятно.
+   */
+  events: string[];
+  /** Сколько секунд прошло с последней успешной регистрации. */
+  registeredAgo: number;
 }
 
 export interface SipSnapshot {
@@ -120,6 +155,8 @@ export interface SipSnapshot {
   localStream: MediaStream | null;
   /** Включён ли микрофон телефона (динамик выбирается отдельно). */
   speakerOn: boolean;
+  /** Диагностика линии — показывается на экране звонков. */
+  diag: SipDiag;
 }
 
 type Listener = (snapshot: SipSnapshot) => void;
@@ -135,6 +172,51 @@ type Listener = (snapshot: SipSnapshot) => void;
 const RECOVERY_DELAY_MS = 45000;
 
 /**
+ * Как часто проверять, что соединение со станцией живо.
+ *
+ * WebSocket может умереть незаметно: Android замораживает приложение в фоне,
+ * сокет закрывается уже после того, как обработчику события некому
+ * выполниться, и JsSIP продолжает считать себя подключённым. Снаружи это
+ * выглядит как «линия на связи», а INVITE уходит в закрытый сокет: на станции
+ * вызова нет и в журнале звонков тоже. Проверено на живом: телефон
+ * регистрировался и сбрасывался каждые 1–2 минуты, а вызовы из этого
+ * состояния молча не доходили.
+ */
+const HEALTH_CHECK_INTERVAL_MS = 15000;
+
+/**
+ * Сколько даём попытке подключиться, прежде чем заводить клиента заново.
+ *
+ * Регистрация на живом Asterisk занимает доли секунды, но в мобильной сети
+ * с плохим сигналом может затянуться. Держим запас, чтобы не пересоздавать
+ * клиента на каждый чих, и в то же время не ждать минуты, когда линия уже
+ * умерла: без этого экран оставался бы с надписью «нет связи» до перезапуска
+ * приложения. Проверено на живом: после сброса сокета телефон регистрировался
+ * сам далеко не всегда — новый WebSocket с него больше не приходил.
+ */
+const CONNECT_GRACE_MS = 20000;
+
+/**
+ * Сколько ждать, пока INVITE вообще уйдёт.
+ *
+ * До отправки сессия ждёт медиа и сбор ICE-кандидатов. Сбор может затянуться
+ * надолго, если в настройках указан недоступный STUN или TURN: WebRTC обязан
+ * дождаться relay-кандидатов, а недоступный сервер заставляет его повторять
+ * запросы с задержками. Проверено 13.10.2026: при выданном, но не запущенном
+ * TURN-сервере INVITE не уходил десятки секунд — а сторож на 8 секундах
+ * успевал обвинить телефон и оборвать вызов.
+ */
+const INVITE_TIMEOUT_MS = 25000;
+
+/**
+ * Сколько ждать ответа станции уже после отправки INVITE.
+ *
+ * Здесь задержку даёт только сеть до станции, и десяток секунд — это
+ * с большим запасом: молчание дольше означает обрыв, а не задержку.
+ */
+const RESPONSE_TIMEOUT_MS = 10000;
+
+/**
  * SipClient — линия приложения.
  *
  * Живёт столько же, сколько вход в систему: выход из учётной записи
@@ -148,12 +230,28 @@ export class SipClient {
   private session: RTCSession | null = null;
   /** Таймер восстановления связи: снимается при остановке клиента. */
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Таймер проверки живости соединения: тоже снимается при остановке. */
+  private healthTimer: ReturnType<typeof setInterval> | null = null;
+  /** Когда начата текущая попытка подключения: от этого считаем запас. */
+  private startedAt = 0;
+  /** Когда линия последний раз была на связи: по этому считаем «давно ли». */
+  private registeredAt = 0;
+  /** Счётчики и цепочка событий — для строки диагностики на экране. */
+  private restarts = 0;
+  private events: string[] = ['запуск'];
+  /** Таймер ожидания ответа станции на исходящий вызов. */
+  private responseTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Таймер ожидания самой отправки INVITE: до неё сессия собирает медиа. */
+  private inviteTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Ушёл ли INVITE: до этого сессия ждёт микрофон и камеру. */
+  private inviteSent = false;
   private state: SipSnapshot = {
     registration: 'idle',
     call: null,
     remoteStream: null,
     localStream: null,
     speakerOn: false,
+    diag: { connected: false, restarts: 0, events: ['запуск'], registeredAgo: -1 },
   };
 
   constructor(line: SipLineInfo, listener: Listener) {
@@ -175,6 +273,7 @@ export class SipClient {
     this.stop();
 
     installSipPolyfills();
+    this.startedAt = Date.now();
     this.update({ registration: 'connecting', registrationError: undefined });
 
     const socket = new WebSocketInterface(this.line.ws_url);
@@ -198,31 +297,60 @@ export class SipClient {
     } as unknown as ConstructorParameters<typeof UA>[0];
     const ua = new UA(config);
 
-    ua.on('connecting', () => this.update({ registration: 'connecting' }));
-    ua.on('connected', () => this.update({ registration: 'connecting' }));
+    // События принимаем только от текущего соединения.
+    //
+    // Зачем проверка: при пересоздании клиента старое соединение ещё
+    // успевает дать своё `disconnected` — уже после того, как мы подняли
+    // новое. Без проверки это событие попадало в состояние нового клиента:
+    // экран писал «связь с сервером прервана» сразу после успешной
+    // регистрации, а сторож начинал заводить соединение заново по кругу.
+    // Снаружи это выглядит как «связь устанавливается и тут же рвётся».
+    const isCurrent = () => this.ua === ua;
+
+    ua.on('connecting', () => {
+      if (!isCurrent()) return;
+      this.update({ registration: 'connecting' });
+      this.note('connecting');
+    });
+    ua.on('connected', () => {
+      if (!isCurrent()) return;
+      this.update({ registration: 'connecting' });
+      this.note('connected');
+    });
     ua.on('disconnected', () => {
+      if (!isCurrent()) return;
       this.update({ registration: 'connecting', registrationError: 'связь с сервером прервана' });
+      this.note('disconnected');
       this.scheduleRecovery();
     });
     ua.on('registered', () => {
+      if (!isCurrent()) return;
       this.cancelRecovery();
+      this.registeredAt = Date.now();
       this.update({ registration: 'registered', registrationError: undefined });
+      this.note('registered');
     });
     ua.on('unregistered', () => {
+      if (!isCurrent()) return;
       // Контакт снят не нами (например, станция перезапустилась). Статус
       // показываем, но подключение заново не запускаем: JsSIP и сам
       // перерегистрируется, а лишний перезапуск рвал бы идущий разговор.
       this.update({ registration: 'connecting' });
+      this.note('unregistered');
     });
     ua.on('registrationFailed', (event: { cause?: string; response?: { status_code?: number } }) => {
+      if (!isCurrent()) return;
       this.update({
         registration: 'failed',
         registrationError: this.describeRegistrationFailure(event),
       });
+      this.note(`registrationFailed: ${event?.cause || 'без причины'}`);
     });
     // Входящий звонок приходит в любой момент — обрабатываем здесь, а не в
     // экране: экран может быть не открыт вовсе.
     ua.on('newRTCSession', (event: { originator: string; session: RTCSession }) => {
+      if (!isCurrent()) return;
+      this.note(`newRTCSession: ${event.originator}`);
       if (event.originator === 'remote') {
         // Второй входящий вызов приходит, когда панель звонит одновременно
         // и в группу, и напрямую: приложение ведёт только один разговор.
@@ -246,11 +374,15 @@ export class SipClient {
 
     this.ua = ua;
     ua.start();
+    this.note('start');
+    this.startHealthWatch();
   }
 
   /** Снимает регистрацию и отпускает все ресурсы. */
   stop(): void {
     this.cancelRecovery();
+    this.stopHealthWatch();
+    this.clearWatchdogs();
     if (this.session) {
       try {
         this.session.terminate();
@@ -260,17 +392,20 @@ export class SipClient {
       this.session = null;
     }
     if (this.ua) {
+      // Ссылку обнуляем ДО остановки: её события закрытия придут от уже
+      // ненужного соединения и не должны попадать в состояние нового клиента.
+      const stale = this.ua;
+      this.ua = null;
       try {
-        this.ua.unregister();
+        stale.unregister();
       } catch {
         // Регистрации могло уже не быть: связь пропала раньше.
       }
       try {
-        this.ua.stop();
+        stale.stop();
       } catch {
         // Стек уже остановлен.
       }
-      this.ua = null;
     }
     this.state = {
       registration: 'idle',
@@ -278,6 +413,15 @@ export class SipClient {
       remoteStream: null,
       localStream: null,
       speakerOn: false,
+      // Диагностику сохраняем: по ней на экране видно, что было до остановки.
+      diag: {
+        connected: false,
+        restarts: this.restarts,
+        events: [...this.events],
+        registeredAgo: this.registeredAt
+          ? Math.round((Date.now() - this.registeredAt) / 1000)
+          : -1,
+      },
     };
     this.emit();
   }
@@ -302,14 +446,19 @@ export class SipClient {
    */
   call(target: string, options: { video?: boolean } = {}): void {
     const ua = this.ua;
+    const wantVideo = options.video ?? this.line.video;
     if (!ua) {
+      // Клиента нет вовсе — это не «позвонили и не дозвонились», а
+      // «звонить нечем». Молчание хуже всего: оператор нажимает кнопку и не
+      // понимает, почему ничего не происходит.
+      this.reportCallFailure(target, wantVideo, 'линия не подключена: нет связи со станцией');
       return;
     }
     if (this.state.call) {
       return;
     }
+    this.inviteSent = false;
 
-    const wantVideo = options.video ?? this.line.video;
     try {
       // ICE-серверы приходят с сервера вместе с реквизитами линии. Без них
       // звонок из чужой сети соединяется, но остаётся без звука и видео:
@@ -319,17 +468,11 @@ export class SipClient {
         pcConfig: this.pcConfig(),
       });
     } catch (error) {
-      this.update({
-        call: {
-          direction: 'out',
-          peer: target,
-          state: 'ending',
-          muted: false,
-          video: wantVideo,
-          remoteVideo: false,
-          error: error instanceof Error ? error.message : 'не удалось начать вызов',
-        },
-      });
+      this.reportCallFailure(
+        target,
+        wantVideo,
+        error instanceof Error ? error.message : 'не удалось начать вызов',
+      );
     }
   }
 
@@ -339,6 +482,29 @@ export class SipClient {
     if (!session) {
       return;
     }
+
+    // Предпросмотр: отвечать уже не нужно, соединение поднято тихим
+    // автоответом. Остаётся включить микрофон и перевести звонок в разговор.
+    if (this.state.call?.preview) {
+      session.unmute({ audio: true, video: false });
+      // Свою камеру включаем только теперь: до нажатия «Ответить» человек
+      // может стоять перед камерой в домашнем — передавать это на улицу
+      // без его решения нельзя.
+      if (this.state.call.video) {
+        this.enableLocalVideo(true);
+      }
+      this.update({
+        call: {
+          ...this.state.call,
+          preview: false,
+          state: 'active',
+          muted: false,
+          startedAt: Date.now(),
+        },
+      });
+      return;
+    }
+
     // Камеру включаем, если её просят и видео разрешено линией. На разбор
     // INVITE больше не опираемся: у react-native-webrtc тело запроса не всегда
     // доступно, из-за чего ответ уходил без видео и картинка шла только
@@ -365,8 +531,67 @@ export class SipClient {
     }
   }
 
+  /**
+   * Включает и выключает передачу своей камеры.
+   *
+   * Дорожку не останавливаем (stop) и не убираем из потока: после stop
+   * вернуть её в тот же поток нельзя, и картинка у собеседника пропала бы до
+   * конца вызова. Флага enabled достаточно — отправитель производит тишину
+   * или чёрный кадр.
+   */
+  private enableLocalVideo(enabled: boolean): void {
+    const tracks = this.state.localStream?.getVideoTracks?.() ?? [];
+    for (const track of tracks) {
+      track.enabled = enabled;
+    }
+  }
+
+  /**
+   * Отвечает на вызов сразу, но молча — ради предварительного видео.
+   *
+   * Зачем так. Панель присылает картинку в INVITE, однако станция соединяет
+   * медиа сторон только после ответа вызываемого: до `200 OK` между панелью
+   * и приложением нет моста, и видео физически не доходит. Обойти это можно
+   * только одним способом — принять вызов технически и держать микрофон
+   * выключенным, пока человек не нажмёт «Ответить». Так гость виден до
+   * ответа, а слышать квартиру в это время нельзя.
+   *
+   * Почему только при видео в предложении. Без видео предпросмотра нет
+   * вовсе, а преждевременный ответ стоил бы дорого: панель считает вызов
+   * принятым и перестаёт звонить дальше по группе, хотя человек трубку не
+   * брал.
+   */
+  private startPreview(session: RTCSession): void {
+    try {
+      session.answer({
+        mediaConstraints: { audio: true, video: true },
+        pcConfig: this.pcConfig(),
+      });
+    } catch (error) {
+      this.note(
+        `предпросмотр не удался: ${error instanceof Error ? error.message : 'ответ не отправлен'}`,
+      );
+      return;
+    }
+    // Микрофон выключаем сразу после ответа, а не ждём дорожек: между
+    // `answer()` и появлением медиа проходит мгновение, но именно в нём
+    // и утекает звук из квартиры.
+    session.mute({ audio: true, video: false });
+    this.enableLocalVideo(false);
+    this.update({
+      call: this.state.call
+        ? { ...this.state.call, preview: true, muted: true }
+        : null,
+    });
+    this.note('предпросмотр: вызов принят без звука');
+  }
+
   /** Кладёт трубку: и для исходящего дозвона, и для разговора. */
   hangup(): void {
+    this.clearResponseWatch();
+    // Микрофон отпускаем сразу вместе с трубкой, а не ждём сборщик мусора:
+    // занятый микрофон мешает следующей попытке звонка.
+    this.releaseMedia();
     const session = this.session;
     if (!session) {
       this.update({ call: null, remoteStream: null, localStream: null });
@@ -453,12 +678,10 @@ export class SipClient {
       if (!owner || this.ua !== owner || this.state.registration === 'registered') {
         return;
       }
-      try {
-        owner.register();
-      } catch {
-        // Транспорт мог окончательно закрыться — тогда клиент пересоздаст
-        // сам провайдер при следующем пересчёте линии.
-      }
+      // Пересоздаём клиента целиком, а не просим перерегистрироваться: сокет
+      // уже закрыт, и JsSIP заново его не открывает — он умеет только
+      // отправить запрос по живому транспорту.
+      this.restart('восстановление после обрыва');
     }, RECOVERY_DELAY_MS);
   }
 
@@ -471,6 +694,255 @@ export class SipClient {
   }
 
   /**
+   * Живо ли соединение со станцией по мнению JsSIP.
+   *
+   * ВАЖНО: это только для диагностики на экране. На Android признак отвечает
+   * «нет» даже у живой зарегистрированной линии (проверено 13.10.2026: та же
+   * линия в Node даёт `true`, а телефон с `false` — и клиент уходил
+   * в бесконечные перезапуски). Решения принимаются по наблюдаемым
+   * признакам: пришла ли регистрация, как давно начата попытка, ответила ли
+   * станция на вызов.
+   */
+  isConnected(): boolean {
+    try {
+      return this.ua?.isConnected() === true;
+    } catch {
+      // Стек мог быть уже остановлен — считаем, что связи нет.
+      return false;
+    }
+  }
+
+  /**
+   * Нужно ли завести подключение заново.
+   *
+   * Судим по наблюдаемому: сколько времени прошло с начала попытки и есть ли
+   * регистрация. `isConnected()` здесь не используется намеренно — на живой
+   * линии в приложении он лжёт, и решение по нему давало круговорот
+   * перезапусков вместо работы.
+   */
+  needsRenewal(): boolean {
+    if (this.session) {
+      return false;
+    }
+    if (this.state.registration === 'registered') {
+      return false;
+    }
+    return Date.now() - this.startedAt > CONNECT_GRACE_MS;
+  }
+
+  /**
+   * Заводит подключение заново: новый WebSocket и новая регистрация.
+   *
+   * Именно пересоздание, а не `register()`: у умершего сокета перерегистрироваться
+   * некуда, а JsSIP продолжает считать его живым и потому сам не переподключается.
+   * Идущий разговор не трогаем: рвать его ради свежего сокета нельзя.
+   */
+  restart(reason = 'пересоздание подключения'): void {
+    if (this.session) {
+      return;
+    }
+    // Считаем перезапуски: по счётчику на экране видно, лечится линия сама
+    // или мы крутим перезапуски по кругу.
+    this.restarts += 1;
+    this.start();
+    this.note(`restart: ${reason}`);
+  }
+
+  /**
+   * Запоминает событие стека для строки диагностики.
+   *
+   * Одно место вместо десятка отдельных update(): так в диагностике видно
+   * последовательность, а не случайная последняя запись.
+   */
+  private note(event: string): void {
+    // Держим только хвост цепочки: этого хватает, чтобы разобрать попытку
+    // вызова, а экран не зарастает полотном из старых событий.
+    this.events = [...this.events, event].slice(-8);
+    this.update({
+      diag: {
+        connected: this.isConnected(),
+        restarts: this.restarts,
+        events: [...this.events],
+        registeredAgo: this.registeredAt
+          ? Math.round((Date.now() - this.registeredAt) / 1000)
+          : -1,
+      },
+    });
+  }
+
+  /**
+   * Останавливает дорожки микрофона и камеры.
+   *
+   * Без этого микрофон остаётся занятым после вызова, а следующая попытка
+   * получить медиа может вообще не завершиться — ни успехом, ни ошибкой.
+   * Снаружи это выглядит как «приложение показывает гудки, а вызов никуда
+   * не уходит»: INVITE не отправляется, потому что сессия ждёт медиа.
+   */
+  private releaseMedia(): void {
+    for (const stream of [this.state.localStream, this.state.remoteStream]) {
+      for (const track of stream?.getTracks?.() ?? []) {
+        try {
+          track.stop();
+        } catch {
+          // Дорожка могла быть уже остановлена — это не ошибка.
+        }
+      }
+    }
+  }
+
+  /**
+   * Следит за тем, что соединение живо, и поднимает его заново.
+   *
+   * Нужно потому, что полагаться на события стека нельзя: в фоне приложение
+   * замораживают, событие о закрытии сокета приходит уже «в пустоту», и с
+   * этого момента линия числится на связи, а вызовы тихо не доходят.
+   */
+  private startHealthWatch(): void {
+    this.stopHealthWatch();
+    this.healthTimer = setInterval(() => {
+      if (!this.ua) {
+        return;
+      }
+      // Идущий разговор важнее проверки: пересоздание сокета оборвало бы его.
+      if (this.session) {
+        return;
+      }
+      // Линия на связи — не трогаем. За то, что она жива, отвечают сама
+      // станция (OPTIONS-проверки контакта) и штатная перерегистрация JsSIP;
+      // если она не пройдёт, придёт registrationFailed и клиента пересоздаст
+      // провайдер. Лезать сюда со своей проверкой нельзя: так линия только
+      // рвётся.
+      if (this.state.registration === 'registered') {
+        return;
+      }
+      if (this.needsRenewal()) {
+        this.restart('сторож: линия не встала');
+      }
+    }, HEALTH_CHECK_INTERVAL_MS);
+  }
+
+  /** Останавливает проверку живости соединения. */
+  private stopHealthWatch(): void {
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = null;
+    }
+  }
+
+  /**
+   * Ждёт первый ответ станции на исходящий вызов.
+   *
+   * Ответа нет вовсе (даже `100 Trying`) — значит вызов до станции не дошёл.
+   * Завершаем его с понятной причиной и пересоздаём подключение; делаем это
+   * с небольшой задержкой, чтобы сброс состояния клиента не убрал с экрана
+   * причину, которую человек ещё читает.
+   */
+  private armResponseWatch(session: RTCSession): void {
+    this.clearWatchdogs();
+    this.inviteTimer = setTimeout(() => {
+      this.inviteTimer = null;
+      if (this.session !== session || this.inviteSent) {
+        return;
+      }
+      // INVITE не ушёл вовсе. Называем обе причины честно: раньше виновной
+      // молча оказывалась станция, хотя до неё ничего не доходило.
+      this.finishWithReason(
+        session,
+        'вызов не отправлен: телефон не выдал медиа или не закончил подготовку сети',
+      );
+      setTimeout(() => this.restart('сторож: INVITE не ушёл'), 4500);
+    }, INVITE_TIMEOUT_MS);
+  }
+
+  /**
+   * Ждёт ответа станции после того, как INVITE ушёл.
+   *
+   * Отдельный сторож, потому что это уже другой этап: медиа собрано, запрос
+   * отправлен, и молчание здесь означает только одно — со связью беда.
+   */
+  private armStationWatch(session: RTCSession): void {
+    this.clearResponseWatch();
+    this.responseTimer = setTimeout(() => {
+      this.responseTimer = null;
+      if (this.session !== session) {
+        return;
+      }
+      this.finishWithReason(session, 'станция не отвечает: ответа нет 10 с, вызов отменён');
+      setTimeout(() => this.restart('сторож: станция не ответила'), 4500);
+    }, RESPONSE_TIMEOUT_MS);
+  }
+
+  /** Снимает все сторожевые таймеры вызова. */
+  private clearWatchdogs(): void {
+    this.clearResponseWatch();
+    if (this.inviteTimer) {
+      clearTimeout(this.inviteTimer);
+      this.inviteTimer = null;
+    }
+  }
+
+  /** Снимает ожидание ответа станции: ответ пришёл или вызов завершился. */
+  private clearResponseWatch(): void {
+    if (this.responseTimer) {
+      clearTimeout(this.responseTimer);
+      this.responseTimer = null;
+    }
+  }
+
+  /**
+   * Завершает вызов и показывает причину.
+   *
+   * Событие `ended` от снятой сессии может не прийти, поэтому состояние
+   * сбрасываем сами — иначе карточка вызова осталась бы на экране навсегда.
+   */
+  private finishWithReason(session: RTCSession, reason: string): void {
+    this.update({
+      call: this.state.call ? { ...this.state.call, state: 'ending', error: reason } : null,
+    });
+    if (this.session === session) {
+      this.session = null;
+    }
+    // Освобождаем медиа до terminate(): если сессия была в состоянии
+    // ожидания микрофона, закрытие соединения его не отпустит.
+    this.releaseMedia();
+    try {
+      session.terminate();
+    } catch {
+      // Сессия могла уже завершиться — состояние уже сброшено выше.
+    }
+    setTimeout(() => {
+      if (!this.session) {
+        this.update({ call: null, remoteStream: null, localStream: null });
+      }
+    }, 4000);
+  }
+
+  /**
+   * Показывает причину, когда вызов не начался вовсе.
+   *
+   * Сессии в этом случае нет, и события тоже не будет — убрать карточку
+   * тоже приходится самим.
+   */
+  private reportCallFailure(target: string, video: boolean, error: string): void {
+    this.update({
+      call: {
+        direction: 'out',
+        peer: target,
+        state: 'ending',
+        muted: false,
+        video,
+        remoteVideo: false,
+        error,
+      },
+    });
+    setTimeout(() => {
+      if (this.state.call?.state === 'ending') {
+        this.update({ call: null, remoteStream: null, localStream: null });
+      }
+    }, 4000);
+  }
+
+  /**
    * Отдаёт ли вызывающий видео.
    *
    * Смотрим SDP: у входящего вызова описание приходит в теле INVITE, и по
@@ -480,15 +952,67 @@ export class SipClient {
    */
   private remoteOffersVideo(session: RTCSession): boolean {
     // В объявлениях JsSIP поля request нет (оно есть в рантайме у входящего
-    // вызова), поэтому читаем его через приведение типа.
-    const incoming = session as unknown as { request?: { body?: string } };
-    if (sdpHasVideo(incoming.request?.body)) {
-      return true;
-    }
+    // вызова), поэтому читаем его через приведение типа. Разные версии
+    // библиотеки зовут его по-разному — смотрим оба места, иначе предпросмотр
+    // молча не включался бы.
+    const incoming = session as unknown as {
+      request?: { body?: string };
+      _request?: { body?: string };
+    };
+    const body = incoming.request?.body ?? incoming._request?.body;
     const pc = session.connection as unknown as
       | { remoteDescription?: { sdp?: string } }
       | undefined;
-    return sdpHasVideo(pc?.remoteDescription?.sdp);
+    const remoteSdp = pc?.remoteDescription?.sdp;
+
+    const fromInvite = sdpHasVideo(body);
+    const fromRemote = sdpHasVideo(remoteSdp);
+    const found = fromInvite || fromRemote;
+
+    // Пишем в журнал телефона, чем закончилась проверка и откуда взят ответ:
+    // без этого не отличить «панель не предложила видео» от «мы не смогли
+    // прочитать предложение» — а это разные причины и лечатся по-разному.
+    const source = fromInvite ? 'INVITE' : fromRemote ? 'remoteDescription' : 'не найден';
+    console.log(`[sip] предложение вызова: видео=${found ? 'да' : 'нет'}, источник=${source}`);
+    return found;
+  }
+
+  /**
+   * Известно ли, что линия зарегистрирована.
+   *
+   * В отличие от `ua.isConnected()` это наша собственная отметка, полученная
+   * из события регистрации, а не из состояния сокета: на Android состояние
+   * сокета врёт, а событие — нет.
+   */
+  isRegistered(): boolean {
+    return this.state.registration === 'registered';
+  }
+
+  /**
+   * Чинит линию, не трогая идущий вызов.
+   *
+   * Нужно для push о входящем звонке. Пересоздавать клиента там нельзя:
+   * сообщение приходит в самом начале набора, вызов приходит следом, и
+   * пересоздание рвёт его на полпути. Снаружи это выглядит так: телефон
+   * зазвонил, приложение вылезло, звонок оборвался, через несколько секунд
+   * звонок повторился, и только теперь можно ответить.
+   *
+   * `register()` у JsSIP поднимает и оборванный транспорт, и идущие вызовы
+   * при этом не трогает.
+   */
+  refresh(reason = 'проверка линии'): void {
+    if (!this.ua) {
+      // Линии нет вовсе (например, приложение только что запустилось) —
+      // здесь пересоздание и есть нужное действие.
+      this.start();
+      return;
+    }
+    this.note(`перерегистрация: ${reason}`);
+    try {
+      this.ua.register();
+    } catch (error) {
+      this.note(`перерегистрация не удалась: ${error instanceof Error ? error.message : 'ошибка'}`);
+    }
   }
 
   /**
@@ -571,6 +1095,48 @@ export class SipClient {
       localStream: null,
     });
 
+    // Исходящий вызов держим под контролем ответа станции: если она не
+    // ответит совсем, это не «не берут трубку», а «пакет ушёл в никуда».
+    if (direction === 'out') {
+      this.armResponseWatch(session);
+    }
+
+    // Входящий с видео принимаем сразу и молча: только так видно, кто стоит
+    // у двери, до нажатия «Ответить» (см. startPreview).
+    if (direction === 'in' && hasRemoteVideo && this.line.video) {
+      this.startPreview(session);
+    }
+
+    // Этап «отправка» наступает в момент, когда INVITE реально уходит
+    // в сокет. До него сессия ждёт медиа (микрофон и камеру). По одной этой
+    // записи видно разницу между «станция не ответила» и «мы даже не
+    // отправили» — без неё эти два случая неразличимы.
+    session.on('sending', (event: { request?: { method?: string } }) => {
+      if (this.session !== session) {
+        return;
+      }
+      if (event?.request?.method === 'INVITE') {
+        this.inviteSent = true;
+        // Медиа собрано и INVITE ушёл — переходим ко второму этапу ожидания.
+        if (this.inviteTimer) {
+          clearTimeout(this.inviteTimer);
+          this.inviteTimer = null;
+        }
+        this.armStationWatch(session);
+      }
+      this.note(`отправка: ${event?.request?.method || 'запрос'}`);
+    });
+
+    // Отказ на этапе медиа: у JsSIP это отдельное событие, и без него
+    // причина терялась — вызов просто тихо висел, пока не сработает сторож.
+    session.on('getusermediafailed', (error?: unknown) => {
+      if (this.session !== session) {
+        return;
+      }
+      const reason = error instanceof Error ? error.message : 'микрофон недоступен';
+      this.note(`медиа не выдано: ${reason}`);
+    });
+
     session.on('peerconnection', (event: { peerconnection?: unknown }) => {
       // Поток приходит не сразу после ответа, а по мере установки соединения.
       //
@@ -595,13 +1161,30 @@ export class SipClient {
       this.collectStreams(session);
     });
 
+    // Первый ответ станции снимает контроль: до неё дошло, дальше ждём
+    // штатных таймаутов вызова — их держит сама станция.
+    session.on('progress', () => {
+      if (this.session !== session) {
+        return;
+      }
+      this.note('станция ответила (100/180)');
+      this.clearResponseWatch();
+    });
+
     session.on('accepted', () => {
       // Событие может прийти от вызова, который уже не ведётся: устаревшая
       // сессия не должна менять состояние текущего разговора.
       if (this.session !== session) {
         return;
       }
+      this.clearResponseWatch();
       this.collectStreams(session);
+      // Предпросмотр не трогаем: вызов принят, но человек ещё не ответил.
+      // Перевод в «разговор» здесь означал бы, что экран врёт — он бы
+      // показывал секундомер вместо кнопки ответа.
+      if (this.state.call?.preview) {
+        return;
+      }
       this.update({
         call: this.state.call ? { ...this.state.call, state: 'active' } : null,
       });
@@ -611,7 +1194,12 @@ export class SipClient {
       if (this.session !== session) {
         return;
       }
+      this.clearResponseWatch();
+      this.note('разговор установлен');
       this.collectStreams(session);
+      if (this.state.call?.preview) {
+        return;
+      }
       this.update({
         call: this.state.call
           ? { ...this.state.call, state: 'active', startedAt: Date.now() }
@@ -623,6 +1211,9 @@ export class SipClient {
       if (this.session !== session) {
         return;
       }
+      this.clearResponseWatch();
+      this.releaseMedia();
+      this.note(`вызов не состоялся: ${event?.cause || 'без причины'}`);
       this.update({
         call: this.state.call
           ? { ...this.state.call, state: 'ending', error: event?.cause || 'вызов не состоялся' }
@@ -640,6 +1231,8 @@ export class SipClient {
       if (this.session !== session) {
         return;
       }
+      this.clearResponseWatch();
+      this.releaseMedia();
       this.session = null;
       this.update({ call: null, remoteStream: null, localStream: null });
     });

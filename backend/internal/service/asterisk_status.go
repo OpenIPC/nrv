@@ -20,7 +20,7 @@ type SipStatusSource interface {
 	RegisteredNumbers(ctx context.Context) (map[string]bool, error)
 	// PeerInfo отдаёт подробности об одном абоненте: адрес, порт, модель
 	// и версию прошивки устройства.
-	PeerInfo(ctx context.Context, number, driver string) (*domain.SipPeerInfo, error)
+	PeerInfo(ctx context.Context, number string) (*domain.SipPeerInfo, error)
 }
 
 // ErrPeerNotFound — абонента нет в Asterisk.
@@ -36,49 +36,12 @@ var ErrPeerNotFound = errors.New("абонент не найден в Asterisk")
 // адрес устройства, порт и версию прошивки. Из строки Useragent видно
 // модель, версию прошивки и MAC — по ним понятно, что именно стоит за
 // портом коммутатора.
-func (c *AMIClient) PeerInfo(ctx context.Context, number, driver string) (*domain.SipPeerInfo, error) {
-	if driver == "pjsip" {
-		return c.pjsipPeerInfo(ctx, number)
-	}
-
-	out, err := c.Command(ctx, "sip show peer "+number)
-	if err != nil {
-		return nil, err
-	}
-	if !strings.Contains(out, "Name") || strings.Contains(out, "not found") {
-		return nil, ErrPeerNotFound
-	}
-
-	info := &domain.SipPeerInfo{Number: number, Driver: "sip"}
-	for _, line := range strings.Split(out, "\n") {
-		idx := strings.Index(line, ":")
-		if idx < 0 {
-			continue
-		}
-		// Слева от двоеточия — имя поля, справа значение. Звёздочка у
-		// активного абонента в выводе Asterisk мешает сравнению имени.
-		key := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line[:idx]), "*"))
-		value := strings.TrimSpace(line[idx+1:])
-
-		switch key {
-		case "Addr->IP":
-			// Формат «адрес:порт». Храним целиком: порт тоже полезен —
-			// видно, не занял ли адрес кто-то другой.
-			info.Contact = value
-		case "Status":
-			info.Status = value
-			// У живого абонента Asterisk пишет «OK (3 ms)», у молчащего —
-			// «Unreachable» или «Unknown».
-			info.Registered = strings.HasPrefix(value, "OK")
-		case "Useragent":
-			info.UserAgent = value
-		case "Reg. Contact":
-			if info.Contact == "" {
-				info.Contact = strings.TrimPrefix(value, "sip:")
-			}
-		}
-	}
-	return info, nil
+//
+// Драйвер один (chan_pjsip), поэтому и команда одна. Раньше устройствa
+// смотрелись через `sip show peer`, а приложения — через `pjsip show
+// contacts`; старый драйвер убран целиком (plans/pjsip-realtime-migration.md).
+func (c *AMIClient) PeerInfo(ctx context.Context, number string) (*domain.SipPeerInfo, error) {
+	return c.pjsipPeerInfo(ctx, number)
 }
 
 // pjsipPeerInfo возвращает сведения об абоненте нового драйвера.
@@ -112,8 +75,8 @@ func (c *AMIClient) pjsipPeerInfo(ctx context.Context, number string) (*domain.S
 		}
 		status := fields[len(fields)-2]
 		return &domain.SipPeerInfo{
-			Number:     number,
-			Driver:     "pjsip",
+			Number: number,
+
 			Contact:    strings.TrimPrefix(uri, "sip:"),
 			Status:     status,
 			Registered: status == "Avail",
@@ -125,9 +88,8 @@ func (c *AMIClient) pjsipPeerInfo(ctx context.Context, number string) (*domain.S
 // HostFromContact выделяет адрес устройства из контакта, который показал
 // Asterisk.
 //
-// Формы записи у драйверов разные: у chan_sip это `192.168.1.50:5060`, у
-// chan_pjsip — `114@192.168.1.50:5060;transport=UDP`. Порт и параметры
-// транспорта нам не нужны: в карточке абонента хранится только адрес, по
+// Формы записи у драйвера такие: `114@192.168.1.50:5060;transport=UDP` —
+// из неё берём всё после собаки. Порт и параметры транспорта нам не нужны: в карточке абонента хранится только адрес, по
 // которому потом можно постучаться в веб-интерфейс устройства и по которому
 // сканер отличает уже заведённый домофон от нового.
 func HostFromContact(contact string) string {
@@ -157,69 +119,20 @@ func HostFromContact(contact string) string {
 
 // RegisteredNumbers читает состояние абонентов у Asterisk.
 //
-// Драйверов два, и состояние каждого видно своей командой: устройства —
-// `sip show peers`, приложения — `pjsip show contacts`. Без второй команды
-// браузер и телефоны всегда выглядели бы отключёнными, хотя звонки идут.
+// Драйвер один, поэтому и команда одна: `pjsip show contacts` отдаёт и
+// устройства, и приложения. Раньше их состояние приходилось собирать из
+// двух команд — по старому и новому драйверу (см.
+// plans/pjsip-realtime-migration.md).
 func (c *AMIClient) RegisteredNumbers(ctx context.Context) (map[string]bool, error) {
 	result := map[string]bool{}
 
-	legacy, err := c.Command(ctx, "sip show peers")
+	contacts, err := c.Command(ctx, "pjsip show contacts")
 	if err != nil {
-		return nil, fmt.Errorf("состояние устройств: %w", err)
+		return nil, fmt.Errorf("состояние абонентов: %w", err)
 	}
-	parseSipPeers(legacy, result)
-
-	apps, err := c.Command(ctx, "pjsip show contacts")
-	if err != nil {
-		return nil, fmt.Errorf("состояние приложений: %w", err)
-	}
-	parsePjsipContacts(apps, result)
+	parsePjsipContacts(contacts, result)
 
 	return result, nil
-}
-
-// parseSipPeers разбирает вывод `sip show peers`.
-//
-// Формат — таблица фиксированной ширины, поэтому разбираем по первому
-// столбцу и наличию слова OK. Разбор «по позициям» ломался бы при любом
-// изменении ширины столбцов, а имя и признак связи в выводе устойчивы.
-func parseSipPeers(output string, result map[string]bool) {
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		// Заголовок таблицы и итоговая строка вида
-		// «2 sip peers [Monitored: ...]» — не абоненты.
-		if strings.HasPrefix(line, "Name/username") || strings.Contains(line, " sip peers [") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		// Имя приходит как «101» или «101/101»: логин и имя совпадают,
-		// и в списке нам нужен номер.
-		number := fields[0]
-		if i := strings.IndexByte(number, '/'); i >= 0 {
-			number = number[:i]
-		}
-		if number == "" || number[0] < '0' || number[0] > '9' {
-			continue
-		}
-		// Признак связи — слово OK в строке. Недоступный абонент получает
-		// UNREACHABLE, отключённая проверка связи — UNMONITORED; в обоих
-		// случаях звонить ему нельзя, и считать его на связи нельзя тоже.
-		for _, f := range fields[1:] {
-			if f == "OK" {
-				result[number] = true
-				break
-			}
-		}
-		if _, ok := result[number]; !ok {
-			result[number] = false
-		}
-	}
 }
 
 // parsePjsipContacts разбирает вывод `pjsip show contacts`.

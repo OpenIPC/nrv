@@ -2250,9 +2250,9 @@ export default {
   /**
    * Intercom: calls from door panels to handsets, video door phones and apps.
    *
-   * The driver and registration labels are kept deliberately: an account that
-   * is created but not registered looks healthy, and a silent call then has to
-   * be traced through the Asterisk log.
+   * The registration label is kept deliberately: an account that is created
+   * but not registered looks healthy, and a silent call then has to be traced
+   * through the Asterisk log.
    */
   intercomPage: {
     title: 'Intercom',
@@ -2296,7 +2296,7 @@ export default {
 
     accounts: 'Accounts',
     accountsHint:
-      'Panels, cameras with a call button, video door phones, handsets and apps. The kind sets the driver: devices use the old one, apps the new one.',
+      'Panels, cameras with a call button, video door phones, handsets and apps. Numbers starting with 1 are devices, 3 are apps.',
     addAccount: 'Add account',
     number: 'Number',
     displayName: 'Name',
@@ -2364,7 +2364,6 @@ export default {
     state: 'State',
     contact: 'Address and port',
     userAgent: 'Device',
-    driver: 'Driver',
     noPeer: 'The device has never registered, so there is no data about it yet. It will appear after the first power-up.',
     settings: 'Account settings',
     newPassword: 'New password',

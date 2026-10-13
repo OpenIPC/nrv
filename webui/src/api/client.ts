@@ -1315,10 +1315,10 @@ export const rtspAPI = {
 /**
  * Вид абонента.
  *
- * Вид определяет драйвер Asterisk: панели, камеры и трубки работают через
- * старый драйвер (chan_sip), приложения — через новый (chan_pjsip).
- * Панель Beward и видеодомофон Dahua с новым драйвером работают некорректно,
- * и это проверено на живом оборудовании, поэтому разделение не косметическое.
+ * Вид определяет контекст вызова в Asterisk и набор настроек: устройства
+ * (панели, камеры, трубки) звонят из `from-devices` и работают по SIP/UDP,
+ * приложения — из `from-apps` и подключаются по WebRTC (SIP over WebSocket).
+ * Драйвер у всех один — chan_pjsip.
  */
 export type SipAccountKind = 'panel' | 'camera' | 'monitor' | 'softphone'
 
@@ -1336,8 +1336,6 @@ export interface SipAccount {
   enabled: boolean
   created_at: string
   updated_at: string
-  /** Драйвер Asterisk, вычисленный из вида абонента. */
-  driver?: string
   /** Зарегистрирован ли абонент прямо сейчас. */
   registered?: boolean
   // --- Уведомления о вызовах ---
@@ -1374,7 +1372,6 @@ export interface SipAccount {
  */
 export interface SipPeerInfo {
   number: string
-  driver?: string
   /** Адрес, с которого зарегистрировано устройство (`IP:порт`). */
   contact?: string
   /** Модель и версия прошивки, как их показал Asterisk. */

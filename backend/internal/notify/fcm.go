@@ -227,19 +227,31 @@ type PushMessage struct {
 
 // Send отправляет сообщение одному устройству.
 func (f *FCM) Send(ctx context.Context, token string, msg PushMessage) error {
-	access, err := f.accessToken(ctx)
-	if err != nil {
-		return err
-	}
+	payload := f.payload(token, msg)
+	payload["notification"] = map[string]string{"title": msg.Title, "body": msg.Body}
+	return f.post(ctx, payload)
+}
 
-	payload := map[string]any{
+// SendDataOnly отправляет сообщение без уведомления — только данные.
+//
+// Зачем отдельный путь. Сообщение с уведомлением система показывает сама, но
+// приложению его не отдаёт, пока приложение свёрнуто: обработчик в это время
+// не запускается. Для звонка этого мало — нужно, чтобы приложение проснулось
+// ДО того, как станция перестанет звонить: тогда оно успевает поднять линию и
+// показать экран вызова поверх блокировки.
+//
+// Приоритет high здесь особенно важен: с обычным система вправе придержать
+// доставку до следующего включения экрана, и вызов пропадёт.
+func (f *FCM) SendDataOnly(ctx context.Context, token string, data map[string]string) error {
+	return f.post(ctx, f.payload(token, PushMessage{Data: data}))
+}
+
+// payload собирает тело запроса к Firebase.
+func (f *FCM) payload(token string, msg PushMessage) map[string]any {
+	return map[string]any{
 		"message": map[string]any{
 			"token": token,
-			// notification показывает система, даже если приложение не
-			// запущено; data приходит в приложение и служит для перехода
-			// на нужный экран.
-			"notification": map[string]string{"title": msg.Title, "body": msg.Body},
-			"data":         msg.Data,
+			"data":  msg.Data,
 			"android": map[string]any{
 				// high: иначе телефон может отложить доставку до
 				// следующего включения экрана, а тревога нужна сразу.
@@ -247,6 +259,15 @@ func (f *FCM) Send(ctx context.Context, token string, msg PushMessage) error {
 			},
 		},
 	}
+}
+
+// post отправляет собранное сообщение и разбирает ответ Firebase.
+func (f *FCM) post(ctx context.Context, payload map[string]any) error {
+	access, err := f.accessToken(ctx)
+	if err != nil {
+		return err
+	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("собрать сообщение Firebase: %w", err)

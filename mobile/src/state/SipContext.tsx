@@ -16,12 +16,13 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 
 import { useApp } from './AppContext';
 import { SipClient } from '../net/sipClient';
 import type { SipLineInfo, SipSnapshot } from '../net/sipClient';
 import { ensureCallPermissions } from '../net/permissions';
+import { subscribeIncomingCall } from '../net/push';
 import {
   setCallMute,
   setCallSpeaker,
@@ -85,6 +86,7 @@ const idleSnapshot: SipSnapshot = {
   remoteStream: null,
   localStream: null,
   speakerOn: false,
+  diag: { connected: false, restarts: 0, events: ['линия не поднята'], registeredAgo: -1 },
 };
 
 const SipContext = createContext<SipState | null>(null);
@@ -112,6 +114,15 @@ function stopRingtoneQuietly(): void {
 const RETRY_DELAY_MS = 15000;
 
 /**
+ * Сколько приложение должно пробыть в фоне, чтобы линию стоило завести заново.
+ *
+ * Короткие переключения (посмотреть уведомление, ответить в мессенджере)
+ * соединение не рвут: лишняя перерегистрация только мешала бы. А после
+ * заметной паузы сокет до станции обычно уже мёртв — см. эффект ниже.
+ */
+const RESUME_RENEW_AFTER_MS = 5000;
+
+/**
  * Код открытия двери, который отправляется кнопкой «Открыть».
  *
  * Это код вызывной панели, а не звонка: панель принимает его как DTMF и
@@ -130,6 +141,14 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
   const clientRef = useRef<SipClient | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * Последнее состояние клиента.
+   *
+   * Нужен обработчикам, которые подписываются один раз и не должны
+   * пересоздаваться при каждом изменении состояния.
+   */
+  const snapshotRef = useRef<SipSnapshot>(idleSnapshot);
 
   /**
    * Отпечаток линии.
@@ -183,6 +202,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       setLine(info);
       if (!info) {
         setError('Телефония на сервере не настроена');
+      } else if (clientRef.current?.needsRenewal()) {
+        // Реквизиты есть, а линии может не быть: сокет рвётся, когда
+        // приложение сворачивают или замораживают. Заводим линию заново
+        // прямо здесь, потому что эту проверку вызывает экран «Звонки» —
+        // ровно в тот момент, когда человек собирается звонить.
+        clientRef.current.restart('экран звонков: линии нет');
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'не удалось получить линию');
@@ -246,6 +271,78 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- сравнение по lineKey: сам объект line меняется при каждом перечитывании
   }, [lineKey, stopClient]);
+
+  useEffect(() => {
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
+
+  /**
+   * Заводит линию заново при возврате приложения на экран.
+   *
+   * Пока приложение свёрнуто, Android замораживает процесс, и сокет до
+   * станции закрывается — уже после того, как обработчику события некому
+   * выполниться. JsSIP при этом продолжает считать себя подключённым, экран
+   * пишет «на связи», а INVITE уходит в закрытый сокет: вызова нет ни на
+   * станции, ни в журнале звонков. Проверено на живом: телефон
+   * регистрировался и сбрасывался каждые 1–2 минуты, и первая попытка
+   * позвонить после открытия приложения уходила впустую, а вторая, уже
+   * после перерегистрации, проходила.
+   *
+   * Поэтому после заметной паузы в фоне линию заводим заново: короткая
+   * перерегистрация дешевле пустого дозвона, который снаружи выглядит как
+   * «вызов идёт, но не проходит».
+   */
+  useEffect(() => {
+    let backgroundedAt = 0;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'background') {
+        backgroundedAt = Date.now();
+        return;
+      }
+      if (state !== 'active' || !backgroundedAt) {
+        return;
+      }
+      const away = Date.now() - backgroundedAt;
+      backgroundedAt = 0;
+      if (away < RESUME_RENEW_AFTER_MS) {
+        return;
+      }
+      // Идущий разговор не трогаем: пересоздание клиента оборвало бы его.
+      if (snapshotRef.current.call) {
+        return;
+      }
+      clientRef.current?.restart('возврат в приложение');
+    });
+    return () => subscription.remove();
+  }, []);
+
+  /**
+   * Push о входящем звонке: поднимаем линию немедленно.
+   *
+   * Зачем. В блокировке прошивка замораживает приложение, сокет до станции
+   * закрывается и регистрация снимается — линия исчезает из списка доступных,
+   * и звонок с панели обрывается с «нет абонента». Сервер, увидев начало
+   * набора, присылает сообщение; по нему мы и заводим линию заново.
+   *
+   * Станция в это время повторяет набор (контекст `app-line` в диалплане),
+   * поэтому вызов не теряется, пока приложение поднимает соединение.
+   */
+  useEffect(() => {
+    return subscribeIncomingCall(() => {
+      // Идущий разговор или уже принятый вызов не трогаем: пересоздание
+      // клиента оборвало бы его.
+      if (snapshotRef.current.call) {
+        return;
+      }
+      // Линия на связи — вообще ничего не делаем: вызов сейчас придёт в неё
+      // сам. Раньше здесь было пересоздание клиента, и оно рвало первый же
+      // вызов: push приходит в самом начале набора, до INVITE.
+      if (clientRef.current?.isRegistered()) {
+        return;
+      }
+      clientRef.current?.refresh('push: входящий звонок');
+    });
+  }, []);
 
   /**
    * Звук вызова: рингтон, когда звоним или звонит нам, и режим громкой

@@ -14,7 +14,9 @@ import (
 
 // SipAccountKind — тип абонента.
 //
-// Разделение не косметическое: от типа зависит драйвер Asterisk.
+// Разделение не косметическое: от типа зависит контекст вызова (устройства
+// звонят из from-devices, приложения — из from-apps) и набор настроек
+// в конфигурации Asterisk.
 type SipAccountKind string
 
 const (
@@ -29,18 +31,16 @@ const (
 	SipKindSoftphone SipAccountKind = "softphone"
 )
 
-// Driver сообщает, каким драйвером Asterisk обслуживается абонент.
+// Ответственность за драйвер: он один — chan_pjsip.
 //
-// Устройства идут через старый chan_sip, приложения — через chan_pjsip.
-// Причина в двух ограничениях сразу: панели и видеодомофоны некорректно
-// работают с новым драйвером (проверено на оборудовании), а старый драйвер
-// не умеет WebSocket, без которого приложение не подключить.
-func (k SipAccountKind) Driver() string {
-	if k == SipKindSoftphone {
-		return "pjsip"
-	}
-	return "sip"
-}
+// Раньше всё было иначе: устройства обслуживал старый chan_sip, приложения —
+// новый, потому что панели и видеодомофоны с новым драйвером работали
+// некорректно. После обновления прошивок панелей (13.10.2026) это перестало
+// быть правдой, и старый драйвер убран целиком: он помечен устаревшим и
+// удалён в новых ветвях Asterisk, а два драйвера означали две ветки кода,
+// два способа смотреть состояние и лишний повод для ошибок.
+//
+// Порядок перехода — plans/pjsip-realtime-migration.md.
 
 // Valid сообщает, известен ли такой тип абонента.
 func (k SipAccountKind) Valid() bool {
@@ -138,8 +138,6 @@ type SipAccount struct {
 	// данных», а не «не на связи». Разница важна: во втором случае
 	// оператор идёт проверять исправную панель.
 	Registered *bool `json:"registered,omitempty"`
-	// Driver — вычисленный драйвер, чтобы интерфейс не повторял правило.
-	Driver string `json:"driver"`
 }
 
 // SipPeerInfo — что о зарегистрированном абоненте знает Asterisk.
@@ -151,8 +149,6 @@ type SipAccount struct {
 // перепутать его с соседним.
 type SipPeerInfo struct {
 	Number string `json:"number"`
-	// Driver — драйвер, которым обслуживается абонент (sip или pjsip).
-	Driver string `json:"driver"`
 	// Contact — адрес, с которого зарегистрировано устройство, как его
 	// видит Asterisk (например, `192.168.1.50:5060`).
 	Contact string `json:"contact,omitempty"`
@@ -281,6 +277,15 @@ type SipGroup struct {
 
 	// Members — состав группы: номера абонентов в нужном порядке.
 	Members []SipGroupMember `json:"members,omitempty"`
+}
+
+// DialTargetFor собирает имя канала Asterisk для номера.
+//
+// Драйвер один — chan_pjsip, поэтому и префикс один. Отдельная функция,
+// а не строка на месте: имя канала встречается в сборке диалплана
+// в нескольких местах, и собирать его по-разному не стоит.
+func DialTargetFor(number string) string {
+	return "PJSIP/" + number
 }
 
 // SipGroupMember — участник группы.

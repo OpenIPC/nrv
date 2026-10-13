@@ -131,7 +131,7 @@ git push gitverse <branch>   # GitVerse
 | `docs/` | документация по подсистемам |
 | `firmware/` | прошивки собственных устройств |
 
-**Порты.** Backend API — `8080`, Web UI — `3001`, MediaMTX API — `9997`.
+**Порты.** Backend API — `8080`, Web UI — `3001`, 
 
 ---
 

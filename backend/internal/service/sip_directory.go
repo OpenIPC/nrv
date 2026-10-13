@@ -83,6 +83,10 @@ func (d *SipDirectory) reload(ctx context.Context) {
 		entry := SipDirectoryEntry{
 			Number: account.Number,
 			Name:   account.Name,
+			// Вид и владелец линии — для пробуждения приложения перед
+			// входящим вызовом: push о звонке нужен только приложениям.
+			Kind:   account.Kind,
+			UserID: account.UserID,
 			// Каналы берём вместе с общей галочкой «уведомлять о
 			// пропущенных»: без неё сообщать не о чем, а решать это
 			// в двух местах — значит однажды разойтись.

@@ -254,7 +254,7 @@ export default function IntercomAccountPage() {
               {acc.number} — {acc.display_name || t(`intercomPage.kind.${acc.kind}`)}
             </h1>
             <p style={{ margin: 0 }}>
-              {t(`intercomPage.kind.${acc.kind}`)} · {acc.driver}
+              {t(`intercomPage.kind.${acc.kind}`)}
               {peer ? (peer.registered ? ` · ${t('intercomPage.registered')}` : ` · ${t('intercomPage.unregistered')}`) : ''}
             </p>
           </div>
@@ -278,7 +278,6 @@ export default function IntercomAccountPage() {
             <Field label={t('intercomAccount.state')} value={peer.status || '—'} />
             <Field label={t('intercomAccount.contact')} value={peer.contact || '—'} />
             <Field label={t('intercomAccount.userAgent')} value={peer.user_agent || '—'} />
-            <Field label={t('intercomAccount.driver')} value={peer.driver || acc.driver || '—'} />
           </div>
         ) : (
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.6 }}>

@@ -45,6 +45,10 @@ export default function CallOverlay() {
 
   const active = call.state === 'active';
   const incoming = call.state === 'incoming';
+  // Предпросмотр: вызов уже принят без звука ради картинки с панели.
+  // Снаружи это то же «звонит», но человек уже видит гостя и может
+  // впустить его, не начиная разговор.
+  const preview = !!call.preview;
   // Смотрим на сам поток, а не только на признак из SDP: видео появляется
   // уже после ответа, и к этому моменту интерфейс должен его показать.
   const hasVideoTrack =
@@ -82,7 +86,9 @@ export default function CallOverlay() {
         <Text style={styles.title}>{title}</Text>
         <Text style={styles.state}>
           {incoming
-            ? 'звонит'
+            ? preview
+              ? 'видно гостя · микрофон выключен'
+              : 'звонит'
             : active
             ? formatTime(elapsed)
             : call.state === 'ending'
@@ -131,8 +137,11 @@ export default function CallOverlay() {
       )}
 
       {/* Открытие двери — одной кнопкой: это самое частое действие во время
-          разговора с панелью, и набирать код руками каждый раз незачем. */}
-      {active && (
+          разговора с панелью, и набирать код руками каждый раз незачем.
+          Во время предпросмотра кнопка тоже нужна: посетителя уже видно,
+          и впустить его можно, не вступая в разговор — так поступают и
+          с обычной трубкой домофона. */}
+      {(active || preview) && (
         <Pressable
           style={styles.openDoor}
           onPress={() => {

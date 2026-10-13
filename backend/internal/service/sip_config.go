@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/nvr/backend/internal/domain"
@@ -16,27 +15,40 @@ import (
 // SipConfigBuilder собирает файлы конфигурации Asterisk из базы.
 //
 // Почему так, а не правкой конфигов руками: установка должна повторяться в
-// другом доме. Оператор заводит панели и трубки в интерфейсе, а файлы
-// Asterisk получаются сами. Иначе перенос установки означал бы переписать
+// другом доме. Оператор заводит панели и трубки в интерфейсе, а конфигурация
+// Asterisk получается сама. Иначе перенос установки означал бы переписать
 // четыре конфига и не ошибиться в каждом.
+//
+// С этапа Realtime часть настроек сервер пишет не в файлы, а в таблицы базы
+// (см. asterisk_realtime.go): так правка абонента действует сразу, без
+// перезагрузки конфигурации, которая рвёт соединения приложений. В файлах
+// осталось то, что меняется редко: транспорт, диапазон портов разговора и
+// правила набора.
 type SipConfigBuilder struct {
 	repo      *postgres.SipRepo
 	configDir string
+	// databaseURL — строка подключения сервера к своей базе. Из неё собираются
+	// файлы доступа Asterisk к той же базе: один источник правды на двоих.
+	databaseURL string
 	// reloader перезагружает конфигурацию Asterisk (см. AsteriskReloader).
 	// Может быть nil — тогда конфигурация только записывается.
 	reloader AsteriskReloader
+	// udpPort — UDP-порт chan_pjsip: на нём подключаются устройства.
+	// Ноль или мусор — штатный 5060 (см. renderPjsipTransport).
+	udpPort int
 }
 
 // NewSipConfigBuilder создаёт сборщик.
-func NewSipConfigBuilder(repo *postgres.SipRepo, configDir string, reloader AsteriskReloader) *SipConfigBuilder {
-	return &SipConfigBuilder{repo: repo, configDir: configDir, reloader: reloader}
+func NewSipConfigBuilder(repo *postgres.SipRepo, configDir, databaseURL string, reloader AsteriskReloader, udpPort int) *SipConfigBuilder {
+	return &SipConfigBuilder{repo: repo, configDir: configDir, databaseURL: databaseURL, reloader: reloader, udpPort: udpPort}
 }
 
 // Sync собирает конфигурацию из базы и перезагружает Asterisk.
 //
 // Порядок такой: сначала пишем все файлы, потом одна перезагрузка. Если
 // перезагружать после каждого файла, часть времени конфигурация будет
-// рассогласованной — абонент есть в sip.conf, но правила вызова ещё старые.
+// рассогласованной — абонент есть в конфигурации, но правила вызова ещё
+// старые.
 func (b *SipConfigBuilder) Sync(ctx context.Context) error {
 	snapshot, err := b.repo.Snapshot(ctx)
 	if err != nil {
@@ -57,12 +69,8 @@ func (b *SipConfigBuilder) Sync(ctx context.Context) error {
 	}
 
 	files := map[string]string{
-		"sip_accounts.conf":        renderSipAccounts(snapshot.Accounts),
-		"pjsip_accounts.conf":      renderPjsipAccounts(snapshot.Accounts, settings.VideoEnabled, settings.VideoCodec, settings.ExternalAddress),
-		"pjsip_transport.conf":     renderPjsipTransport(settings),
-		"rtp_settings.conf":        renderRtpSettings(settings),
-		"extensions_accounts.conf": renderDialplan(snapshot.Groups, snapshot.Rules),
-		"server_settings.conf":     renderServerSettings(settings),
+		"pjsip_transport.conf": renderPjsipTransport(settings, b.udpPort),
+		"rtp_settings.conf":    renderRtpSettings(settings),
 	}
 
 	for name, content := range files {
@@ -93,6 +101,50 @@ func (b *SipConfigBuilder) Sync(ctx context.Context) error {
 		}
 	}
 
+	// Файлы доступа к базе — отдельно от файлов в каталоге accounts: они лежат
+	// в корне конфигурации, рядом с pjsip.conf, который их подключает.
+	if err := WriteRealtimeConfigs(b.configDir, b.databaseURL); err != nil {
+		return err
+	}
+
+	// Абоненты — в базу, а не в файл.
+	//
+	// Именно ради этого шага всё и делалось: Asterisk читает настройки и
+	// контакты из таблиц при каждом запросе, поэтому добавление панели или
+	// смена пароля действуют сразу, без перезагрузки модуля pjsip, которая
+	// разрывала бы соединения приложений.
+	endpoints := realtimeEndpoints(snapshot.Accounts, settings)
+	if err := b.repo.SyncRealtimeEndpoints(ctx, endpoints); err != nil {
+		return fmt.Errorf("записать абонентов в Realtime: %w", err)
+	}
+
+	// Правила вызова — туда же. Вызов в группу читается из базы при каждом
+	// вызове, поэтому добавленный в группу человек звонится сразу, а с файлом
+	// он не получал звонка до перечитывания плана набора.
+	if err := b.repo.SyncRealtimeDialplan(ctx, dialplanRows(snapshot.Accounts, snapshot.Groups, snapshot.Rules)); err != nil {
+		return fmt.Errorf("записать правила вызова в Realtime: %w", err)
+	}
+
+	// Удаляем файлы, оставшиеся от прошлых версий.
+	//
+	// Почему вручную, а не «просто убрать их из списка»: каталог общий для
+	// всех установок, и на обновлённой системе эти файлы уже лежат на диске
+	// от прежних запусков. Через #include они больше не подключены, но в них
+	// записаны пароли устройств в открытом виде — держать такое на диске без
+	// причины нельзя. Неудачу не считаем поводом прервать сборку: файла
+	// может не быть вовсе.
+	for _, name := range []string{
+		"extensions_accounts.conf", // правила вызова, пока они были в файле
+		"pjsip_accounts.conf",      // абоненты, пока они были в файле
+		"sip_accounts.conf",        // абоненты старого драйвера chan_sip
+		"server_settings.conf",     // его же общие параметры (NAT, внешний адрес)
+		"extensions_devices.conf",  // точные маршруты на старый драйвер
+	} {
+		if err := os.Remove(filepath.Join(accountsDir, name)); err != nil && !os.IsNotExist(err) {
+			log.Warn().Err(err).Str("файл", name).Msg("не удалить устаревший файл конфигурации")
+		}
+	}
+
 	if b.reloader != nil {
 		if err := b.reloader.Reload(ctx); err != nil {
 			return fmt.Errorf("перезагрузить конфигурацию Asterisk: %w", err)
@@ -106,84 +158,10 @@ func (b *SipConfigBuilder) Sync(ctx context.Context) error {
 	return nil
 }
 
-// renderSipAccounts собирает файл абонентов старого драйвера (устройства).
-func renderSipAccounts(accounts []domain.SipAccount) string {
-	var out strings.Builder
-	out.WriteString("; Файл собран сервером из базы. Правки будут перезаписаны.\n")
-	out.WriteString("; Абоненты-устройства: панели, камеры с кнопкой, видеодомофоны, трубки.\n")
-	out.WriteString("; Шаблон [device] описан в sip.conf.\n\n")
-
-	written := 0
-	for _, a := range accounts {
-		if a.Kind == domain.SipKindSoftphone {
-			continue
-		}
-		writeSipAccount(&out, a)
-		written++
-	}
-	if written == 0 {
-		out.WriteString("; Пока не заведён ни один абонент-устройство.\n")
-	}
-	return out.String()
-}
-
-// writeSipAccount описывает одного абонента старого драйвера.
-func writeSipAccount(out *strings.Builder, a domain.SipAccount) {
-	fmt.Fprintf(out, "[%s](device)\n", a.Number)
-	fmt.Fprintf(out, "secret=%s\n", a.Password)
-	if a.Name != "" {
-		fmt.Fprintf(out, "callerid=\"%s\" <%s>\n", a.Name, a.Number)
-	}
-	// Панели Beward открывают дверь только по DTMF в сообщениях SIP INFO,
-	// поэтому им нужен именно этот способ. Остальным устройствам подходит
-	// rfc2833, унаследованный от шаблона: он надёжнее в пути через сеть.
-	//
-	// Проверено на живой панели: с rfc2833 код открытия до неё не доходит.
-	if strings.EqualFold(a.Vendor, "beward") {
-		out.WriteString("dtmfmode=info\n")
-	}
-	// Пометка для оператора: по ней в журнале Asterisk видно, что это за
-	// абонент, и откуда он взялся — из базы, а не из ручной правки.
-	fmt.Fprintf(out, "description=%s %s\n\n", a.Kind, a.Number)
-}
-
-// renderServerSettings собирает настройки, общие для всех абонентов.
+// renderPjsipTransport собирает транспорты: WebSocket для приложений и UDP
+// для устройств.
 //
-// Файл подключается внутри sip.conf и отвечает за две вещи:
-//
-//   - внешний адрес сервера: нужен там, где устройства находятся в других
-//     сетях. Без него Asterisk сообщает им внутренний адрес, и звонок
-//     не устанавливается;
-//   - список своих сетей: без него внешний адрес применяется и к внутренним
-//     устройствам, и голос пытается идти через NAT — со стороны слышно
-//     рваное звучание.
-func renderServerSettings(settings *domain.SipSettings) string {
-	var out strings.Builder
-	out.WriteString("; Файл собран сервером из настроек телефонии. Правки будут перезаписаны.\n\n")
-
-	if settings.ExternalAddress != "" {
-		fmt.Fprintf(&out, "externaddr=%s\n", settings.ExternalAddress)
-	}
-	if settings.LocalNet != "" {
-		// В настройках сети перечисляются через запятую или переводом строки —
-		// в конфигурации Asterisk каждая сеть идёт отдельной строкой.
-		for _, net := range strings.FieldsFunc(settings.LocalNet, func(r rune) bool {
-			return r == ',' || r == ';' || r == '\n' || r == ' '
-		}) {
-			if net = strings.TrimSpace(net); net != "" {
-				fmt.Fprintf(&out, "localnet=%s\n", net)
-			}
-		}
-	}
-	if settings.ExternalAddress == "" && settings.LocalNet == "" {
-		out.WriteString("; Внешний адрес не задан: все абоненты в одной сети с сервером.\n")
-	}
-	return out.String()
-}
-
-// renderPjsipTransport собирает секцию транспорта для приложений.
-//
-// Секция пишется из базы, а не держится в статическом pjsip.conf, ради
+// Секции пишутся из базы, а не держатся в статическом pjsip.conf, ради
 // внешнего адреса. Без него станция предлагает приложениям только локальный
 // адрес: телефон в мобильной сети регистрируется, но разговор остаётся без
 // звука и видео — медиа уходит в сеть, откуда до телефона не добраться.
@@ -191,7 +169,7 @@ func renderServerSettings(settings *domain.SipSettings) string {
 // local_net отделяет «свои» сети: для них в SDP остаётся локальный адрес.
 // Без этого деления внешний адрес применялся бы и к разговорам внутри
 // дома, и голос пытался бы идти через NAT.
-func renderPjsipTransport(settings *domain.SipSettings) string {
+func renderPjsipTransport(settings *domain.SipSettings, udpPort int) string {
 	var out strings.Builder
 	out.WriteString("; Файл собран сервером из настроек телефонии. Правки будут перезаписаны.\n")
 	out.WriteString("; Транспорт приложений: WebRTC по WebSocket.\n\n")
@@ -220,6 +198,36 @@ func renderPjsipTransport(settings *domain.SipSettings) string {
 	}
 	if settings.ExternalAddress == "" && settings.LocalNet == "" {
 		out.WriteString("; Внешний адрес не задан: все абоненты в одной сети с сервером.\n")
+	}
+
+	// Второй транспорт — для устройств: обычный SIP по UDP.
+	//
+	// Порт штатный, 5060: устройства настроены именно на него, поэтому при
+	// уходе от старого драйвера их не пришлось перенастраивать — они просто
+	// зарегистрировались на новом драйвере по тем же логинам и паролям.
+	port := udpPort
+	if port < 1024 || port > 65535 {
+		port = 5060
+	}
+	out.WriteString("\n; Транспорт устройств: обычный SIP по UDP.\n")
+	out.WriteString("[transport-udp]\n")
+	out.WriteString("type=transport\n")
+	out.WriteString("protocol=udp\n")
+	// bind обязателен по той же причине, что и выше: без него Asterisk
+	// отказывается создавать транспорт и пишет «binding not specified».
+	fmt.Fprintf(&out, "bind=0.0.0.0:%d\n", port)
+	if settings.ExternalAddress != "" {
+		fmt.Fprintf(&out, "external_signaling_address=%s\n", settings.ExternalAddress)
+		fmt.Fprintf(&out, "external_media_address=%s\n", settings.ExternalAddress)
+	}
+	if settings.LocalNet != "" {
+		for _, net := range strings.FieldsFunc(settings.LocalNet, func(r rune) bool {
+			return r == ',' || r == ';' || r == '\n' || r == ' '
+		}) {
+			if net = strings.TrimSpace(net); net != "" {
+				fmt.Fprintf(&out, "local_net=%s\n", net)
+			}
+		}
 	}
 	return out.String()
 }
@@ -264,268 +272,80 @@ func renderRtpSettings(settings *domain.SipSettings) string {
 	return out.String()
 }
 
-// renderPjsipAccounts собирает файл абонентов нового драйвера (приложения).
+// realtimeEndpoints готовит настройки абонентов для таблиц Asterisk.
 //
-// Имена объектов важны: AOR обязан называться так же, как endpoint. Это
-// выяснено на живой регистрации — при `aors=aor300` у абонента 300
-// Asterisk отвечал 404 на REGISTER и писал в журнал
-// «find_registrar_aor: AOR ” not found for endpoint '300'».
-func renderPjsipAccounts(accounts []domain.SipAccount, videoEnabled bool, videoCodec, externalAddress string) string {
-	var out strings.Builder
-	out.WriteString("; Файл собран сервером из базы. Правки будут перезаписаны.\n")
-	out.WriteString("; Абоненты-приложения: браузер, мобильное, десктоп (WebRTC по WebSocket).\n")
-	out.WriteString("; Имя AOR совпадает с именем абонента — иначе регистрация не проходит.\n\n")
+// Раньше эти же значения писались файлом `accounts/pjsip_accounts.conf`. Файл
+// приходилось перечитывать целиком после любой правки, а перечитывание
+// (module reload res_pjsip.so) обрывало соединения приложений: телефон,
+// который в этот момент разговаривал, терял линию. Теперь параметры лежат в
+// базе, и Asterisk спрашивает их при каждой регистрации и каждом вызове.
+//
+// Отличия устройства от приложения — те же три, что и раньше, и все
+// существенные:
+//
+//   - контекст from-devices: панель звонит дежурным и в группы, а не как
+//     оператор;
+//   - без webrtc: панель, трубка и камера работают обычным SIP без ICE и
+//     шифрования медиа; включив webrtc, мы бы потребовали от них того, чего
+//     они не умеют, и регистрация проходила бы без звонков;
+//   - DTMF: панели Beward открывают дверь только кодом в сообщении SIP INFO,
+//     остальным подходит rfc4733 (проверено на живой панели).
+func realtimeEndpoints(accounts []domain.SipAccount, settings *domain.SipSettings) []domain.SipRealtimeEndpoint {
+	// Кодеки — одной строкой через запятую: в таблице это одна колонка, а не
+	// повторяющийся параметр, как в файле конфигурации.
+	allow := "alaw,ulaw"
+	if settings.VideoEnabled && settings.VideoCodec != "" {
+		// Видео нужно не только для разговора: панель присылает картинку в
+		// INVITE, и жилец видит, кто пришёл, ещё до ответа. Ради этого перехода
+		// всё и затевалось.
+		allow += "," + settings.VideoCodec
+	}
 
-	written := 0
+	list := make([]domain.SipRealtimeEndpoint, 0, len(accounts))
 	for _, a := range accounts {
-		if a.Kind != domain.SipKindSoftphone {
-			continue
-		}
-		writePjsipAccount(&out, a, videoEnabled, videoCodec, externalAddress)
-		written++
-	}
-	if written == 0 {
-		out.WriteString("; Пока не заведено ни одного приложения.\n")
-	}
-	return out.String()
-}
-
-// writePjsipAccount описывает одного абонента нового драйвера.
-func writePjsipAccount(out *strings.Builder, a domain.SipAccount, videoEnabled bool, videoCodec, externalAddress string) {
-	cid := a.Name
-	if cid == "" {
-		cid = a.Number
-	}
-
-	fmt.Fprintf(out, "[%s]\n", a.Number)
-	out.WriteString("type=endpoint\n")
-	out.WriteString("context=from-apps\n")
-	out.WriteString("disallow=all\n")
-	// Только G.711 (alaw/ulaw), без opus.
-	//
-	// Почему не opus первым, как просится из соображений качества. В образе
-	// Asterisk нет модуля codec_opus (загружен только разбор его параметров),
-	// но кодек разрешён в настройках абонента — и станция выбирала его для
-	// WebRTC-абонента. А устройства (панели, трубки, камеры) работают на
-	// G.711, поэтому при переводе вызова на устройство общего формата не
-	// оставалось вовсе: `No format found to offer. Cancelling call to 109` —
-	// и вызов срывался сразу после набора номера.
-	//
-	// G.711 хватает: это внутренняя связь в одной сети, где качество
-	// ограничивает микрофон домофона, а не кодек.
-	out.WriteString("allow=alaw,ulaw\n")
-	// Видео включается отдельно и только если настройка задана: не все
-	// приложения умеют видеозвонок, а лишний кодек в согласовании — это
-	// лишний повод для отказа при установлении вызова.
-	if videoEnabled {
-		fmt.Fprintf(out, "allow=%s\n", videoCodec)
-	}
-	// webrtc=yes включает DTLS-SRTP и ICE: приложение (WebRTC) не умеет
-	// работать без ICE — попытка его отключить заканчивалась обрывом вызова
-	// и ошибкой «rtc error» на телефоне. Проверено на живом.
-	out.WriteString("webrtc=yes\n")
-	// Адрес медиа для приложений вне домашней сети.
-	//
-	// Берётся из настроек телефонии («Внешний адрес»). Без него станция
-	// указывает в SDP локальный адрес (192.168.1.x), и телефон в мобильной
-	// сети не понимает, куда отправлять звук и видео.
-	if externalAddress != "" {
-		fmt.Fprintf(out, "media_address=%s\n", externalAddress)
-	}
-	// Симметричный RTP: куда пришёл звук от собеседника, туда и уходит наш.
-	//
-	// Нужен для мобильной сети: телефон за NAT оператора имеет только
-	// внутренний адрес (100.122.x.x), и адресовать пакеты туда бессмысленно.
-	// По первому же пакету от телефона станция запоминает его настоящий
-	// адрес и отвечает уже туда.
-	out.WriteString("rtp_symmetric=yes\n")
-	out.WriteString("direct_media=no\n")
-	// auto_info: принимаем DTMF и в RTP (rfc4733), и в сообщениях SIP INFO.
-	//
-	// Почему не только rfc4733, как раньше. Приложение (JsSIP) отправляет
-	// нажатия клавиш именно как SIP INFO — это его штатное поведение, и
-	// при dtmf_mode=rfc4733 станция такие сообщения игнорировала: коды
-	// открытия двери не доходили ни до панели, ни до трубок.
-	out.WriteString("dtmf_mode=auto_info\n")
-	fmt.Fprintf(out, "auth=auth%s\n", a.Number)
-	fmt.Fprintf(out, "aors=%s\n", a.Number)
-	fmt.Fprintf(out, "callerid=\"%s\" <%s>\n\n", cid, a.Number)
-
-	fmt.Fprintf(out, "[auth%s]\n", a.Number)
-	out.WriteString("type=auth\n")
-	out.WriteString("auth_type=userpass\n")
-	fmt.Fprintf(out, "username=%s\n", a.Number)
-	fmt.Fprintf(out, "password=%s\n\n", a.Password)
-
-	fmt.Fprintf(out, "[%s]\n", a.Number)
-	out.WriteString("type=aor\n")
-	out.WriteString("max_contacts=5\n")
-	out.WriteString("remove_existing=yes\n")
-	out.WriteString("qualify_frequency=30\n\n")
-}
-
-// renderDialplan собирает правила вызова.
-//
-// Правила с указанным источником пишутся как `exten => 200/101`: в Asterisk
-// это означает «номер 200, если звонит абонент 101». Так одна панель может
-// звонить в разные группы разными кнопками, а правило «по умолчанию»
-// остаётся общим.
-func renderDialplan(groups []domain.SipGroup, rules []domain.SipRule) string {
-	var out strings.Builder
-	out.WriteString("; Файл собран сервером из базы. Правки будут перезаписаны.\n")
-	out.WriteString("; Подключается ВНУТРИ секции [from-devices] файла extensions.conf,\n")
-	out.WriteString("; поэтому здесь только строки exten — без заголовков секций.\n\n")
-
-	byID := map[string]domain.SipGroup{}
-	for _, g := range groups {
-		byID[g.ID.String()] = g
-	}
-
-	// Номера, реально занятые правилами: по ним видно, для каких групп
-	// отдельное правило по номеру добавлять не нужно. Правило общего вида,
-	// которое просто повторяет номер своей группы, занятым номером не
-	// считается — иначе номер группы остался бы вообще без правила вызова.
-	taken := map[string]bool{}
-	for _, r := range rules {
-		if !r.Enabled {
-			continue
-		}
-		g, ok := byID[r.GroupID.String()]
-		if r.SourceAccountID == nil && ok && g.Number != "" && r.DialedNumber == g.Number {
-			continue
-		}
-		taken[r.DialedNumber] = true
-	}
-
-	// Сначала правила с источником: они точнее, и Asterisk должен
-	// рассмотреть их раньше общего правила для того же набранного номера.
-	rules = append([]domain.SipRule(nil), rules...)
-	sort.SliceStable(rules, func(i, j int) bool {
-		return rules[i].SourceAccountID != nil && rules[j].SourceAccountID == nil
-	})
-
-	written := 0
-	for _, rule := range rules {
-		if !rule.Enabled {
-			continue
-		}
-		group, ok := byID[rule.GroupID.String()]
-		if !ok || !group.Enabled || len(group.Members) == 0 {
-			// Группа без участников не пишется вовсе: иначе вызов уходил бы
-			// в пустоту и оператор не понимал бы, почему панель молчит.
-			continue
+		cid := a.Name
+		if cid == "" {
+			cid = a.Number
 		}
 
-		// Общее правило, дублирующее номер самой группы, пропускаем: у группы
-		// он теперь свой, и два одинаковых extension в плане набора означали
-		// бы неопределённость.
-		if rule.SourceAccountID == nil && group.Number != "" && rule.DialedNumber == group.Number {
-			continue
+		e := domain.SipRealtimeEndpoint{
+			Number:   a.Number,
+			Password: a.Password,
+			Allow:    allow,
+			CallerID: fmt.Sprintf("\"%s\" <%s>", cid, a.Number),
+			// Медиа через станцию: иначе разговор пошёл бы напрямую между
+			// панелью и монитором, минуя журнал и запись.
+			RTPPortStart:     settings.RtpPortStart,
+			RTPPortEnd:       settings.RtpPortEnd,
+			QualifyFrequency: 30,
 		}
 
-		pattern := rule.DialedNumber
-		if rule.SourceAccountID != nil && rule.SourceNumber != "" {
-			pattern = rule.DialedNumber + "/" + rule.SourceNumber
+		if a.Kind == domain.SipKindSoftphone {
+			e.Context = "from-apps"
+			e.WebRTC = true
+			e.MediaAddress = settings.ExternalAddress
+			// auto_info: принимаем DTMF и в RTP (rfc4733), и в сообщениях SIP
+			// INFO. Приложение JsSIP отправляет нажатия именно как SIP INFO, и
+			// при rfc4733 станция их игнорировала: коды открытия двери не
+			// доходили ни до панели, ни до трубок.
+			e.DtmfMode = "auto_info"
+			// Запас контактов: приложение переподключается при возврате из
+			// фона, и старая регистрация может быть ещё жива.
+			e.MaxContacts = 5
+		} else {
+			e.Context = "from-devices"
+			if strings.EqualFold(a.Vendor, "beward") {
+				e.DtmfMode = "info"
+			} else {
+				e.DtmfMode = "rfc4733"
+			}
+			// У устройства один контакт, но запас в два нужен: при
+			// переподключении старая регистрация может ещё не истечь, и с
+			// max_contacts=1 новая отклонялась бы, а устройство оставалось бы
+			// без связи.
+			e.MaxContacts = 2
 		}
-
-		writeDialplanRule(&out, pattern, group)
-		written++
+		list = append(list, e)
 	}
-
-	// Затем — группы со своим номером. Это основной способ вызова: номер
-	// виден в интерфейсе у самой группы, и его можно поправить, не заходя
-	// в правила.
-	numbered := make([]domain.SipGroup, 0, len(groups))
-	for _, g := range groups {
-		if g.Enabled && g.Number != "" && !taken[g.Number] && len(g.Members) > 0 {
-			numbered = append(numbered, g)
-		}
-	}
-	sort.SliceStable(numbered, func(i, j int) bool { return numbered[i].Number < numbered[j].Number })
-	for _, g := range numbered {
-		writeDialplanRule(&out, g.Number, g)
-		written++
-	}
-
-	if written == 0 {
-		out.WriteString("; Пока нет ни одного правила вызова.\n")
-	}
-	return out.String()
-}
-
-// writeDialplanRule описывает одну группу вызова.
-func writeDialplanRule(out *strings.Builder, pattern string, group domain.SipGroup) {
-	// Цели в формате Asterisk: устройства — SIP/<номер>, приложения — PJSIP/<номер>.
-	targets := make([]string, 0, len(group.Members))
-	for _, m := range group.Members {
-		channel := "SIP"
-		if m.Kind == domain.SipKindSoftphone {
-			channel = "PJSIP"
-		}
-		targets = append(targets, fmt.Sprintf("%s/%s", channel, m.Number))
-	}
-
-	fmt.Fprintf(out, "; %s — %s\n", group.Name, strategyText(group.Strategy))
-	fmt.Fprintf(out, "exten => %s,1,NoOp(Вызов от ${CALLERID(num)} в группу %s)\n", pattern, group.Name)
-
-	// Звонящего исключаем из обзвона.
-	//
-	// Иначе получается разговор с самим собой: линия оператора обычно входит
-	// в группу «Все устройства», и при наборе её номера собственный телефон
-	// начинает звонить так, будто ему звонят, — и звонит, пока кто-нибудь не
-	// ответит. Проверено на живом стенде: в логе видно Dial до 301 при вызове
-	// от самого 301.
-	//
-	// Список собирается на месте, а не подставляется готовым: префикс канала
-	// зависит от того, кто звонит, — устройство это (SIP) или приложение
-	// (PJSIP). ${CHANNEL(channeltype)} и даёт нужный префикс, поэтому правило
-	// работает и для трубок, и для приложений, и для панелей.
-	out.WriteString(" same => n,Set(CALLLIST=" + strings.Join(targets, "&") + ")\n")
-	out.WriteString(" same => n,Set(SELF=${CHANNEL(channeltype)}/${CALLERID(num)})\n")
-	// Звонящего вычитаем перебором элементов, а не подстановкой в REPLACE().
-	//
-	// Функция REPLACE() в Asterisk удаляет перечисленные символы, а не
-	// подстроку целиком: от попытки убрать «PJSIP/301&» из списка оставались
-	// только цифры «4562», и станция уходила звонить в несуществующие каналы.
-	// Проверено на живом стенде: в логе видно Set(CALLLIST=4562) и следом
-	// Dial("4562") — вызов обрывался сразу после набора.
-	out.WriteString(" same => n,Set(IDX=1)\n")
-	out.WriteString(" same => n,Set(DIALTARGETS=)\n")
-	out.WriteString(" same => n,While($[\"${CUT(CALLLIST,&,${IDX})}\" != \"\"])\n")
-	out.WriteString(" same => n,Set(ITEM=${CUT(CALLLIST,&,${IDX})})\n")
-	// Накопитель наполняем через разделитель только начиная со второго
-	// элемента, иначе список получил бы ведущий «&» — Dial его не примет.
-	out.WriteString(" same => n,ExecIf($[\"${ITEM}\" != \"${SELF}\"]?Set(DIALTARGETS=${IF($[\"${DIALTARGETS}\" = \"\"]?${ITEM}:${DIALTARGETS}&${ITEM})}))\n")
-	out.WriteString(" same => n,Set(IDX=$[${IDX}+1])\n")
-	out.WriteString(" same => n,EndWhile()\n")
-	out.WriteString(" same => n,Set(CALLLIST=${DIALTARGETS})\n")
-	// Если кроме звонящего в группе никого нет, звонить некому: без этой
-	// проверки Dial получил бы пустой список.
-	out.WriteString(" same => n,ExecIf($[\"${CALLLIST}\" = \"\"]?Hangup())\n")
-
-	if group.Strategy == domain.SipStrategySequential {
-		// По очереди: сколько звонить каждому — делим общее время на всех.
-		perMember := group.RingSeconds / len(targets)
-		if perMember < 5 {
-			perMember = 5
-		}
-		// Перебор идёт по списку без звонящего: CUT берёт очередной элемент.
-		out.WriteString(" same => n,Set(IDX=1)\n")
-		out.WriteString(" same => n,While($[\"${CUT(CALLLIST,&,${IDX})}\" != \"\"])\n")
-		fmt.Fprintf(out, " same => n,Dial(${CUT(CALLLIST,&,${IDX})},%d)\n", perMember)
-		out.WriteString(" same => n,Set(IDX=$[${IDX}+1])\n")
-		out.WriteString(" same => n,EndWhile()\n")
-	} else {
-		// Все сразу: отвечает первый.
-		fmt.Fprintf(out, " same => n,Dial(${CALLLIST},%d)\n", group.RingSeconds)
-	}
-	out.WriteString(" same => n,Hangup()\n\n")
-}
-
-// strategyText переводит стратегию в читаемый вид для комментария.
-func strategyText(s domain.SipGroupStrategy) string {
-	if s == domain.SipStrategySequential {
-		return "звонить по очереди"
-	}
-	return "звонить всем сразу"
+	return list
 }

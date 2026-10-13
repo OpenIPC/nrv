@@ -72,7 +72,6 @@ func scanSipAccount(row interface {
 	if err != nil {
 		return nil, err
 	}
-	a.Driver = a.Kind.Driver()
 	return &a, nil
 }
 
@@ -86,7 +85,7 @@ func (r *SipRepo) ListAccounts(ctx context.Context) ([]domain.SipAccount, error)
 		       a.camera_id, a.controller_id, COALESCE(host(a.host), ''),
 		       a.enabled, a.created_at, a.updated_at,
 		       a.notify_telegram, a.notify_max, a.notify_missed, a.record_missed, a.notes,
-		       a.vendor, a.user_id, COALESCE(u.username, ''),
+			       a.vendor, a.user_id, COALESCE(u.username, ''),
 		       `+sipAccountSwitch+`
 		FROM sip_accounts a`+sipAccountJoins+`
 		ORDER BY a.number`)
@@ -106,7 +105,6 @@ func (r *SipRepo) ListAccounts(ctx context.Context) ([]domain.SipAccount, error)
 			&a.SwitchID, &a.SwitchPort, &a.SwitchName); err != nil {
 			return nil, fmt.Errorf("scan sip account: %w", err)
 		}
-		a.Driver = a.Kind.Driver()
 		accounts = append(accounts, a)
 	}
 	return accounts, rows.Err()
@@ -273,7 +271,6 @@ func (r *SipRepo) CreateAccount(ctx context.Context, a *domain.SipAccount) error
 	if err != nil {
 		return fmt.Errorf("create sip account: %w", err)
 	}
-	a.Driver = a.Kind.Driver()
 	return nil
 }
 
@@ -318,7 +315,6 @@ func (r *SipRepo) UpdateAccount(ctx context.Context, a *domain.SipAccount) error
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	a.Driver = a.Kind.Driver()
 	return nil
 }
 

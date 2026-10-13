@@ -519,7 +519,7 @@ func main() {
 			// первом звонке, когда искать причину уже некогда.
 			log.Warn().Msg("AMI-пароль не задан: конфигурация SIP будет записана, но Asterisk подхватит её только после перезапуска")
 		}
-		sipBuilder = service.NewSipConfigBuilder(sipRepo, cfg.AsteriskConfigDir, reloader)
+		sipBuilder = service.NewSipConfigBuilder(sipRepo, cfg.AsteriskConfigDir, cfg.DatabaseURL, reloader, cfg.AsteriskSIPPort)
 		// Собираем при старте: данные в базе могли остаться с прошлого
 		// запуска, а конфигурация Asterisk живёт в контейнере и при его
 		// пересоздании осталась бы прежней.
@@ -540,6 +540,20 @@ func main() {
 				postgres.NewSipCallRepo(db), directory,
 				missedCallNotifierAdapter{svc: notifier},
 			).WithClipRecorder(service.NewIntercomClipRecorder(cameraSvc, recorderSvc))
+
+			// Пробуждение приложения перед входящим вызовом.
+			//
+			// Нужно потому, что прошивка телефона замораживает приложение в фоне,
+			// и линия пропадает из списка доступных — звонок на заблокированный
+			// телефон обрывается с «нет абонента». Ключа Firebase может не быть
+			// (тогда push выключены) — пробуждатель создаётся только когда есть
+			// чем отправлять.
+			if fcmClient != nil {
+				watcher.WithCallWaker(service.NewCallWaker(
+					directory, postgres.NewPushTokenRepo(db),
+					callPushAdapter{svc: notifier},
+				))
+			}
 
 			stream := service.NewAMIEventStream(
 				cfg.AsteriskAMIAddr, cfg.AsteriskAMIUser, cfg.AsteriskAMISecret,
