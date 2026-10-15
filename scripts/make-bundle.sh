@@ -39,12 +39,22 @@ WITH_NVIDIA=0
 WITH_SIP=0
 WITH_MINIO=0
 SKIP_MODELS=0
+SKIP_IMAGES=0
+SKIP_APT=0
+FORCE=0
 COMPOSE_EXTRA_ARGS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --out) OUT_DIR="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=1; shift ;;
+        # Ключи для быстрых повторных сборок: при правке одного раздела
+        # незачем заново упаковывать гигабайты образов.
+        --skip-images) SKIP_IMAGES=1; shift ;;
+        --skip-apt) SKIP_APT=1; shift ;;
+        # Досборка в уже существующий каталог: нужна, когда образы упакованы,
+        # а правился только, например, список пакетов.
+        --force) FORCE=1; shift ;;
         --with-nvidia) WITH_NVIDIA=1; shift ;;
         --with-sip) WITH_SIP=1; WITH_SIP_FLAG="--sip"; shift ;;
         --with-minio) WITH_MINIO=1; shift ;;
@@ -69,6 +79,33 @@ fi
 
 say() { echo; echo "=== $* ==="; }
 
+# Поиск тома по окончанию имени.
+#
+# Имя тома содержит имя проекта compose, а оно зависит от каталога, поэтому
+# точное имя заранее неизвестно. Важно и КАК ищем: связка `docker volume ls |
+# head -1` при включённом pipefail роняет скрипт — head закрывает трубу, и
+# docker получает SIGPIPE (та же ловушка описана в install.sh).
+#
+# Сначала ищем том ИМЕННО своего проекта. На машине могли остаться тома от
+# другого запуска (например, если compose когда-то запускали из другого
+# каталога), и тогда в комплект попали бы пустые тома — на этом ожидание
+# моделей и зациклилось при первой сборке.
+project_prefix() {
+    basename "$1" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9'
+}
+
+find_volume() {
+    local suffix="_$1" volumes exact prefix
+    volumes="$(docker volume ls --format '{{.Name}}' 2>/dev/null || true)"
+    prefix="$(project_prefix "$PROJECT_DIR")"
+    exact="$(printf '%s\n' "$volumes" | grep -- "^${prefix}${suffix}\$" | tail -1 || true)"
+    if [ -n "$exact" ]; then
+        printf '%s\n' "$exact"
+        return 0
+    fi
+    printf '%s\n' "$volumes" | grep -- "${suffix}\$" | tail -1 || true
+}
+
 # Команда compose бывает двух видов — как и в install.sh.
 if docker compose version >/dev/null 2>&1; then
     COMPOSE="docker compose"
@@ -79,8 +116,9 @@ else
     exit 1
 fi
 
-if [ -e "$OUT_DIR" ] && [ -n "$(ls -A "$OUT_DIR" 2>/dev/null || true)" ]; then
-    echo "Каталог $OUT_DIR не пуст — укажите другой, чтобы не смешать сборки." >&2
+if [ -e "$OUT_DIR" ] && [ -n "$(ls -A "$OUT_DIR" 2>/dev/null || true)" ] && [ "$FORCE" -eq 0 ]; then
+    echo "Каталог $OUT_DIR не пуст — укажите другой или добавьте --force," >&2
+    echo "чтобы дособрать в него (при этом старые файлы разделов сохранятся)." >&2
     exit 1
 fi
 mkdir -p "$OUT_DIR"/{src,images,apt,models}
@@ -103,6 +141,7 @@ echo "Исходники: $(du -sh "$OUT_DIR/src" | cut -f1)"
 
 # ---------------------------------------------------------------------- образы
 
+if [ "$SKIP_IMAGES" -eq 0 ]; then
 say "Образы Docker"
 
 cd "$OUT_DIR/src"
@@ -112,10 +151,44 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
     $COMPOSE build
 fi
 
-# Список образов берём у compose: он знает и собираемые, и скачиваемые.
-mapfile -t IMAGES < <($COMPOSE config --images | sort -u)
+# Образы необязательных служб, которые не поднимали на сборочной машине,
+# придётся скачать: на объекте их взять будет неоткуда.
+if [ "$WITH_SIP" -eq 1 ]; then
+    $COMPOSE --profile sip pull asterisk || true
+fi
+if [ "$WITH_MINIO" -eq 1 ]; then
+    $COMPOSE --profile minio pull minio || true
+fi
+
+# Список образов собираем сами, а не ключом compose.
+#
+# Ключа config --images у docker-compose v1 нет (он появился во втором
+# выпуске), а в Debian 12 стоит именно v1 — на этом сборка комплекта и
+# встала. Кроме того, v1 не показывает в выводе образы, собранные из
+# исходников: их имена он составляет сам, по имени проекта. Поэтому берём
+# оба источника и оставляем те образы, что действительно есть на машине.
+project_name="$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
+
+mapfile -t IMAGES < <(
+    {
+        # Образы, указанные в описании служб (postgres, nats, go2rtc, nginx…).
+        $COMPOSE config 2>/dev/null | awk '/^[[:space:]]+image:/{print $2}'
+        # Образы, собранные из исходников: backend, webui, детектор, публикатор.
+        docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^${project_name}[-_]" || true
+    } \
+    | grep -v '<none>' \
+    | sort -u \
+    | while read -r image; do
+        if docker image inspect "$image" >/dev/null 2>&1; then
+            echo "$image"
+        else
+            echo "Пропускаю отсутствующий образ: $image" >&2
+        fi
+      done
+)
+
 if [ "${#IMAGES[@]}" -eq 0 ]; then
-    echo "Не удалось получить список образов от compose." >&2
+    echo "Не удалось получить список образов — проверьте вывод '${COMPOSE} config'." >&2
     exit 1
 fi
 
@@ -147,9 +220,11 @@ for image in "${IMAGES[@]}"; do
 done
 
 echo "Образы: $(du -sh "$OUT_DIR/images" | cut -f1)"
+fi
 
 # ------------------------------------------------------------------ репозиторий apt
 
+if [ "$SKIP_APT" -eq 0 ]; then
 say "Пакеты системы"
 
 # Набор пакетов тот же, что установщик просит из сети, плюс зависимости.
@@ -162,16 +237,32 @@ if ! command -v dpkg-scanpackages >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=180 install -y -qq dpkg-dev
 fi
 
-echo "Скачиваю пакеты (с зависимостями)…"
-# Dir::Cache::archives — каталог, куда apt складывает .deb; --download-only
-# ничего не устанавливает, только скачивает.
-apt-get -o Dir::Cache::archives="$OUT_DIR/apt" -o Debug::NoLocking=1 \
-    -o DPkg::Lock::Timeout=180 \
-    install --reinstall --download-only -y -qq "${PACKAGES[@]}" >/dev/null
+# Одного «apt-get install --download-only» недостаточно: apt скачивает только
+# те зависимости, которых нет на сборочной машине. В комплекте оказалось бы
+# восемь файлов вместо всех нужных, и на чистой системе установка из него
+# встала бы на нехватке библиотек — проверено на первой сборке.
+# Поэтому считаем полный список зависимостей и скачиваем каждый пакет сам.
+if ! command -v apt-rdepends >/dev/null 2>&1; then
+    echo "Ставлю apt-rdepends (нужен для списка зависимостей)…"
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=180 install -y -qq apt-rdepends
+fi
 
-# Указатель репозитория: без него apt на объекте не увидит пакеты.
-( cd "$OUT_DIR/apt" && dpkg-scanpackages . /dev/null > Packages 2>/dev/null && gzip -kf Packages )
+# В выводе apt-rdepends строки зависимостей с отступом, их отбрасываем;
+# виртуальные пакеты (debconf-2.0 и подобные) скачать нельзя — их пропускаем.
+mapfile -t DEP_CLOSURE < <(apt-rdepends "${PACKAGES[@]}" 2>/dev/null \
+    | grep -vE '^[[:space:]]' | grep -v '^Depends' | sort -u)
+
+echo "Пакетов в зависимостях: ${#DEP_CLOSURE[@]}"
+cd "$OUT_DIR/apt"
+failed=0
+for pkg in "${DEP_CLOSURE[@]}"; do
+    apt-get download "$pkg" >/dev/null 2>&1 || failed=$((failed + 1))
+done
+cd "$PROJECT_DIR"
+[ "$failed" -gt 0 ] && echo "Не скачались (виртуальные или отсутствующие): $failed"
+
 echo "Пакетов: $(ls "$OUT_DIR/apt"/*.deb 2>/dev/null | wc -l), размер: $(du -sh "$OUT_DIR/apt" | cut -f1)"
+fi
 
 # ------------------------------------------------------------- пакеты видеокарты
 
@@ -195,27 +286,46 @@ if [ "$WITH_NVIDIA" -eq 1 ]; then
     echo "Пакетов NVIDIA: $(ls "$OUT_DIR/nvidia"/*.deb 2>/dev/null | wc -l), размер: $(du -sh "$OUT_DIR/nvidia" | cut -f1)"
 fi
 
+# Указатель репозитория собираем после всех скачиваний: он должен включать и
+# пакеты видеокарты, если их забирали.
+if [ -d "$OUT_DIR/apt" ] && [ -n "$(ls "$OUT_DIR/apt"/*.deb 2>/dev/null || true)" ]; then
+    ( cd "$OUT_DIR/apt" && dpkg-scanpackages . /dev/null > Packages 2>/dev/null && gzip -kf Packages )
+    echo "Указатель репозитория: Packages, пакетов $(ls "$OUT_DIR/apt"/*.deb | wc -l)"
+fi
+
 # ----------------------------------------------------------------------- модели
 
 if [ "$SKIP_MODELS" -eq 0 ]; then
     say "Модели распознавания"
 
-    # Поднимаем детектор: он сам скачает веса в свои тома. Ждём по журналу,
-    # пока он сообщит, что распознавание включено, — значит файлы на месте.
-    $COMPOSE up -d nats >/dev/null 2>&1 || true
-    $COMPOSE up -d ai-detector >/dev/null 2>&1 || true
-    echo "Жду загрузки моделей (до 5 минут)…"
+    # Работаем из каталога исходников, а не из копии в комплекте: список служб
+    # берётся из .env проекта и из уже поднятого стека. В копии .env нет
+    # (пароли стенда туда попадать не должны), и compose искал бы там чужой
+    # проект — на этом первая сборка и встала.
+    cd "$PROJECT_DIR"
 
+    # Поднимаем то, без чего детектор не работает: он читает настройки камер из
+    # базы и публикует события в брокер.
+    $COMPOSE up -d postgres nats >/dev/null 2>&1 || true
+    $COMPOSE up -d ai-detector >/dev/null 2>&1 || true
+    echo "Жду загрузки весов (до 10 минут)…"
+
+    # Признак готовности — файлы в томе, а не строка в журнале: строка
+    # зависит от версии кода и настроек, а файлы — это то, что нужно на
+    # объекте. Скачивание идёт в фоне, и первый запуск может занять минуты.
+    # Том ищем в каждом проходе: его создаёт сам compose при первом запуске.
     ready=0
     for _ in $(seq 1 60); do
-        if $COMPOSE logs ai-detector 2>/dev/null | grep -q "распознавание лиц включено"; then
+        volume_name="$(find_volume insightface_models)"
+        if [ -n "$volume_name" ] && docker run --rm -v "${volume_name}:/src:ro" postgres:16-alpine \
+            sh -c 'find /src -name "*.onnx" | head -1 | grep -q .' >/dev/null 2>&1; then
             ready=1
             break
         fi
-        sleep 5
+        sleep 10
     done
     if [ "$ready" -eq 0 ]; then
-        echo "Детектор не сообщил о готовности моделей." >&2
+        echo "Модели не появились за 10 минут." >&2
         echo "Посмотрите журнал: $COMPOSE logs ai-detector" >&2
         echo "Продолжить без моделей: --skip-models" >&2
         exit 1
@@ -224,7 +334,7 @@ if [ "$SKIP_MODELS" -eq 0 ]; then
     # Имя тома содержит имя проекта compose (по имени каталога), и оно может
     # быть разным на разных машинах. Поэтому ищем тома по окончанию имени.
     for volume_suffix in insightface_models plate_ocr_cache plate_models; do
-        volume_name="$(docker volume ls --format '{{.Name}}' | grep "_${volume_suffix}\$" | head -1)"
+        volume_name="$(find_volume "$volume_suffix")"
         if [ -z "$volume_name" ]; then
             echo "Не найден том ${volume_suffix} — возможно, детектор его не создал." >&2
             exit 1
@@ -252,6 +362,11 @@ say "Версия и контрольные суммы"
     echo "Ядро: $(uname -r)"
     echo "Коммит: $(cd "$PROJECT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo 'без git')"
     echo "Ветка: $(cd "$PROJECT_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'без git')"
+    # Префикс имён образов: compose составляет их из имени каталога
+    # (<каталог>_<служба>). На объекте каталог установки может быть другим,
+    # поэтому установщик по этой записи переименует загруженные образы —
+    # иначе compose счёл бы их чужими и полез бы собирать заново (без сети).
+    echo "Префикс образов: $(project_prefix "$PROJECT_DIR")"
     echo "Функции: детекция (профиль detection)${WITH_SIP:+ + домофония}${WITH_MINIO:+ + minio}"
     echo "Образы:"
     for image in "${IMAGES[@]}"; do echo "  $image"; done

@@ -143,7 +143,9 @@ fi
 while [ $# -gt 0 ]; do
     case "$1" in
         --dir) INSTALL_DIR="$2"; shift 2 ;;
+        --dir=*) INSTALL_DIR="${1#--dir=}"; shift ;;
         --repo) REPO_URL="$2"; shift 2 ;;
+        --repo=*) REPO_URL="${1#--repo=}"; shift ;;
         # Ветки --gpu/--cpu/--detection и --no-detection помечают детекцию
         # заданной явно: иначе на обновлении режим подтянулся бы из прошлого .env.
         --gpu) DETECT_MODE=gpu; DETECTION_EXPLICIT=1; shift ;;
@@ -376,6 +378,42 @@ load_bundle_images() {
         exit 1
     fi
     echo "Загружено образов: $loaded"
+
+    # Переименовываем собранные образы под имя проекта установки.
+    #
+    # compose составляет имя образа из имени каталога (<каталог>_<служба>).
+    # Комплект собирается в каталоге вида nvr, а на объекте каталог установки
+    # может быть другим — и тогда compose счёл бы загруженные образы чужими и
+    # полез бы собирать их заново, то есть без интернета — впустую.
+    local bundle_prefix target_prefix service
+    bundle_prefix="$(awk -F': ' '/^Префикс образов:/{print $2}' "$BUNDLE_DIR/version.txt" 2>/dev/null || true)"
+    target_prefix="$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
+    if [ -n "$bundle_prefix" ] && [ "$bundle_prefix" != "$target_prefix" ]; then
+        echo "Переименовываю образы: ${bundle_prefix}_* → ${target_prefix}_*"
+        for service in backend webui ai-detector frame-publisher; do
+            if docker image inspect "${bundle_prefix}_${service}:latest" >/dev/null 2>&1; then
+                docker tag "${bundle_prefix}_${service}:latest" "${target_prefix}_${service}:latest"
+            fi
+        done
+    fi
+}
+
+# Поиск тома по окончанию имени: имя тома содержит имя проекта compose, а оно
+# зависит от каталога установки. Список забираем целиком: связка `docker
+# volume ls | head -1` при включённом pipefail роняет скрипт по SIGPIPE.
+#
+# Сначала ищем том именно своего проекта: на машине могли остаться тома от
+# прежней установки в другом каталоге, и распаковка моделей ушла бы в них.
+find_volume() {
+    local suffix="_$1" volumes exact prefix
+    volumes="$(docker volume ls --format '{{.Name}}' 2>/dev/null || true)"
+    prefix="$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
+    exact="$(printf '%s\n' "$volumes" | grep -- "^${prefix}${suffix}\$" | tail -1 || true)"
+    if [ -n "$exact" ]; then
+        printf '%s\n' "$exact"
+        return 0
+    fi
+    printf '%s\n' "$volumes" | grep -- "${suffix}\$" | tail -1 || true
 }
 
 # Распаковка весов моделей в тома.
@@ -391,7 +429,7 @@ restore_bundle_models() {
     local volume_suffix volume_name
     for volume_suffix in insightface_models plate_ocr_cache plate_models; do
         [ -f "$BUNDLE_DIR/models/$volume_suffix.tar.gz" ] || continue
-        volume_name="$(docker volume ls --format '{{.Name}}' | grep "_${volume_suffix}\$" | head -1)"
+        volume_name="$(find_volume "$volume_suffix")"
         if [ -z "$volume_name" ]; then
             echo "  том ${volume_suffix} не создан — модели пропускаю" >&2
             continue
