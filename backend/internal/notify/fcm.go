@@ -118,6 +118,14 @@ func (f *FCM) ProjectID() string {
 	return f.projectID
 }
 
+// truncate обрезает длинную строку для журнала.
+func truncate(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return s[:limit] + "…"
+}
+
 // parsePrivateKey разбирает ключ из файла (PKCS#8, реже PKCS#1).
 func parsePrivateKey(pemData string) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode([]byte(pemData))
@@ -219,6 +227,12 @@ func (f *FCM) signJWT(claims map[string]any) (string, error) {
 type PushMessage struct {
 	Title string
 	Body  string
+	// Notify — показывать ли системное уведомление (заголовок и текст).
+	//
+	// Сообщение только с данными (вызов с панели) уведомления не содержит:
+	// система не должна показывать его сама, приложение поднимает линию и
+	// рисует экран вызова само.
+	Notify bool
 	// Data — данные для приложения: по ним оно открывает нужный экран
 	// (событие камеры, пропущенный звонок). Значения только строки —
 	// таково требование Firebase.
@@ -227,9 +241,8 @@ type PushMessage struct {
 
 // Send отправляет сообщение одному устройству.
 func (f *FCM) Send(ctx context.Context, token string, msg PushMessage) error {
-	payload := f.payload(token, msg)
-	payload["notification"] = map[string]string{"title": msg.Title, "body": msg.Body}
-	return f.post(ctx, payload)
+	msg.Notify = true
+	return f.post(ctx, f.payload(token, msg))
 }
 
 // SendDataOnly отправляет сообщение без уведомления — только данные.
@@ -248,17 +261,26 @@ func (f *FCM) SendDataOnly(ctx context.Context, token string, data map[string]st
 
 // payload собирает тело запроса к Firebase.
 func (f *FCM) payload(token string, msg PushMessage) map[string]any {
-	return map[string]any{
-		"message": map[string]any{
-			"token": token,
-			"data":  msg.Data,
-			"android": map[string]any{
-				// high: иначе телефон может отложить доставку до
-				// следующего включения экрана, а тревога нужна сразу.
-				"priority": "high",
-			},
+	message := map[string]any{
+		"token": token,
+		"data":  msg.Data,
+		"android": map[string]any{
+			// high: иначе телефон может отложить доставку до
+			// следующего включения экрана, а тревога нужна сразу.
+			"priority": "high",
 		},
 	}
+
+	// Уведомление кладём ВНУТРЬ message. На верхнем уровне Firebase его не
+	// принимает: отвечает 400 «Unknown name "notification": Cannot find
+	// field» — и доставка теряется целиком, а в журнале остаётся лишь
+	// предупреждение «push не доставлен». Так push в приложение и перестали
+	// приходить, причём незаметно.
+	if msg.Notify {
+		message["notification"] = map[string]string{"title": msg.Title, "body": msg.Body}
+	}
+
+	return map[string]any{"message": message}
 }
 
 // post отправляет собранное сообщение и разбирает ответ Firebase.
@@ -301,5 +323,13 @@ func (f *FCM) post(ctx context.Context, payload map[string]any) error {
 		(strings.Contains(text, "INVALID_ARGUMENT") && strings.Contains(text, "token")) {
 		return ErrTokenGone
 	}
+
+	// Тело нашего запроса пишем в журнал: ответ Firebase без него не
+	// разобрать. «Unknown name …» — это претензия к нашему JSON, и без
+	// самого JSON непонятно, какое поле лишнее.
+	log.Warn().Int("status", resp.StatusCode).Int("bytes", len(body)).
+		Str("payload", truncate(string(body), 500)).
+		Msg("Firebase отклонил сообщение")
+
 	return fmt.Errorf("Firebase отказал (%d): %s", resp.StatusCode, strings.TrimSpace(text))
 }
