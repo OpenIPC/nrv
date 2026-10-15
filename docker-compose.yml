@@ -40,7 +40,13 @@ services:
   #   docker compose --profile minio up -d   + MINIO_ENDPOINT в .env
   # Без профиля compose не тянет этот образ и не падает на его скачивании.
   minio:
-    image: minio/minio:latest
+    # Тег latest здесь стоять не может: образа в реестрах больше нет, и
+    # "latest" на новой машине означал бы не «последняя версия», а отказ
+    # скачивания. Digest — единственный способ зафиксировать ту копию,
+    # которая проверена на стенде. На закрытом объекте образ вообще не
+    # скачивается, а приезжает файлом в комплекте поставки.
+    # Проверено: minio RELEASE.2025-09-07T16-13-09Z (стенд, 2025-09-07).
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     profiles: ["minio"]
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -67,8 +73,12 @@ services:
   # а в 20-й его нет вовсе (равно как и в 21+), и это ветка LTS. Опыт владельца:
   # 20-я стабильнее более новых. Ниже 20-й опускаться нельзя — вместе с 18-й
   # вернулся бы и старый драйвер, от которого мы уже отказались.
+  # Версию фиксируем digest-ом, а не тегом: точного тега под 20.21.0
+  # у этого образа нет (проверено), а тег 20 — плавающий, и «20» на новой
+  # машине может оказаться другим набором модулей. Проверено на стенде:
+  # Asterisk 20.21.0, digest ниже.
   asterisk:
-    image: andrius/asterisk:20
+    image: andrius/asterisk@sha256:f0b8c936e7dba2675924b0c13e604d133e3e5253acc366cac8d270dfcff23f65
     profiles: ["sip"]
     restart: unless-stopped
     # host-сеть нужна по той же причине, что и go2rtc: SIP и RTP должны быть
@@ -92,7 +102,10 @@ services:
   # ленивость — соединение с камерой открывается только когда её смотрят.
   # MediaMTX держал все камеры постоянно и занимал под это ~90% процессора.
   go2rtc:
-    image: alexxit/go2rtc:latest
+    # Версия закреплена, а не latest: обновление go2rtc меняло поведение
+    # WebRTC и MSE, а на объекте без интернета предсказуемость важнее
+    # свежести. Проверено на стенде: 1.9.14.
+    image: alexxit/go2rtc:1.9.14
     restart: unless-stopped
     # host-сеть нужна по двум причинам: камеры живут в локальной сети
     # (порт 554), а WebRTC должен предлагать браузеру адрес, доступный
@@ -123,7 +136,9 @@ services:
   # Authorization от внешнего клиента доходит до go2rtc как есть, и
   # пароль проверяет сам go2rtc.
   rtsp-proxy:
-    image: nginx:alpine
+    # Точная версия вместо alpine: этот nginx только проксирует RTSP-поток,
+    # и его обновление ничего не улучшает, зато ломало конфигурацию прокси.
+    image: nginx:1.31.6-alpine
     restart: unless-stopped
     volumes:
       - ./rtsp-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -137,7 +152,11 @@ services:
       - go2rtc
 
   nats:
-    image: nats:latest
+    # Брокер держит потоки детекции и сообщения панелей. Версия закреплена:
+    # в новой ветке NATS менялся формат хранилища JetStream, а откат
+    # после обновления на закрытом объекте недоступен.
+    # Проверено на стенде: nats-server v2.14.5.
+    image: nats:2.14.5-alpine
     restart: unless-stopped
     command: "-js"
     ports:
@@ -297,7 +316,13 @@ services:
     depends_on:
       - backend
 
+  # Детекция вынесена в профиль: образ с CUDA весит около 18 ГБ, а на
+  # процессоре — 8–10 ГБ. Там, где видеодетекция не нужна, этот образ незачем
+  # и собирать: мастер установки не включает профиль, и `docker compose up -d`
+  # не трогает эти два сервиса. Без профиля детекции и публикатор кадров
+  # остаются выключенными вместе с ней — они работают только в паре.
   ai-detector:
+    profiles: ["detection"]
     build:
       context: ./ai-detector
       dockerfile: Dockerfile
@@ -421,6 +446,7 @@ services:
   # Тянет кадры из RTSP-субпотоков камер и публикует их в NATS для ai-detector.
   # Без него детектору нечего обрабатывать — цепочка детекции разорвана.
   frame-publisher:
+    profiles: ["detection"]
     build:
       context: ./ai-detector
       dockerfile: Dockerfile.publisher
@@ -496,7 +522,7 @@ services:
   # сертификата контейнер не поднимется, поэтому включать профиль нужно
   # после его выпуска.
   proxy:
-    image: nginx:alpine
+    image: nginx:1.31.6-alpine
     profiles: ["tls"]
     restart: unless-stopped
     # host-сеть: слушаем порт 443 напрямую и обращаемся к панели по

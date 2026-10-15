@@ -16,6 +16,10 @@ RUN pip install --no-cache-dir -r requirements-publisher.txt
 
 # plate_zone.py обязателен: в нём общее с детектором условие «зона номеров
 # задана». Без него сервис не запустится с ModuleNotFoundError.
-COPY frame_publisher_service.py plate_zone.py .
+#
+# Косая черта в конце обязательна: при копировании нескольких файлов Docker
+# требует, чтобы приёмник был каталогом. Без неё сборка падает с «must be a
+# directory and end with a /» — проверено на чистой машине (Docker 29).
+COPY frame_publisher_service.py plate_zone.py ./
 
 ENTRYPOINT ["python", "frame_publisher_service.py"]

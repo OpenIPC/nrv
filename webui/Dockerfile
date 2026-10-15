@@ -17,7 +17,9 @@ COPY . .
 
 RUN npm run build
 
-FROM nginx:alpine
+# Версия nginx закреплена: она отдаёт статику и проксирует API, и обновление
+# до неуказанной версии меняло поведение proxy_pass и таймаутов.
+FROM nginx:1.31.6-alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
