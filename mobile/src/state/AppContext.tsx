@@ -53,6 +53,16 @@ interface AppState {
    * срок токена истёк, и пароль нужно ввести заново.
    */
   authNotice: string | null;
+  /**
+   * Текст блокировки учётной записи, если администратор закрыл доступ.
+   *
+   * Отдельное состояние, а не authNotice: выход здесь не поможет, и
+   * показывать форму входа было бы обманом — человеку нужен только текст
+   * и возможность выйти на другой сервер.
+   */
+  blockedNotice: string | null;
+  /** Забывает текст блокировки (например, после выхода). */
+  clearBlockedNotice: () => void;
   client: ApiClient | null;
   /** Добавляет сервер и делает его текущим. */
   addServer: (name: string, address: string, username?: string) => Promise<ServerProfile>;
@@ -98,6 +108,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // хранится только для повторного входа.
   const [credentials, setCredentials] = useState<ServerCredentials | null>(null);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
+  // Блокировка учётной записи администратором: отдельный текст, который
+  // показывается вместо всего остального интерфейса.
+  const [blockedNotice, setBlockedNotice] = useState<string | null>(null);
 
   // Загрузка сохранённого состояния при старте приложения.
   useEffect(() => {
@@ -152,6 +165,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       onAuthLost: () => {
         setAuthNotice('Срок сессии истёк — войдите снова');
         setToken(null);
+      },
+      // Учётную запись закрыл администратор. Вход заново не поможет:
+      // показываем текст сервера и оставляем человека без интерфейса,
+      // пока доступ не вернут.
+      onBlocked: (message) => {
+        setBlockedNotice(message);
       },
     });
   }, [current, token, credentials]);
@@ -257,6 +276,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setToken(newToken);
       // Вход выполнен — подсказка про истёкшую сессию больше не нужна.
       setAuthNotice(null);
+      // Блокировка снята администратором: вход прошёл, значит доступ вернули.
+      setBlockedNotice(null);
       // Учётные данные держим для автоматического входа: токен живёт
       // сутки, а обновить его на сервере нечем.
       const creds: ServerCredentials = { username, password };
@@ -313,11 +334,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Выход — осознанное действие, поэтому сохранённые данные забываем:
     // иначе после выхода приложение вошло бы само обратно.
     setCredentials(null);
+    // Текст блокировки тоже забываем: человек может подключиться к другому
+    // серверу, и оставленное сообщение закрывало бы вход туда.
+    setBlockedNotice(null);
     if (current) {
       await clearToken(current.id);
       await clearCredentials(current.id);
     }
   }, [current]);
+
+  /**
+   * Забывает текст блокировки.
+   *
+   * Нужно при выходе и при смене сервера: на другом сервере учётная запись
+   * может быть вовсе не заблокирована, и оставленный текст закрывал бы вход.
+   */
+  const clearBlockedNotice = useCallback(() => {
+    setBlockedNotice(null);
+  }, []);
 
   const value = useMemo<AppState>(
     () => ({
@@ -327,6 +361,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       baseUrl: current?.baseUrl ?? '',
       token,
       authNotice,
+      blockedNotice,
+      clearBlockedNotice,
       client,
       addServer,
       selectServer,
@@ -342,6 +378,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       current,
       token,
       authNotice,
+      blockedNotice,
+      clearBlockedNotice,
       client,
       addServer,
       selectServer,

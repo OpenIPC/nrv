@@ -16,6 +16,7 @@ import { AppProvider, useApp } from './src/state/AppContext';
 import { SipProvider } from './src/state/SipContext';
 import ServersScreen from './src/screens/ServersScreen';
 import LoginScreen from './src/screens/LoginScreen';
+import BlockedScreen from './src/screens/BlockedScreen';
 import CamerasScreen from './src/screens/CamerasScreen';
 import LiveScreen from './src/screens/LiveScreen';
 import ArchiveScreen from './src/screens/ArchiveScreen';
@@ -47,7 +48,7 @@ type Route =
   | { name: 'missed' };
 
 function Router() {
-  const { ready, current, token } = useApp();
+  const { ready, current, token, blockedNotice, signOut } = useApp();
   const [route, setRoute] = useState<Route>({ name: 'cameras' });
 
   /**
@@ -79,6 +80,12 @@ function Router() {
   // Сервер не выбран — начинать не с чего, показываем список серверов.
   if (!current) {
     return <ServersScreen onContinue={() => setRoute({ name: 'cameras' })} />;
+  }
+
+  // Доступ закрыт администратором — показываем только это: остальные экраны
+  // всё равно ответят отказом, а их ошибки выглядели бы как поломка.
+  if (blockedNotice) {
+    return <BlockedScreen message={blockedNotice} onSignOut={() => void signOut()} />;
   }
 
   // Токена нет — нужен вход.

@@ -7,18 +7,29 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
+	"github.com/nvr/backend/internal/api/middleware"
 	"github.com/nvr/backend/internal/domain"
 	"github.com/nvr/backend/internal/service"
+	"github.com/rs/zerolog/log"
 )
 
 var validate = validator.New()
 
 type CameraHandler struct {
 	svc *service.CameraService
+	// access — что видно тому, кто пришёл. Список камер и карточка камеры
+	// отдают только разрешённое: сейчас любой вошедший видит весь парк.
+	access *service.CameraAccessService
 }
 
 func NewCameraHandler(svc *service.CameraService) *CameraHandler {
 	return &CameraHandler{svc: svc}
+}
+
+// WithAccess подключает проверку доступа.
+func (h *CameraHandler) WithAccess(access *service.CameraAccessService) *CameraHandler {
+	h.access = access
+	return h
 }
 
 func (h *CameraHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -27,10 +38,28 @@ func (h *CameraHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+
+	cameras = h.filter(r, cameras)
 	if cameras == nil {
 		cameras = []domain.Camera{}
 	}
 	writeJSON(w, http.StatusOK, cameras)
+}
+
+// filter оставляет только разрешённые камеры.
+func (h *CameraHandler) filter(r *http.Request, cameras []domain.Camera) []domain.Camera {
+	if h.access == nil {
+		// Проверка не собрана — ошибаемся в сторону отказа: невидимый
+		// парк заметят сразу, а чужой показ — не сразу или никогда.
+		log.Error().Msg("проверка доступа к камерам не настроена")
+		return []domain.Camera{}
+	}
+	visible, err := h.access.FilterCameras(r.Context(), middleware.UserFromContext(r.Context()), cameras)
+	if err != nil {
+		log.Error().Err(err).Msg("не удалось проверить доступ к камерам")
+		return []domain.Camera{}
+	}
+	return visible
 }
 
 func (h *CameraHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +74,24 @@ func (h *CameraHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
 		return
 	}
+
+	// Скрытая камера отвечает тем же «не найдена», что и несуществующая:
+	// по разнице ответов можно было бы перечислить весь парк.
+	if !h.allows(r, id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, cam)
+}
+
+// allows проверяет доступ к камере или отказывает, если проверка не собрана.
+func (h *CameraHandler) allows(r *http.Request, id uuid.UUID) bool {
+	if h.access == nil {
+		log.Error().Msg("проверка доступа к камерам не настроена")
+		return false
+	}
+	return h.access.Allows(r.Context(), middleware.UserFromContext(r.Context()), id)
 }
 
 func (h *CameraHandler) Create(w http.ResponseWriter, r *http.Request) {

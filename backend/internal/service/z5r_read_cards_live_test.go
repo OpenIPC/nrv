@@ -24,7 +24,7 @@ import (
 //
 // Запуск (нужен живой контроллер и работающий backend):
 //
-//	Z5R_TEST_IP=192.168.1.60 Z5R_TEST_PASS=96811621 \
+//	Z5R_TEST_IP=192.168.1.60 Z5R_TEST_PASS=<пароль контроллера> \
 //	  go test ./internal/service/ -run TestZ5RReadCardsLive -v
 func TestZ5RReadCardsLive(t *testing.T) {
 	if os.Getenv("Z5R_LIVE_CARDS") == "" {

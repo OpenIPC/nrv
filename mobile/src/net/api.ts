@@ -31,12 +31,57 @@ export interface ApiCredentials {
   password: string;
 }
 
+/**
+ * Код ответа сервера «учётная запись заблокирована».
+ *
+ * Один и тот же код приходит и при входе, и на любой другой запрос: по нему
+ * приложение понимает, что показать нужно текст про блокировку, а не
+ * «неверный пароль» или «нет прав».
+ */
+export const ACCOUNT_BLOCKED_CODE = 'account_blocked';
+
+/**
+ * Код ответа сервера «этот клиент учётной записи закрыт».
+ *
+ * Отдельно от блокировки: учётная запись работает, просто ей разрешён
+ * другой интерфейс (например, только веб-интерфейс). Служит поводом сказать
+ * «пользуйтесь веб-интерфейсом», а не «доступ закрыт».
+ */
+export const CLIENT_FORBIDDEN_CODE = 'client_forbidden';
+
+/**
+ * Достаёт из тела ответа текст отказа по учётной записи.
+ *
+ * Пустая строка означает «отказа нет». Оба случая — блокировка и закрытый
+ * клиент — показываются приложением одним и тем же экраном: продолжать
+ * работу нельзя ни там, ни там.
+ */
+function readBlockedMessage(data: unknown): string {
+  if (!data || typeof data !== 'object') return '';
+  const body = data as { code?: unknown; error?: unknown };
+  const code = String(body.code ?? '');
+  if (code !== ACCOUNT_BLOCKED_CODE && code !== CLIENT_FORBIDDEN_CODE) return '';
+  const message = String(body.error ?? '');
+  if (message) return message;
+  return code === CLIENT_FORBIDDEN_CODE
+    ? 'Доступ в приложение для этой учётной записи закрыт. Обратитесь к администратору.'
+    : 'Доступ в приложение заблокирован. Обратитесь к администратору.';
+}
+
 /** Что клиент сообщает наружу, когда состояние сессии меняется. */
 export interface ApiClientCallbacks {
   /** Токен получен автоматически — его нужно сохранить на устройстве. */
   onTokenRefreshed?: (token: string) => void;
   /** Войти автоматически не удалось: нужен ручной вход. */
   onAuthLost?: () => void;
+  /**
+   * Учётная запись заблокирована администратором.
+   *
+   * Отдельно от onAuthLost: войти заново здесь не поможет, и показывать
+   * экран входа с предложением ввести пароль было бы обманом. Приложение
+   * показывает текст сервера и ждёт, пока блокировку снимут.
+   */
+  onBlocked?: (message: string) => void;
 }
 
 /** Конфиг запроса с пометкой о попытке повторного входа. */
@@ -89,6 +134,18 @@ export class ApiClient {
     // поможет, а зацикливание здесь хуже ошибки.
     this.http.interceptors.response.use(async (response) => {
       const config = response.config as RetryableConfig;
+
+      // Блокировка учётной записи: показываем текст сервера и ничего не
+      // пытаемся сделать сами. Проверяется раньше 401: заблокированный
+      // ответ приходит с кодом 403, но при смене кода ответа на 401
+      // автоматический повторный вход оставил бы человека на экране входа
+      // без объяснения причины.
+      const blocked = readBlockedMessage(response.data);
+      if (blocked) {
+        this.callbacks.onBlocked?.(blocked);
+        return response;
+      }
+
       if (response.status !== 401 || config.url === '/auth/login') {
         return response;
       }
@@ -136,7 +193,13 @@ export class ApiClient {
 
   /** Вход в систему. */
   async login(username: string, password: string): Promise<LoginResult> {
-    const response = await this.http.post('/auth/login', { username, password });
+    const response = await this.http.post('/auth/login', {
+      username,
+      password,
+      // Метка клиента: сервер сверяет её с настройками учётной записи и
+      // отказывает, если этому человеку разрешён только веб-интерфейс.
+      client: 'app',
+    });
     if (response.status !== 200) {
       throw toApiError(response.status, response.data, new Error('login'));
     }
@@ -227,8 +290,10 @@ export class ApiClient {
   /**
    * Журнал звонков; с onlyMissed — только неотвеченные.
    *
-   * Нужен экрану пропущенных: уведомление легко смахнуть, а журнал
-   * остаётся на сервере и общий для всех устройств человека.
+   * mine=true запрашивает личный журнал: сервер отдаёт только звонки на
+   * линию этого человека. Параметр передаём всегда — так в приложении
+   * нельзя увидеть чужие вызовы, даже если у учётной записи есть право на
+   * полный журнал (диспетчеру нужен экран на компьютере, а не в телефоне).
    */
   async listSipCalls(
     options: { limit?: number; onlyMissed?: boolean } = {},
@@ -237,6 +302,7 @@ export class ApiClient {
       params: {
         limit: options.limit ?? 50,
         only_missed: options.onlyMissed ? 'true' : undefined,
+        mine: 'true',
       },
     });
     if (response.status !== 200) {
@@ -479,6 +545,17 @@ export function toApiError(
     data && typeof data === 'object' && 'error' in data
       ? String((data as { error: unknown }).error)
       : '';
+  const code =
+    data && typeof data === 'object' && 'code' in data
+      ? String((data as { code: unknown }).code)
+      : '';
+
+  // Блокировка учётной записи: текст сервера важнее общего «доступ
+  // запрещён» — человек должен понять, что дело не в правах, а в самом
+  // доступе, и что нужно обратиться к администратору.
+  if ((code === ACCOUNT_BLOCKED_CODE || code === CLIENT_FORBIDDEN_CODE) && serverMessage) {
+    return new Error(serverMessage);
+  }
 
   if (status === 401) {
     return new Error('Неверный логин или пароль');

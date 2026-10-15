@@ -39,12 +39,17 @@ func (h *AuthHandler) WithAppInvites(users *service.UserService) *AuthHandler {
 // по коду из QR. Разные сроки или разные наборы утверждений в этих двух
 // путях означали бы, что подключённое приложение ведёт себя иначе, чем
 // обычный вход, и разбираться в этом пришлось бы каждому.
-func (h *AuthHandler) issueToken(user *domain.User) (string, int64, error) {
+//
+// Метка клиента попадает в токен и сверяется на каждом запросе: она
+// отвечает на вопрос «из какого интерфейса пришёл этот человек», а настройки
+// учётной записи — «можно ли ему туда».
+func (h *AuthHandler) issueToken(user *domain.User, client string) (string, int64, error) {
 	expiresAt := time.Now().Add(24 * time.Hour)
 	_, tokenString, err := h.tokenAuth.Encode(map[string]interface{}{
 		"user_id":  user.ID.String(),
 		"username": user.Username,
 		"role":     user.Role,
+		"client":   client,
 		"exp":      expiresAt.Unix(),
 	})
 	if err != nil {
@@ -71,7 +76,27 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenString, expiresAt, err := h.issueToken(user)
+	// Пароль верный, но доступ закрыт администратором. Отвечаем 403 с кодом:
+	// приложение по нему показывает текст про блокировку, а не «неверный
+	// логин или пароль» — иначе человек пойдёт менять пароль.
+	if user.Blocked {
+		writeBlockedUser(w, user)
+		return
+	}
+
+	// Метка клиента приходит от того, кто вошёл: веб-интерфейс говорит «web»,
+	// приложение — «app». Пусто трактуем как веб: настольные клиенты и
+	// скрипты метку не шлют, а именно они и есть работа через браузер.
+	client := req.Client
+	if client == "" {
+		client = domain.ClientWeb
+	}
+	if !user.AllowedClient(client) {
+		writeClientForbidden(w, client)
+		return
+	}
+
+	tokenString, expiresAt, err := h.issueToken(user, client)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate token"})
 		return
@@ -119,7 +144,21 @@ func (h *AuthHandler) QrLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenString, expiresAt, err := h.issueToken(user)
+	// Заблокированному не выдаём и код: блокировка означает «доступ закрыт
+	// целиком», а не «нельзя вводить пароль».
+	if user.Blocked {
+		writeBlockedUser(w, user)
+		return
+	}
+
+	// Вход по коду из QR бывает только из приложения: код показывает
+	// администратор в браузере, а сканирует его телефон.
+	if !user.AllowedClient(domain.ClientApp) {
+		writeClientForbidden(w, domain.ClientApp)
+		return
+	}
+
+	tokenString, expiresAt, err := h.issueToken(user, domain.ClientApp)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate token"})
 		return
@@ -152,4 +191,34 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		"role":        user.Role,
 		"permissions": user.EffectivePermissions(),
 	})
+}
+
+// writeClientForbidden отвечает учётной записи, которой закрыт этот клиент.
+//
+// Код client_forbidden в теле нужен клиентам: приложение по нему показывает
+// «пользуйтесь веб-интерфейсом», а не общее «нет прав».
+func writeClientForbidden(w http.ResponseWriter, client string) {
+	writeJSON(w, http.StatusForbidden, map[string]any{
+		"error": "доступ через " + domain.ClientTitle(client) +
+			" для этой учётной записи закрыт. Обратитесь к администратору.",
+		"code": "client_forbidden",
+	})
+}
+
+// writeBlockedUser отвечает тому, кому закрыт доступ.
+// Формат тот же, что у middleware: код account_blocked и текст, по которому
+// понятно, что делать. Срок разблокировки передаётся отдельным полем, чтобы
+// приложение показало его как дату, а не разбирало текст.
+func writeBlockedUser(w http.ResponseWriter, user *domain.User) {
+	body := map[string]any{
+		"error": service.BlockedMessageFor(user),
+		"code":  "account_blocked",
+	}
+	if user.BlockedUntil != nil {
+		body["blocked_until"] = user.BlockedUntil
+	}
+	if user.BlockReason != "" {
+		body["block_reason"] = user.BlockReason
+	}
+	writeJSON(w, http.StatusForbidden, body)
 }

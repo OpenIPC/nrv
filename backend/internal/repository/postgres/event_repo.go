@@ -26,7 +26,7 @@ func NewEventRepo(db *pgxpool.Pool) *EventRepo {
 // from/to ограничивают период. Нужны архиву: чтобы показать детекции
 // поверх записи, интерфейс запрашивает события только за её время, а не
 // всю историю камеры.
-func (r *EventRepo) List(ctx context.Context, cameraID *uuid.UUID, objectClass string,
+func (r *EventRepo) List(ctx context.Context, cameraID *uuid.UUID, cameraIDs []uuid.UUID, objectClass string,
 	from, to *time.Time, search string, page, pageSize int) ([]domain.DetectionEvent, int64, error) {
 	where := "WHERE 1=1"
 	args := []interface{}{}
@@ -35,6 +35,19 @@ func (r *EventRepo) List(ctx context.Context, cameraID *uuid.UUID, objectClass s
 	if cameraID != nil {
 		where += " AND camera_id = $" + itoa(argIdx)
 		args = append(args, cameraID.String())
+		argIdx++
+	}
+
+	// cameraIDs — камеры, разрешённые тому, кто пришёл.
+	//
+	// nil означает «без ограничений» и ставится только когда доступ выдан ко
+	// всему парку. Пустой непустой срез означает «не видно ни одной»: условие
+	// ANY по пустому массиву не пропустит ничего — фильтровать список после
+	// чтения нельзя, иначе в странице окажется меньше строк, чем просили,
+	// а total покажет чужие события.
+	if cameraIDs != nil {
+		where += " AND camera_id = ANY($" + itoa(argIdx) + "::uuid[])"
+		args = append(args, cameraIDs)
 		argIdx++
 	}
 

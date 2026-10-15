@@ -17,9 +17,9 @@ func NewEventService(repo *postgres.EventRepo) *EventService {
 	return &EventService{repo: repo}
 }
 
-func (s *EventService) List(ctx context.Context, cameraID *uuid.UUID, objectClass string,
+func (s *EventService) List(ctx context.Context, cameraID *uuid.UUID, cameraIDs []uuid.UUID, objectClass string,
 	from, to *time.Time, search string, page, pageSize int) ([]domain.DetectionEvent, int64, error) {
-	return s.repo.List(ctx, cameraID, objectClass, from, to, search, page, pageSize)
+	return s.repo.List(ctx, cameraID, cameraIDs, objectClass, from, to, search, page, pageSize)
 }
 
 func (s *EventService) Get(ctx context.Context, id uuid.UUID) (*domain.DetectionEvent, error) {

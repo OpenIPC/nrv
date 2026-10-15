@@ -14,10 +14,19 @@ import (
 
 type EventHandler struct {
 	svc *service.EventService
+	// guard — что видно тому, кто пришёл: события показываются только по
+	// разрешённым камерам.
+	guard *AccessGuard
 }
 
 func NewEventHandler(svc *service.EventService) *EventHandler {
 	return &EventHandler{svc: svc}
+}
+
+// WithGuard подключает проверку доступа к камерам.
+func (h *EventHandler) WithGuard(guard *AccessGuard) *EventHandler {
+	h.guard = guard
+	return h
 }
 
 func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +48,8 @@ func (h *EventHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events, total, err := h.svc.List(r.Context(), cameraID, r.URL.Query().Get("object_class"),
+	events, total, err := h.svc.List(r.Context(), cameraID, allowedCameraFilter(r, h.guard),
+		r.URL.Query().Get("object_class"),
 		parseTimeParam(r, "from"), parseTimeParam(r, "to"),
 		strings.TrimSpace(r.URL.Query().Get("search")), page, pageSize)
 	if err != nil {
@@ -86,6 +96,14 @@ func (h *EventHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "event not found"})
 		return
 	}
+
+	// Событие скрытой камеры отвечает тем же «не найдено», что и
+	// несуществующее: по разнице ответов можно перечислить парк.
+	if !h.guard.Allows(r, event.CameraID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "event not found"})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, event)
 }
 
@@ -104,6 +122,14 @@ func (h *EventHandler) CrossingStats(w http.ResponseWriter, r *http.Request) {
 	if hours < 1 || hours > 24*30 {
 		hours = 24
 	}
+
+	// Счётчик относится к камере, а не к событиям вообще: показывать число
+	// пересечений линии на скрытой камере нельзя.
+	if !h.guard.Allows(r, cameraID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
+		return
+	}
+
 	since := time.Now().Add(-time.Duration(hours) * time.Hour)
 
 	forward, backward, err := h.svc.CrossingStats(r.Context(), cameraID, since)

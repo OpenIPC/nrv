@@ -480,8 +480,8 @@ func (s *ACSService) UpdateController(ctx context.Context, id uuid.UUID, req dom
 	return ctrl, nil
 }
 
-func (s *ACSService) ListEvents(ctx context.Context, page, pageSize int) ([]domain.ACSEvent, int64, error) {
-	return s.repo.ListEvents(ctx, page, pageSize)
+func (s *ACSService) ListEvents(ctx context.Context, page, pageSize int, controllerIDs []uuid.UUID) ([]domain.ACSEvent, int64, error) {
+	return s.repo.ListEvents(ctx, page, pageSize, controllerIDs)
 }
 
 // IngestEvent сохраняет событие, которое контроллер прислал сам.

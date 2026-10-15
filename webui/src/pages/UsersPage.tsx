@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import QRCode from 'react-qr-code'
 import { usersAPI, type UserAccount, type UsersSchema } from '../api/client'
+import UserAccessEditor from '../components/UserAccessEditor'
 import { usePermissions } from '../context/PermissionsContext'
 import { useToast } from '../context/ToastContext'
 
@@ -13,6 +14,9 @@ interface FormState {
   password: string
   role: string
   permissions: Record<string, boolean>
+  /** Куда можно входить: веб-интерфейс и приложение — независимо. */
+  webAccess: boolean
+  appAccess: boolean
 }
 
 const emptyForm: FormState = {
@@ -21,6 +25,10 @@ const emptyForm: FormState = {
   password: '',
   role: 'viewer',
   permissions: {},
+  // Оба доступа включены по умолчанию: новая учётная запись без доступа
+  // только запутала бы — непонятно, что именно забыли выдать.
+  webAccess: true,
+  appAccess: true,
 }
 
 /** Данные открытого окна подключения приложения. */
@@ -69,6 +77,18 @@ export default function UsersPage() {
   // Какому пользователю сейчас выдают код: кнопка в строке показывает
   // ожидание, а не молчит, иначе её нажимают второй раз.
   const [pairingLoading, setPairingLoading] = useState<string | null>(null)
+  // Карточка доступа: null — окно закрыто. Здесь отдельно от form,
+  // потому что это другой документ — не права разделов, а видимые
+  // объекты, и сохраняются они отдельной кнопкой.
+  const [accessUser, setAccessUser] = useState<UserAccount | null>(null)
+  // Окно блокировки: null — закрыто. Блокировка временная, поэтому срок
+  // выбирается здесь же, а не выставляется галочкой в карточке.
+  const [blockTarget, setBlockTarget] = useState<UserAccount | null>(null)
+  const [blockHours, setBlockHours] = useState<string>('24')
+  const [blockReason, setBlockReason] = useState('')
+  // Какого пользователя сейчас разблокируем: кнопка в строке должна
+  // показывать ожидание, а не молчать.
+  const [unblocking, setUnblocking] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -120,6 +140,10 @@ export default function UsersPage() {
       password: '',
       role: user.role,
       permissions: { ...(user.permissions ?? {}) },
+      // Старые учётные записи могли не иметь этих полей — считаем доступ
+      // открытым везде, как было до разделения.
+      webAccess: user.web_access !== false,
+      appAccess: user.app_access !== false,
     })
   }
 
@@ -164,6 +188,8 @@ export default function UsersPage() {
           ...(form.password ? { password: form.password } : {}),
           role: form.role,
           permissions: form.permissions,
+          web_access: form.webAccess,
+          app_access: form.appAccess,
         })
       } else {
         await usersAPI.create({
@@ -171,6 +197,8 @@ export default function UsersPage() {
           password: form.password,
           role: form.role,
           permissions: form.permissions,
+          web_access: form.webAccess,
+          app_access: form.appAccess,
         })
       }
       toast.success(t('usersPage.saved'))
@@ -197,8 +225,48 @@ export default function UsersPage() {
   }
 
   /**
-   * Выдаёт новый код подключения и показывает его квадратиком.
+   * Закрывает доступ учётной записи на выбранный срок.
    *
+   * Срок считаем на клиенте и отправляем готовое время: серверу незачем
+   * знать про наш список вариантов, а в базе должно лежать то, что видно
+   * в карточке.
+   */
+  const submitBlock = async () => {
+    if (!blockTarget) return
+    try {
+      const hours = Number(blockHours)
+      const until =
+        blockHours === 'forever' || !hours
+          ? undefined
+          : new Date(Date.now() + hours * 3600 * 1000).toISOString()
+      await usersAPI.block(blockTarget.id, { until, reason: blockReason.trim() })
+      toast.success(t('usersPage.blocked', { name: blockTarget.username }))
+      setBlockTarget(null)
+      setBlockReason('')
+      setBlockHours('24')
+      await load()
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || t('usersPage.blockFailed'))
+    }
+  }
+
+  /** Возвращает доступ. Спрашиваем подтверждение: нажатие легко случайное. */
+  const unblock = async (user: UserAccount) => {
+    if (!window.confirm(t('usersPage.confirmUnblock', { name: user.username }))) return
+    setUnblocking(user.id)
+    try {
+      await usersAPI.unblock(user.id)
+      toast.success(t('usersPage.unblocked', { name: user.username }))
+      await load()
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || t('usersPage.unblockFailed'))
+    } finally {
+      setUnblocking(null)
+    }
+  }
+
+  /**
+   * Выдаёт новый код подключения и показывает его квадратиком.
    * Код берётся у сервера, а не рисуется на месте: он должен быть
    * одноразовым и просроченным через десять минут, а это можно проверить
    * только на сервере и только в базе.
@@ -249,9 +317,47 @@ export default function UsersPage() {
             <tbody>
               {users.map((user) => (
                 <tr key={user.id} style={{ borderTop: '1px solid var(--border, #333)' }}>
-                  <td style={{ padding: '10px 12px', fontWeight: 600 }}>{user.username}</td>
+                  <td style={{ padding: '10px 12px', fontWeight: 600 }}>
+                    {user.username}
+                    {/* Метка блокировки прямо в списке: разблокировать
+                        забывают, и человек остаётся без доступа неделями. */}
+                    {user.blocked && (
+                      <div style={{ marginTop: 4 }}>
+                        <span
+                          className="badge"
+                          style={{ background: 'var(--danger)', color: '#fff', fontSize: 11 }}
+                        >
+                          {user.blocked_until
+                            ? t('usersPage.blockedUntil', {
+                                time: formatDateTime(user.blocked_until),
+                              })
+                            : t('usersPage.blockedForever')}
+                        </span>
+                        {user.block_reason && (
+                          <div
+                            style={{ color: 'var(--text-muted, #888)', fontSize: 12, marginTop: 2 }}
+                          >
+                            {user.block_reason}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </td>
                   <td style={{ padding: '10px 12px' }}>
                     <span className="badge">{t(`usersPage.roles.${user.role}`)}</span>
+                    {/* Где этой учётной записи разрешено работать. Показываем
+                        только когда доступ ограничен: у обычной учётной
+                        записи обе подписи были бы шумом. */}
+                    {user.web_access === false && (
+                      <div style={{ marginTop: 4 }}>
+                        <span className="badge">{t('usersPage.clientAppOnly')}</span>
+                      </div>
+                    )}
+                    {user.app_access === false && (
+                      <div style={{ marginTop: 4 }}>
+                        <span className="badge">{t('usersPage.clientWebOnly')}</span>
+                      </div>
+                    )}
                   </td>
                   <td style={{ padding: '10px 12px', color: 'var(--text-muted, #888)' }}>
                     {user.role === 'admin'
@@ -259,6 +365,13 @@ export default function UsersPage() {
                       : t('usersPage.permissionCount', { count: enabledCount(user) })}
                   </td>
                   <td style={{ padding: '10px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => setAccessUser(user)}
+                      style={{ marginRight: 8 }}
+                    >
+                      {t('usersPage.access')}
+                    </button>
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => openPairing(user)}
@@ -275,6 +388,20 @@ export default function UsersPage() {
                       style={{ marginRight: 8 }}
                     >
                       {t('usersPage.edit')}
+                    </button>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() =>
+                        user.blocked ? void unblock(user) : setBlockTarget(user)
+                      }
+                      disabled={unblocking === user.id}
+                      style={{ marginRight: 8 }}
+                    >
+                      {unblocking === user.id
+                        ? t('usersPage.unblocking')
+                        : user.blocked
+                          ? t('usersPage.unblock')
+                          : t('usersPage.block')}
                     </button>
                     <button className="btn btn-outline btn-sm" onClick={() => remove(user)}>
                       {t('usersPage.delete')}
@@ -338,6 +465,38 @@ export default function UsersPage() {
               </select>
             </label>
 
+            {/* Куда учётной записи можно входить. Две независимые галочки:
+                бывает и «только веб» (дежурный за компьютером), и «только
+                приложение» (сотрудник с телефоном). */}
+            <div style={{ marginTop: 16 }}>
+              <div style={{ marginBottom: 8, fontWeight: 600 }}>{t('usersPage.clients')}</div>
+              <div className="grid grid-2">
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={form.webAccess}
+                    onChange={(e) => setForm({ ...form, webAccess: e.target.checked })}
+                  />
+                  <span>{t('usersPage.clientWeb')}</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={form.appAccess}
+                    onChange={(e) => setForm({ ...form, appAccess: e.target.checked })}
+                  />
+                  <span>{t('usersPage.clientApp')}</span>
+                </label>
+              </div>
+              {/* Оба снятых флажка сервер отклонит — предупреждаем заранее,
+                  чтобы это не выглядело как ошибка сохранения. */}
+              {!form.webAccess && !form.appAccess && (
+                <p style={{ color: 'var(--danger)', fontSize: 13, margin: '8px 0 0' }}>
+                  {t('usersPage.clientNone')}
+                </p>
+              )}
+            </div>
+
             <div style={{ marginTop: 16, opacity: form.role === 'admin' ? 0.5 : 1 }}>
               <div style={{ marginBottom: 8, fontWeight: 600 }}>
                 {t('usersPage.permissions')}
@@ -384,6 +543,71 @@ export default function UsersPage() {
               </button>
               <button className="btn btn-primary" onClick={save} disabled={saving}>
                 {saving ? t('usersPage.saving') : t('usersPage.save')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Выдача прав на камеры: другой документ и другая кнопка сохранения,
+          поэтому отдельное окно, а не вторая половина карточки прав. */}
+      {accessUser && (
+        <UserAccessEditor
+          user={accessUser}
+          onClose={() => setAccessUser(null)}
+          onSaved={load}
+        />
+      )}
+
+      {/* Блокировка: срок выбирается здесь, потому что «заблокировать
+          навсегда» и «на час» — разные решения, и по умолчанию должно быть
+          временное: бессрочную блокировку легко забыть снять. */}
+      {blockTarget && (
+        <div className="modal-overlay" onClick={() => setBlockTarget(null)}>
+          <div
+            className="modal"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: 460, width: '100%' }}
+          >
+            <h2 style={{ marginTop: 0, marginBottom: 4 }}>
+              {t('usersPage.blockTitle', { name: blockTarget.username })}
+            </h2>
+            <p style={{ color: 'var(--text-muted, #888)', marginTop: 0 }}>
+              {t('usersPage.blockHint')}
+            </p>
+
+            <label style={{ display: 'block', marginTop: 12 }}>
+              <div style={{ marginBottom: 6 }}>{t('usersPage.blockDuration')}</div>
+              <select
+                className="input"
+                value={blockHours}
+                onChange={(e) => setBlockHours(e.target.value)}
+              >
+                <option value="1">{t('usersPage.blockHour1')}</option>
+                <option value="8">{t('usersPage.blockHour8')}</option>
+                <option value="24">{t('usersPage.blockHour24')}</option>
+                <option value="72">{t('usersPage.blockHour72')}</option>
+                <option value="forever">{t('usersPage.blockForeverOption')}</option>
+              </select>
+            </label>
+
+            <label style={{ display: 'block', marginTop: 12 }}>
+              <div style={{ marginBottom: 6 }}>{t('usersPage.blockReason')}</div>
+              <input
+                className="input"
+                value={blockReason}
+                maxLength={200}
+                onChange={(e) => setBlockReason(e.target.value)}
+                placeholder={t('usersPage.blockReasonPlaceholder')}
+              />
+            </label>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
+              <button className="btn btn-outline" onClick={() => setBlockTarget(null)}>
+                {t('usersPage.cancel')}
+              </button>
+              <button className="btn btn-primary" onClick={submitBlock}>
+                {t('usersPage.block')}
               </button>
             </div>
           </div>
@@ -451,6 +675,24 @@ export default function UsersPage() {
       )}
     </div>
   )
+}
+
+/**
+ * Формат даты для метки блокировки.
+ *
+ * Показываем дату и время: по одной дате нельзя понять, кончится блокировка
+ * сегодня вечером или завтра утром, а это первое, что смотрит администратор.
+ */
+function formatDateTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleString(undefined, {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 /**

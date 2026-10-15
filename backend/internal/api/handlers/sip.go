@@ -108,7 +108,27 @@ func (h *SipHandler) Calls(w http.ResponseWriter, r *http.Request) {
 	}
 	onlyMissed := r.URL.Query().Get("only_missed") == "true"
 
-	calls, err := h.calls.List(r.Context(), limit, onlyMissed)
+	// Личный журнал: только звонки, адресованные этому человеку.
+	//
+	// Решает сервер, а не приложение. Причина в том, что журнал — это
+	// управленческий экран (диспетчер видит все звонки объекта), а обычный
+	// сотрудник должен видеть только свои. Если бы выбор делал клиент,
+	// достаточно было бы запроса без параметра, чтобы прочитать чужое.
+	user := middleware.UserFromContext(r.Context())
+	onlyMine := r.URL.Query().Get("mine") == "true"
+	if user != nil && !user.HasPermission(domain.PermSIPManage) {
+		onlyMine = true
+	}
+
+	var (
+		calls []domain.SipCall
+		err   error
+	)
+	if onlyMine && user != nil {
+		calls, err = h.calls.ListForUser(r.Context(), user.ID, limit, onlyMissed)
+	} else {
+		calls, err = h.calls.List(r.Context(), limit, onlyMissed)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

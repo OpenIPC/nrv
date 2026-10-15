@@ -328,6 +328,14 @@ func (h *ACSHandler) ListDoors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Двери контроллера — это то, что им открывается: без проверки списки
+	// дверей чужих контроллеров были бы видны всем, у кого есть право
+	// смотреть раздел СКУД.
+	if !h.guard.AllowsACSController(r, id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "контроллер не найден"})
+		return
+	}
+
 	doors, err := h.svc.ListDoors(r.Context(), ctrl)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})

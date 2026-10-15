@@ -12,7 +12,10 @@ import (
 // Запускается только при заданном адресе — иначе обычный `go test` не
 // должен зависеть от наличия камеры в сети:
 //
-//	CAM_IP=192.168.1.41 CAM_USER=root CAM_PASS=96811621q go test -run MajesticLive ./internal/service/
+//	CAM_IP=192.168.1.41 CAM_USER=root CAM_PASS=<пароль камеры> go test -run MajesticLive ./internal/service/
+//
+// Пароль в примере — образец (угловые скобки), а не настоящее значение:
+// репозиторий публикуется, и учётные данные устройств в него не попадают.
 func TestMajesticLive(t *testing.T) {
 	ip := os.Getenv("CAM_IP")
 	if ip == "" {

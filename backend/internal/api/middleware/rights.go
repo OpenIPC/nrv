@@ -39,6 +39,14 @@ type Rule struct {
 var routeRules = []Rule{
 	// Пользователи и права: только для того, у кого есть это право.
 	{Prefix: "/api/v1/users", Perm: domain.PermUsersManage},
+	// Выдача прав на объекты (камеры, группы камер) — то же право, что и на
+	// карточку пользователя.
+	//
+	// Отдельно от /cameras намеренно: дерево выдачи показывает ВСЕ камеры
+	// парка, иначе администратор не смог бы выдать чужие, а список камер в
+	// разделе «Камеры» фильтруется по доступу.
+	{Prefix: "/api/v1/access", Perm: domain.PermUsersManage},
+	{Prefix: "/api/v1/camera-groups", Perm: domain.PermUsersManage},
 	// Свой профиль и свои права нужны любому вошедшему — по ним интерфейс
 	// строит меню.
 	{Prefix: "/api/v1/auth/me", Perm: ""},
@@ -110,6 +118,15 @@ var routeRules = []Rule{
 	// на Asterisk, и звонки не придут. Отдаём только СВОЮ линию — чужую этим
 	// маршрутом не получить.
 	{Prefix: "/api/v1/sip/my-line", Perm: ""},
+	// Личный журнал звонков: свои пропущенные должен видеть и тот, кому не
+	// выдали право на весь раздел домофонии, — иначе в приложении у него
+	// журнал просто не откроется.
+	//
+	// Полный журнал при этом остаётся закрытым: обработчик отдаёт все звонки
+	// только тем, у кого есть sip.manage, а остальным — лишь адресованные
+	// им. Право на раздел здесь означало бы «весь журнал объекта», а это уже
+	// управленческий экран, а не свои вызовы.
+	{Prefix: "/api/v1/sip/calls", Method: http.MethodGet, Perm: ""},
 
 	// Домофония: смотреть список абонентов может любой, у кого есть это
 	// право, а менять — только тот, кому доверили.
@@ -140,12 +157,40 @@ func permissionFor(method, path string) string {
 
 type ctxKey int
 
-const userKey ctxKey = iota
+const (
+	userKey ctxKey = iota
+	clientKey
+)
 
 // UserFromContext возвращает пользователя, загруженного проверкой прав.
 func UserFromContext(ctx context.Context) *domain.User {
 	user, _ := ctx.Value(userKey).(*domain.User)
 	return user
+}
+
+// ClientFromContext возвращает клиента, из которого пришёл запрос.
+//
+// Нужен там, где решение зависит от интерфейса: например, нельзя закрыть
+// доступ через тот клиент, которым администратор сейчас пользуется.
+// Пусто — запрос без метки (старый токен).
+func ClientFromContext(ctx context.Context) string {
+	client, _ := ctx.Value(clientKey).(string)
+	return client
+}
+
+// writeClientForbidden отвечает учётной записи, которой этот клиент закрыт.
+//
+// Отдельный код в теле (client_forbidden), чтобы приложение и веб-интерфейс
+// показали понятный текст «сюда нельзя, пользуйтесь другим», а не общее
+// «нет прав».
+func writeClientForbidden(w http.ResponseWriter, client string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	json.NewEncoder(w).Encode(map[string]any{
+		"error": "доступ через " + domain.ClientTitle(client) +
+			" для этой учётной записи закрыт. Обратитесь к администратору.",
+		"code": "client_forbidden",
+	})
 }
 
 // RequirePermission проверяет права пользователя на каждый запрос.
@@ -176,13 +221,39 @@ func RequirePermission(users *service.UserService) func(http.Handler) http.Handl
 				return
 			}
 
+			// Блокировка проверяется на каждом запросе, а не только при входе:
+			// токен живёт сутки, и без этой проверки заблокированный спокойно
+			// доработал бы смену по уже выданному токену.
+			if user.Blocked {
+				writeBlocked(w, user)
+				return
+			}
+
+			// Клиент, из которого пришёл запрос, тоже проверяем на каждом
+			// запросе: закрыв веб уже вошедшему, администратор ожидает, что
+			// доступ пропадёт сразу, а не через сутки.
+			//
+			// Пустая метка — токен, выданный до появления разделения. Такие
+			// не ограничиваем: иначе закрытие веба выбросило бы и приложение,
+			// у которого в телефоне лежит старый токен без метки.
+			client, _ := claims["client"].(string)
+			if client != "" && !user.AllowedClient(client) {
+				writeClientForbidden(w, client)
+				return
+			}
+
 			perm := permissionFor(r.Method, r.URL.Path)
 			if perm != "" && !user.HasPermission(perm) {
 				writeJSON(w, http.StatusForbidden, "недостаточно прав: "+perm)
 				return
 			}
 
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, user)))
+			next.ServeHTTP(w, r.WithContext(
+				context.WithValue(
+					context.WithValue(r.Context(), userKey, user),
+					clientKey, client,
+				),
+			))
 		})
 	}
 }
@@ -193,4 +264,26 @@ func writeJSON(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+// writeBlocked отвечает заблокированному пользователю.
+//
+// Отдельный код в теле ответа (account_blocked) нужен приложению: без него
+// оно покажет общее «доступ запрещён: у пользователя нет прав» и человек
+// пойдёт искать проблему в правах, а дело совсем не в них.
+func writeBlocked(w http.ResponseWriter, user *domain.User) {
+	body := map[string]any{
+		"error": service.BlockedMessageFor(user),
+		"code":  "account_blocked",
+	}
+	if user.BlockedUntil != nil {
+		body["blocked_until"] = user.BlockedUntil
+	}
+	if user.BlockReason != "" {
+		body["block_reason"] = user.BlockReason
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	json.NewEncoder(w).Encode(body)
 }

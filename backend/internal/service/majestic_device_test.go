@@ -10,7 +10,7 @@ import (
 // TestMajesticDeviceInfoLive проверяет чтение сведений о камере со страницы
 // дашборда. Требует доступную камеру:
 //
-//	CAM_IP=192.168.1.41 CAM_USER=root CAM_PASS=96811621q \
+//	CAM_IP=192.168.1.41 CAM_USER=root CAM_PASS=<пароль камеры> \
 //	  go test -v -run MajesticDeviceInfoLive ./internal/service/
 func TestMajesticDeviceInfoLive(t *testing.T) {
 	ip := os.Getenv("CAM_IP")

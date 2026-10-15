@@ -25,10 +25,19 @@ type RecordingHandler struct {
 	videoRepo *miniorepo.VideoRepo
 	// storage нужен для отдачи файлов из локального хранилища.
 	storage *service.StorageService
+	// guard — что видно тому, кто пришёл: архив фильтруется по доступу к
+	// камере так же, как список камер.
+	guard *AccessGuard
 }
 
 func NewRecordingHandler(db *pgxpool.Pool, videoRepo *miniorepo.VideoRepo, storage *service.StorageService) *RecordingHandler {
 	return &RecordingHandler{db: db, videoRepo: videoRepo, storage: storage}
+}
+
+// WithGuard подключает проверку доступа к камерам.
+func (h *RecordingHandler) WithGuard(guard *AccessGuard) *RecordingHandler {
+	h.guard = guard
+	return h
 }
 
 // signedURL возвращает ссылку на файл записи.
@@ -66,6 +75,29 @@ func (h *RecordingHandler) File(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("download") != "" {
 		name := recordingFileName(r.URL.Query().Get("name"))
 		w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	}
+
+	// Маршрут зарегистрирован вне JWT-группы (файл воспроизводится в теге
+	// <video>, а он не умеет передавать заголовок Authorization), но
+	// проверка токена раньше жила только в комментарии: файл архива
+	// отдавался без авторизации вообще. Теперь пользователя опознаёт
+	// guard — по токену из запроса, а не по заголовку.
+	if h.guard.User(r) == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "требуется авторизация"})
+		return
+	}
+
+	// Доступ проверяем по камере записи, а не по факту знания пути: иначе
+	// скачанная один раз ссылка открывала бы чужие камеры.
+	var fileCameraID *uuid.UUID
+	if err := h.db.QueryRow(r.Context(),
+		`SELECT camera_id FROM recordings WHERE file_path = $1 LIMIT 1`, path).Scan(&fileCameraID); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "recording file not found"})
+		return
+	}
+	if fileCameraID == nil || !h.guard.Allows(r, *fileCameraID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "recording file not found"})
+		return
 	}
 
 	w.Header().Set("Content-Type", "video/mp4")
@@ -244,6 +276,15 @@ func (h *RecordingHandler) List(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 
+	// Фильтр по доступу: nil (доступ ко всему парку) означает «без
+	// ограничений», пустой массив — «не видно ничего».
+	if allowed := allowedCameraFilter(r, h.guard); allowed != nil {
+		query += ` AND r.camera_id = ANY($` + strconv.Itoa(argIdx) + `::uuid[])`
+		countQuery += ` AND camera_id = ANY($` + strconv.Itoa(argIdx) + `::uuid[])`
+		args = append(args, allowed)
+		argIdx++
+	}
+
 	// Поиск по расшифровке триггера: номер машины, имя человека, класс объекта.
 	if search := strings.TrimSpace(r.URL.Query().Get("search")); search != "" {
 		cond := ` AND r.trigger_detail ILIKE $` + strconv.Itoa(argIdx)
@@ -330,6 +371,13 @@ func (h *RecordingHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Запись скрытой камеры отвечает тем же «не найдено»: по разнице
+	// ответов можно было бы перечислить парк.
+	if !h.guard.Allows(r, rec.CameraID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "recording not found"})
+		return
+	}
+
 	// Ссылка на файл в хранилище (действует час).
 	writeJSON(w, http.StatusOK, recordingResponse(rec, h.signedURL(rec.FilePath)))
 }
@@ -364,10 +412,19 @@ func (h *RecordingHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	// Сначала забираем ключ объекта, чтобы удалить и файл, и запись.
 	var filePath string
+	var cameraID uuid.UUID
 	err = h.db.QueryRow(r.Context(),
-		`SELECT COALESCE(file_path, '') FROM recordings WHERE id = $1`, id.String(),
-	).Scan(&filePath)
+		`SELECT COALESCE(file_path, ''), camera_id FROM recordings WHERE id = $1`, id.String(),
+	).Scan(&filePath, &cameraID)
 	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "recording not found"})
+		return
+	}
+
+	// Удаление — действие с последствием, и проверка доступа здесь нужна
+	// не меньше, чем в списке: иначе право на архив в одном разделе
+	// позволяло бы стереть записи камер, которых пользователь не видит.
+	if !h.guard.Allows(r, cameraID) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "recording not found"})
 		return
 	}

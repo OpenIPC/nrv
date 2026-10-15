@@ -22,10 +22,20 @@ import (
 type CameraPreviewHandler struct {
 	svc       *service.CameraPreviewService
 	tokenAuth *jwtauth.JWTAuth
+	// guard — что видно тому, кто пришёл. Кадр превью показывается в теге
+	// <img> и авторизуется токеном из параметра, поэтому проверка доступа
+	// здесь своя — общая с другими обработчиками вне JWT-группы.
+	guard *AccessGuard
 }
 
 func NewCameraPreviewHandler(svc *service.CameraPreviewService, tokenAuth *jwtauth.JWTAuth) *CameraPreviewHandler {
 	return &CameraPreviewHandler{svc: svc, tokenAuth: tokenAuth}
+}
+
+// WithGuard подключает проверку доступа к камерам.
+func (h *CameraPreviewHandler) WithGuard(guard *AccessGuard) *CameraPreviewHandler {
+	h.guard = guard
+	return h
 }
 
 // Get отдаёт кадр камеры в JPEG.
@@ -41,6 +51,13 @@ func (h *CameraPreviewHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	id, ok := cameraIDFromRequest(w, r)
 	if !ok {
+		return
+	}
+
+	// Кадр — это изображение с камеры: без проверки доступа токен любой
+	// учётной записи давал бы картинку с любой камеры парка по её id.
+	if !h.guard.Allows(r, id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
 		return
 	}
 

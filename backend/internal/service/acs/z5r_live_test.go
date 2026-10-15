@@ -16,7 +16,7 @@ import (
 //
 // Запуск:
 //
-//	Z5R_TEST_IP=192.168.1.60 Z5R_TEST_PASS=96811621 \
+//	Z5R_TEST_IP=192.168.1.60 Z5R_TEST_PASS=<пароль контроллера> \
 //	  go test ./internal/service/acs/ -run TestZ5RLive -v
 func liveZ5R(t *testing.T) *Z5RAdapter {
 	t.Helper()

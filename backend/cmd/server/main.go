@@ -572,10 +572,30 @@ func main() {
 	// разнице двух замеров, и общий читатель сдвигал бы замеры монитору.
 	statsReader := sysinfo.NewReader(cfg.RecordBufferDir)
 
+	// Разграничение прав: камеры, группы камер и контроллеры СКУД.
+	//
+	// Права читаются проверками (у каждой свой кеш), а пишутся одним
+	// репозиторием: форма выдачи в интерфейсе одна, и запись всех видов
+	// доступа идёт одной транзакцией — иначе половина галочек могла бы
+	// примениться, а половина нет.
+	userAccessRepo := postgres.NewUserAccessRepo(db)
+	cameraAccessSvc := service.NewCameraAccessService(userAccessRepo)
+	acsUserAccessSvc := service.NewACSUserAccessService(userAccessRepo)
+
 	// Инициализация роутера
 	router := api.NewRouter(api.RouterConfig{
-		CameraSvc:        cameraSvc,
-		EventSvc:         eventSvc,
+		CameraSvc: cameraSvc,
+		EventSvc:  eventSvc,
+		// Разграничение прав: кому какие камеры и контроллеры СКУД видно,
+		// и выдача этих прав из интерфейса.
+		//
+		// Сервисы проверки держат короткий кеш — проверка стоит на каждом
+		// запросе к списку и к потоку, и обращение к базе на каждый кадр
+		// было бы лишним. Запись идёт через отдельный сервис: она меняет
+		// оба вида доступа одной транзакцией.
+		CameraAccessSvc:  cameraAccessSvc,
+		ACSUserAccessSvc: acsUserAccessSvc,
+		AccessGrantSvc:   service.NewAccessGrantService(userAccessRepo, cameraAccessSvc, acsUserAccessSvc),
 		ACSSvc:           acsSvc,
 		ACSAccessSvc:     acsAccessSvc,
 		CardCapture:      cardCapture,

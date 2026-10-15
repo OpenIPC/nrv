@@ -42,6 +42,10 @@ type StreamHandler struct {
 	jarMu      sync.Mutex
 	ffmpegOnce sync.Once
 	ffmpegOK   bool // доступен ли ffmpeg (для снапшота из HLS)
+	// guard — что видно тому, кто пришёл. Три обработчика этого файла
+	// авторизуются по-разному (middleware и токен в параметре), но доступ
+	// к камере проверяют одинаково.
+	guard *AccessGuard
 }
 
 func NewStreamHandler(cameraSvc *service.CameraService, apiBase, publicHost string, tokenAuth *jwtauth.JWTAuth) *StreamHandler {
@@ -62,6 +66,12 @@ func NewStreamHandler(cameraSvc *service.CameraService, apiBase, publicHost stri
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// WithGuard подключает проверку доступа к камерам.
+func (h *StreamHandler) WithGuard(guard *AccessGuard) *StreamHandler {
+	h.guard = guard
+	return h
 }
 
 // getJarClient возвращает http.Client с cookiejar для конкретного camera path.
@@ -124,6 +134,13 @@ func (h *StreamHandler) GetStream(w http.ResponseWriter, r *http.Request) {
 
 	cam, err := h.cameraSvc.Get(r.Context(), id)
 	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
+		return
+	}
+
+	// Адрес потока — это и есть доступ: получив его один раз, клиент мог бы
+	// смотреть камеру в обход списков, поэтому проверяем именно здесь.
+	if !h.guard.Allows(r, id) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
 		return
 	}
@@ -201,6 +218,14 @@ func (h *StreamHandler) ProxyHLS(w http.ResponseWriter, r *http.Request) {
 
 	cam, err := h.cameraSvc.Get(r.Context(), id)
 	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
+		return
+	}
+
+	// HLS-плейлист и сегменты — тот же поток, что и в WebRTC: доступ
+	// проверяется по камере, а не по способу её доставки. Токен для этого
+	// уже разобран выше, обработчик вне JWT-группы.
+	if !h.guard.Allows(r, id) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
 		return
 	}
@@ -562,6 +587,14 @@ func (h *StreamHandler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
 		return
 	}
+
+	// Кадр — это изображение с камеры: без проверки токен любой учётной
+	// записи давал бы картинку с любой камеры парка по её id.
+	if !h.guard.Allows(r, id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
+		return
+	}
+
 	// ?stream=sub отдаёт кадр дополнительного потока.
 	//
 	// Нужно для разметки зоны номеров: детектор разбирает субпоток

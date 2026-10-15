@@ -16,10 +16,19 @@ import (
 type SnapshotHandler struct {
 	db      *pgxpool.Pool
 	storage *service.StorageService
+	// guard — что видно тому, кто пришёл: снимок события показывает камеру,
+	// с которой событие пришло.
+	guard *AccessGuard
 }
 
 func NewSnapshotHandler(db *pgxpool.Pool, storage *service.StorageService) *SnapshotHandler {
 	return &SnapshotHandler{db: db, storage: storage}
+}
+
+// WithGuard подключает проверку доступа к камерам.
+func (h *SnapshotHandler) WithGuard(guard *AccessGuard) *SnapshotHandler {
+	h.guard = guard
+	return h
 }
 
 // Get отдаёт изображение снимка события.
@@ -39,9 +48,17 @@ func (h *SnapshotHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var storedPath *string
+	var cameraID uuid.UUID
 	err = h.db.QueryRow(r.Context(),
-		`SELECT snapshot_path FROM detection_events WHERE id = $1`, id).Scan(&storedPath)
+		`SELECT camera_id, snapshot_path FROM detection_events WHERE id = $1`, id).Scan(&cameraID, &storedPath)
 	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "event not found"})
+		return
+	}
+
+	// Снимок скрытой камеры отвечает тем же «не найдено»: иначе по разнице
+	// ответов можно было бы перечислить события всего парка.
+	if !h.guard.Allows(r, cameraID) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "event not found"})
 		return
 	}
@@ -77,6 +94,10 @@ func (h *SnapshotHandler) Get(w http.ResponseWriter, r *http.Request) {
 // Как и для детекции, снимок отдаётся через бэкенд, а не редиректом на
 // presigned-ссылку MinIO: такая ссылка подписана под конкретный Host и при
 // открытии интерфейса по внешнему адресу ведёт на localhost клиента.
+//
+// Проверка доступа здесь появится вместе с разграничением по СКУД: снимок
+// события СКУД показывает проходящего у двери, и решать, виден ли он, нужно
+// по доступу к этой двери (этап 2 плана разграничения прав).
 func (h *SnapshotHandler) GetACS(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

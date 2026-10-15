@@ -297,6 +297,28 @@ type User struct {
 	Role         string         `json:"role"` // admin, operator, viewer
 	Permissions  map[string]any `json:"permissions,omitempty"`
 	CreatedAt    time.Time      `json:"created_at"`
+
+	// Blocked — доступ закрыт администратором.
+	//
+	// Проверяется при входе и на каждом запросе, а не только при выдаче
+	// токена: токен живёт сутки, и без проверки на каждом запросе снятие
+	// блокировки в интерфейсе не имело бы смысла.
+	Blocked bool `json:"blocked"`
+	// BlockedUntil — до какого времени закрыт доступ. Пусто — бессрочно.
+	BlockedUntil *time.Time `json:"blocked_until,omitempty"`
+	// BlockReason — почему закрыт доступ (необязательно).
+	//
+	// Нужна, чтобы при разборе не приходилось спрашивать коллег: карточка
+	// сама объясняет, что случилось.
+	BlockReason string `json:"block_reason,omitempty"`
+
+	// WebAccess и AppAccess — куда этой учётной записи можно входить.
+	//
+	// Два отдельных флага, а не один «тип клиента»: случай «только
+	// веб-интерфейс» (дежурный за компьютером) и «только приложение»
+	// (сотрудник с телефоном) равноправны.
+	WebAccess bool `json:"web_access"`
+	AppAccess bool `json:"app_access"`
 }
 
 // --- Входные DTO ---
@@ -1113,6 +1135,9 @@ type CreateACSControllerRequest struct {
 type LoginRequest struct {
 	Username string `json:"username" validate:"required"`
 	Password string `json:"password" validate:"required"`
+	// Client — из какого интерфейса входят: web или app. Пусто — веб:
+	// скрипты и настольные клиенты метку не шлют.
+	Client string `json:"client"`
 }
 
 // UpdateACSControllerRequest — изменение параметров контроллера СКУД.

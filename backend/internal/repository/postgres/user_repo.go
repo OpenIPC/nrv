@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nvr/backend/internal/domain"
+	"github.com/rs/zerolog/log"
 )
 
 // ErrUsernameTaken — имя пользователя уже занято.
@@ -26,13 +28,25 @@ func NewUserRepo(db *pgxpool.Pool) *UserRepo {
 	return &UserRepo{db: db}
 }
 
-func (r *UserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+// userColumns — колонки учётной записи в одном месте.
+//
+// Общий список нужен потому, что учётную запись читают несколько запросов,
+// и колонка, забытая в одном из них, даёт странную картину: «заблокирован
+// при входе, но не в списке». Такое замечают только случайно.
+const userColumns = `id, username, password_hash, role, permissions, created_at,
+	blocked, blocked_until, block_reason, web_access, app_access`
+
+// rowScanner — общее для pgx.Row и pgx.Rows: оба умеют Scan.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanUser читает учётную запись вместе с её блокировкой.
+func scanUser(s rowScanner) (*domain.User, error) {
 	var u domain.User
 	var perms []byte
-	err := r.db.QueryRow(ctx, `
-		SELECT id, username, password_hash, role, permissions, created_at
-		FROM users WHERE username = $1
-	`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &perms, &u.CreatedAt)
+	err := s.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &perms, &u.CreatedAt,
+		&u.Blocked, &u.BlockedUntil, &u.BlockReason, &u.WebAccess, &u.AppAccess)
 	if err != nil {
 		return nil, err
 	}
@@ -42,28 +56,43 @@ func (r *UserRepo) GetByUsername(ctx context.Context, username string) (*domain.
 	return &u, nil
 }
 
-func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
-	var u domain.User
-	var perms []byte
-	err := r.db.QueryRow(ctx, `
-		SELECT id, username, password_hash, role, permissions, created_at
-		FROM users WHERE id = $1
-	`, id).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &perms, &u.CreatedAt)
+// clearExpiredBlocks снимает блокировки, срок которых истёк.
+//
+// Именно здесь, а не отдельной задачей по расписанию: блокировка «на час»
+// должна кончиться сама, без администратора, но и отдельный таймер ради
+// одной команды в базе заводить не стоит — она и так выполняется при любом
+// обращении к учётным записям.
+func (r *UserRepo) clearExpiredBlocks(ctx context.Context) {
+	_, err := r.db.Exec(ctx, `
+		UPDATE users SET blocked = false, blocked_until = NULL
+		WHERE blocked AND blocked_until IS NOT NULL AND blocked_until <= now()`)
 	if err != nil {
-		return nil, err
+		// Ошибка здесь не должна мешать работе: просроченную блокировку
+		// снимет следующая попытка, а пока человек увидит отказ и обратится
+		// к администратору.
+		log.Warn().Err(err).Msg("не удалось снять просроченные блокировки")
 	}
-	if perms != nil {
-		json.Unmarshal(perms, &u.Permissions)
-	}
-	return &u, nil
+}
+
+func (r *UserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+	r.clearExpiredBlocks(ctx)
+
+	row := r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE username = $1`, username)
+	return scanUser(row)
+}
+
+func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
+	r.clearExpiredBlocks(ctx)
+
+	row := r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id)
+	return scanUser(row)
 }
 
 // List возвращает всех пользователей по алфавиту.
 func (r *UserRepo) List(ctx context.Context) ([]domain.User, error) {
-	rows, err := r.db.Query(ctx, `
-		SELECT id, username, password_hash, role, permissions, created_at
-		FROM users ORDER BY username
-	`)
+	r.clearExpiredBlocks(ctx)
+
+	rows, err := r.db.Query(ctx, `SELECT `+userColumns+` FROM users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
@@ -71,17 +100,34 @@ func (r *UserRepo) List(ctx context.Context) ([]domain.User, error) {
 
 	var users []domain.User
 	for rows.Next() {
-		var u domain.User
-		var perms []byte
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &perms, &u.CreatedAt); err != nil {
+		u, err := scanUser(rows)
+		if err != nil {
 			return nil, err
 		}
-		if perms != nil {
-			json.Unmarshal(perms, &u.Permissions)
-		}
-		users = append(users, u)
+		users = append(users, *u)
 	}
 	return users, rows.Err()
+}
+
+// SetBlock закрывает или открывает доступ учётной записи.
+//
+// until пусто — блокировка бессрочная. При снятии блокировки причина
+// очищается: оставленная, она потом читалась бы как причина новой.
+func (r *UserRepo) SetBlock(
+	ctx context.Context,
+	id uuid.UUID,
+	blocked bool,
+	until *time.Time,
+	reason string,
+) error {
+	if !blocked {
+		until = nil
+		reason = ""
+	}
+	_, err := r.db.Exec(ctx, `
+		UPDATE users SET blocked = $2, blocked_until = $3, block_reason = $4
+		WHERE id = $1`, id, blocked, until, reason)
+	return err
 }
 
 // Create добавляет пользователя с готовым хешем пароля.
@@ -91,23 +137,25 @@ func (r *UserRepo) Create(ctx context.Context, u *domain.User, passwordHash stri
 		return err
 	}
 	err = r.db.QueryRow(ctx, `
-		INSERT INTO users (username, password_hash, role, permissions)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO users (username, password_hash, role, permissions, web_access, app_access)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, created_at
-	`, u.Username, passwordHash, u.Role, perms).Scan(&u.ID, &u.CreatedAt)
+	`, u.Username, passwordHash, u.Role, perms, u.WebAccess, u.AppAccess).Scan(&u.ID, &u.CreatedAt)
 	return translateUserError(err)
 }
 
-// Update сохраняет имя, роль и права. Пароль здесь не меняется: для него
-// отдельный метод, чтобы правка прав не требовала передавать пароль.
+// Update сохраняет имя, роль, права и доступ по клиентам. Пароль здесь не
+// меняется: для него отдельный метод, чтобы правка прав не требовала
+// передавать пароль.
 func (r *UserRepo) Update(ctx context.Context, u *domain.User) error {
 	perms, err := json.Marshal(u.Permissions)
 	if err != nil {
 		return err
 	}
 	_, err = r.db.Exec(ctx, `
-		UPDATE users SET username = $2, role = $3, permissions = $4 WHERE id = $1
-	`, u.ID, u.Username, u.Role, perms)
+		UPDATE users SET username = $2, role = $3, permissions = $4,
+			web_access = $5, app_access = $6 WHERE id = $1
+	`, u.ID, u.Username, u.Role, perms, u.WebAccess, u.AppAccess)
 	return translateUserError(err)
 }
 

@@ -45,6 +45,9 @@ type WebRTCHandler struct {
 	// apiBase — адрес API go2rtc со схемой: "http://localhost:1984".
 	apiBase string
 	client  *http.Client
+	// guard — что видно тому, кто пришёл. Без него знание имени потока
+	// давало бы картинку с любой камеры парка.
+	guard *AccessGuard
 }
 
 func NewWebRTCHandler(cameraSvc *service.CameraService, apiBase string) *WebRTCHandler {
@@ -64,6 +67,12 @@ func NewWebRTCHandler(cameraSvc *service.CameraService, apiBase string) *WebRTCH
 			Timeout: webrtcOfferTimeout + 5*time.Second,
 		},
 	}
+}
+
+// WithGuard подключает проверку доступа к камерам.
+func (h *WebRTCHandler) WithGuard(guard *AccessGuard) *WebRTCHandler {
+	h.guard = guard
+	return h
 }
 
 // Whep принимает SDP-оффер клиента и возвращает SDP-ответ go2rtc.
@@ -95,6 +104,13 @@ func (h *WebRTCHandler) Whep(w http.ResponseWriter, r *http.Request) {
 	// «пустой поток» без объяснения причины.
 	cam, err := h.cameraSvc.Get(r.Context(), id)
 	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
+		return
+	}
+
+	// Камера существует, но не видна этому пользователю — отвечаем так же,
+	// как на несуществующую: иначе по разнице ответов можно перечислить парк.
+	if !h.guard.Allows(r, id) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "camera not found"})
 		return
 	}

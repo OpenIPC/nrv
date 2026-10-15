@@ -40,6 +40,10 @@ type CreateUserRequest struct {
 	Password    string          `json:"password"`
 	Role        string          `json:"role"`
 	Permissions map[string]bool `json:"permissions"`
+	// WebAccess и AppAccess — куда пускать учётную запись. Пусто — пускаем
+	// везде: новая учётная запись без доступа только запутала бы.
+	WebAccess *bool `json:"web_access"`
+	AppAccess *bool `json:"app_access"`
 }
 
 // UpdateUserRequest — правка пользователя.
@@ -52,6 +56,10 @@ type UpdateUserRequest struct {
 	Password    *string          `json:"password"`
 	Role        *string          `json:"role"`
 	Permissions *map[string]bool `json:"permissions"`
+	// Куда пускать учётную запись. Указатели по той же причине, что и выше:
+	// nil означает «не менять», а не «выключить».
+	WebAccess *bool `json:"web_access"`
+	AppAccess *bool `json:"app_access"`
 }
 
 type userCacheEntry struct {
@@ -133,6 +141,19 @@ func (s *UserService) Create(ctx context.Context, req CreateUserRequest) (*domai
 		Username:    username,
 		Role:        role,
 		Permissions: permissionsForStore(role, perms),
+		// Оба доступа включены по умолчанию: новая учётная запись без
+		// доступа только запутала бы — непонятно, что именно забыли выдать.
+		WebAccess: true,
+		AppAccess: true,
+	}
+	if req.WebAccess != nil {
+		user.WebAccess = *req.WebAccess
+	}
+	if req.AppAccess != nil {
+		user.AppAccess = *req.AppAccess
+	}
+	if err := checkClientAccess(user.WebAccess, user.AppAccess); err != nil {
+		return nil, err
 	}
 	if err := s.repo.Create(ctx, user, string(hash)); err != nil {
 		return nil, err
@@ -155,7 +176,13 @@ func (s *UserService) Create(ctx context.Context, req CreateUserRequest) (*domai
 // actor — тот, кто правит: сервис не даёт разжаловать или удалить
 // администратора, под которым работают, и не даёт оставить систему без
 // администраторов вообще.
-func (s *UserService) Update(ctx context.Context, id uuid.UUID, req UpdateUserRequest, actor *domain.User) (*domain.User, error) {
+func (s *UserService) Update(
+	ctx context.Context,
+	id uuid.UUID,
+	req UpdateUserRequest,
+	actor *domain.User,
+	client string,
+) (*domain.User, error) {
 	user, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, errors.New("пользователь не найден")
@@ -191,6 +218,27 @@ func (s *UserService) Update(ctx context.Context, id uuid.UUID, req UpdateUserRe
 		// роли. Иначе у пользователя остались бы права прежней роли, и роль
 		// в списке противоречила бы возможностям.
 		user.Permissions = permissionsForStore(user.Role, presetPermissions(user.Role))
+	}
+
+	// Доступ по клиентам: меняем только то, что передали.
+	if req.WebAccess != nil {
+		user.WebAccess = *req.WebAccess
+	}
+	if req.AppAccess != nil {
+		user.AppAccess = *req.AppAccess
+	}
+	if req.WebAccess != nil || req.AppAccess != nil {
+		if err := checkClientAccess(user.WebAccess, user.AppAccess); err != nil {
+			return nil, err
+		}
+		// Свой текущий клиент закрывать нельзя: администратор остался бы без
+		// того интерфейса, в котором работает, и вернуть себе доступ смог бы
+		// только через другой клиент, если он ему разрешён.
+		if actor != nil && actor.ID == id && client != "" && !user.AllowedClient(client) {
+			return nil, fmt.Errorf(
+				"нельзя закрыть доступ через %s, под которым вы сейчас работаете",
+				domain.ClientTitle(client))
+		}
 	}
 
 	if req.Password != nil && *req.Password != "" {
@@ -256,6 +304,92 @@ func (s *UserService) Delete(ctx context.Context, id uuid.UUID, actor *domain.Us
 // Current — свежие данные пользователя по идентификатору из токена.
 func (s *UserService) Current(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	return s.GetCachedByID(ctx, id)
+}
+
+// checkClientAccess проверяет, что у учётной записи останется хотя бы один
+// способ войти.
+//
+// Закрыть оба клиента нельзя: такая учётная запись существует, но бесполезна —
+// ни войти, ни линию получить, ни вернуть себе доступ. Если сотрудник уволен,
+// учётную запись удаляют, а не закрывают ей всё.
+func checkClientAccess(web, app bool) error {
+	if !web && !app {
+		return errors.New("нельзя закрыть оба доступа: учётной записи будет некуда войти")
+	}
+	return nil
+}
+
+// SetBlock закрывает или открывает доступ учётной записи.
+//
+// until пусто — блокировка бессрочная. Причина необязательна, но её стоит
+// указывать: карточка с заблокированной учётной записью должна объяснять
+// следующему администратору, что случилось.
+func (s *UserService) SetBlock(
+	ctx context.Context,
+	id uuid.UUID,
+	actor *domain.User,
+	blocked bool,
+	until *time.Time,
+	reason string,
+) (*domain.User, error) {
+	user, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, errors.New("пользователь не найден")
+	}
+
+	if blocked {
+		// Себя блокировать нельзя: чаще всего это неверное нажатие, а
+		// разблокировать себя будет уже нечем — доступ закрыт.
+		if actor != nil && actor.ID == id {
+			return nil, errors.New("нельзя заблокировать пользователя, под которым вы вошли")
+		}
+		// Администратора блокируем только если останется другой: иначе
+		// в систему станет некому войти и снимать блокировку придётся
+		// через базу.
+		if user.Role == domain.RoleAdmin {
+			if err := s.ensureNotLastAdmin(ctx, "нельзя заблокировать последнего администратора"); err != nil {
+				return nil, err
+			}
+		}
+		if until != nil && !until.After(time.Now()) {
+			return nil, errors.New("время разблокировки уже прошло")
+		}
+	}
+
+	if len(reason) > 200 {
+		// Длина колонки в базе: лучше сказать об этом словами, чем получить
+		// ошибку драйвера на середине запроса.
+		return nil, errors.New("причина длиннее 200 символов")
+	}
+
+	if err := s.repo.SetBlock(ctx, id, blocked, until, reason); err != nil {
+		return nil, err
+	}
+	// Снимаем кеш: проверка блокировки идёт на каждом запросе, и без сброса
+	// она применялась бы только через TTL — до этого заблокированный
+	// продолжал бы работать, а разблокированный получал бы отказ.
+	s.forget(id)
+
+	return s.repo.GetByID(ctx, id)
+}
+
+// BlockedMessage — текст, который показывается заблокированному человеку.
+//
+// Одна формулировка на все точки отказа: вход, приложение и веб-интерфейс
+// должны говорить одно и то же, иначе человек с телефоном и человек за
+// компьютером будут описывать администратору разные проблемы.
+const BlockedMessage = "Доступ в приложение заблокирован. Обратитесь к администратору."
+
+// BlockedMessageFor дописывает срок, если блокировка временная.
+//
+// Срок нужен человеку: «заблокирован» без срока читается как «навсегда», и
+// он идёт выяснять отношения вместо того, чтобы подождать.
+func BlockedMessageFor(user *domain.User) string {
+	if user == nil || user.BlockedUntil == nil {
+		return BlockedMessage
+	}
+	return BlockedMessage + " Разблокировка: " +
+		user.BlockedUntil.Local().Format("02.01.2006 15:04") + "."
 }
 
 // GetCachedByID отдаёт пользователя, не обращаясь к базе на каждом запросе.

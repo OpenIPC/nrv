@@ -1272,7 +1272,14 @@ export interface PaginatedResponse<T> {
 
 export const authAPI = {
   login: (username: string, password: string) =>
-    api.post<{ token: string; expires_at: number; user: any }>('/auth/login', { username, password }),
+    api.post<{ token: string; expires_at: number; user: any }>('/auth/login', {
+      username,
+      password,
+      // Метка клиента: сервер сверяет её с настройками учётной записи.
+      // Явно, а не по умолчанию — чтобы поведение не менялось, если
+      // однажды сервер научится различать клиентов иначе.
+      client: 'web',
+    }),
 }
 
 // Канал внешнего RTSP-доступа: готовые адреса потоков.
@@ -2931,6 +2938,21 @@ export interface UserAccount {
    *  у него полный доступ по роли. */
   permissions?: Record<string, boolean>
   created_at?: string
+  /**
+   * Доступ закрыт администратором.
+   *
+   * Проверяется на каждом запросе, а не только при входе: иначе закрытая
+   * учётная запись продолжила бы работать по уже выданному токену.
+   */
+  blocked?: boolean
+  /** До какого времени закрыт доступ. Пусто — бессрочно. */
+  blocked_until?: string
+  /** Причина блокировки, если её указали. */
+  block_reason?: string
+  /** Разрешён ли вход через веб-интерфейс. */
+  web_access?: boolean
+  /** Разрешён ли вход из мобильного приложения. */
+  app_access?: boolean
 }
 
 /**
@@ -2969,6 +2991,8 @@ export const usersAPI = {
     password: string
     role: string
     permissions: Record<string, boolean>
+    web_access?: boolean
+    app_access?: boolean
   }) => api.post<UserAccount>('/users', data),
   /** Пустой пароль означает «не менять»: так правка прав не требует
    *  вводить пароль заново. */
@@ -2979,6 +3003,8 @@ export const usersAPI = {
       password?: string
       role?: string
       permissions?: Record<string, boolean>
+      web_access?: boolean
+      app_access?: boolean
     }
   ) => api.put<UserAccount>(`/users/${id}`, data),
   remove: (id: string) => api.delete(`/users/${id}`),
@@ -2989,8 +3015,115 @@ export const usersAPI = {
    * экране в виде QR-кода и легко попадает в чужие руки.
    */
   appInvite: (id: string) => api.post<AppInvite>(`/users/${id}/app-invite`, {}),
+  /**
+   * Временно закрывает доступ учётной записи.
+   *
+   * `until` — до какого времени (ISO). Без него блокировка бессрочная:
+   * её снимают руками, когда человека отстранили до разбирательства.
+   */
+  block: (id: string, data: { until?: string; reason?: string } = {}) =>
+    api.post<UserAccount>(`/users/${id}/block`, data),
+  /** Возвращает доступ учётной записи. */
+  unblock: (id: string) => api.post<UserAccount>(`/users/${id}/unblock`, {}),
 }
 
 export const meAPI = {
   me: () => api.get<CurrentUser>('/auth/me'),
+}
+
+/** Камера в справочнике выдачи: имя и состояние, без адресов потоков. */
+export interface CatalogCamera {
+  id: string
+  name: string
+  status: string
+  vendor: string
+}
+
+/**
+ * Группа камер — именованный набор, который выдают доступом целиком.
+ *
+ * Состав группы меняет администратор один раз, и он же действует сразу для
+ * всех, кому группа выдана. Поэтому отдельная выдача группы и список камер
+ * в ней — разные вещи: интерфейс должен показывать, что камера попала к
+ * человеку «через группу», а не лично.
+ */
+export interface CameraGroup {
+  id: string
+  name: string
+  note: string
+  camera_ids: string[]
+  created_at?: string
+}
+
+/** Дверь контроллера: показывается справочно, права выдаются контроллеру. */
+export interface CatalogDoor {
+  id: string
+  name: string
+}
+
+/**
+ * Контроллер СКУД в справочнике выдачи.
+ *
+ * Единица выдачи — контроллер. Двери перечислены, чтобы администратор видел,
+ * что именно открывает выдача: команда открытия уходит контроллеру с его
+ * собственным обозначением двери, и выдать права на отдельную дверь нельзя —
+ * проверить их в момент открытия было бы нечем.
+ */
+export interface CatalogController {
+  id: string
+  name: string
+  vendor: string
+  status: string
+  doors: CatalogDoor[]
+}
+
+/** Что выдано пользователю: камеры (лично и группами) и контроллеры СКУД. */
+export interface UserAccess {
+  all_cameras: boolean
+  camera_ids: string[]
+  group_ids: string[]
+  all_acs_controllers: boolean
+  controller_ids: string[]
+}
+
+/** «Как видит пользователь» — результат проверки, а не наше предположение. */
+export interface AccessPreview {
+  username: string
+  role: string
+  all_cameras: boolean
+  /** Сколько камер в парке всего: показывает, сколько осталось за кадром. */
+  total_cameras: number
+  cameras: CatalogCamera[]
+  all_controllers: boolean
+  total_controllers: number
+  controllers: CatalogController[]
+}
+
+export const accessAPI = {
+  /**
+   * Справочник выдачи: ВСЕ камеры, группы и контроллеры СКУД.
+   *
+   * Не тот же список, что в разделе «Камеры»: там он отфильтрован по
+   * доступу вошедшего, а здесь нужен полный — иначе администратор не смог
+   * бы выдать чужие камеры и контроллеры.
+   */
+  catalog: () =>
+    api.get<{
+      cameras: CatalogCamera[]
+      groups: CameraGroup[]
+      controllers: CatalogController[]
+    }>('/access/catalog'),
+  ofUser: (id: string) => api.get<UserAccess>(`/users/${id}/access`),
+  /** Сохраняет выдачу целиком: сервер заменяет старую, а не дополняет. */
+  save: (id: string, data: UserAccess) => api.put<UserAccess>(`/users/${id}/access`, data),
+  preview: (id: string) => api.get<AccessPreview>(`/users/${id}/access/preview`),
+}
+
+export const cameraGroupsAPI = {
+  list: () => api.get<CameraGroup[]>('/camera-groups'),
+  create: (data: { name: string; note: string; camera_ids: string[] }) =>
+    api.post<CameraGroup>('/camera-groups', data),
+  update: (id: string, data: { name: string; note: string; camera_ids: string[] }) =>
+    api.put<CameraGroup>(`/camera-groups/${id}`, data),
+  remove: (id: string) => api.delete(`/camera-groups/${id}`),
 }

@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -92,7 +93,13 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.svc.Update(r.Context(), id, req, middleware.UserFromContext(r.Context()))
+	user, err := h.svc.Update(
+		r.Context(), id, req,
+		middleware.UserFromContext(r.Context()),
+		// Клиент из токена: по нему сервис понимает, закроет ли правка
+		// доступ тому, кто её делает, — тогда её надо отклонить.
+		middleware.ClientFromContext(r.Context()),
+	)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, postgres.ErrUsernameTaken) {
@@ -139,6 +146,63 @@ func (h *UserHandler) AppInvite(w http.ResponseWriter, r *http.Request) {
 		"code":       service.FormatInviteCode(invite.Code),
 		"expires_at": invite.ExpiresAt,
 	})
+}
+
+// Block — POST /api/v1/users/{id}/block
+//
+// Временно закрывает доступ учётной записи. Время разблокировки
+// необязательно: без него блокировка бессрочная, и снять её можно только
+// вручную — это нужно, например, когда человека отстранили до разбирательства.
+//
+// Отвечает изменённой учётной записью, а не просто «ок»: интерфейс должен
+// показать срок, который записался, — иначе администратор не увидит разницы
+// между «заблокирован на час» и «заблокирован навсегда».
+func (h *UserHandler) Block(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+
+	var req struct {
+		// Until — до какого времени закрыт доступ (RFC3339). Пусто —
+		// бессрочно.
+		Until  *time.Time `json:"until"`
+		Reason string     `json:"reason"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	user, err := h.svc.SetBlock(
+		r.Context(), id, middleware.UserFromContext(r.Context()),
+		true, req.Until, req.Reason,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+// Unblock — POST /api/v1/users/{id}/unblock
+func (h *UserHandler) Unblock(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+
+	user, err := h.svc.SetBlock(
+		r.Context(), id, middleware.UserFromContext(r.Context()),
+		false, nil, "",
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
 }
 
 // Delete — DELETE /api/v1/users/{id}

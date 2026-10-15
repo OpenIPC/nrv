@@ -20,10 +20,22 @@ type ACSHandler struct {
 	// live — поток событий для клиентов. Необязателен: без него СКУД
 	// работает как раньше, просто проходы не появляются на стене.
 	live *live.Hub
+	// guard — кому какие контроллеры СКУД доступны.
+	//
+	// Право `acs.view` отвечает на «может ли смотреть раздел СКУД»,
+	// доступ к контроллеру — на «чьи двери ему видны и открываются».
+	// Без второй проверки любой наблюдатель открывал бы все двери объекта.
+	guard *AccessGuard
 }
 
 func NewACSHandler(svc *service.ACSService) *ACSHandler {
 	return &ACSHandler{svc: svc}
+}
+
+// WithGuard подключает проверку доступа к контроллерам СКУД.
+func (h *ACSHandler) WithGuard(guard *AccessGuard) *ACSHandler {
+	h.guard = guard
+	return h
 }
 
 // WithLive подключает поток событий: проход и отказ в доступе должны
@@ -39,6 +51,8 @@ func (h *ACSHandler) ListControllers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+
+	controllers = h.guard.FilterACSControllers(r, controllers)
 	if controllers == nil {
 		controllers = []domain.ACSController{}
 	}
@@ -56,6 +70,14 @@ func (h *ACSHandler) GetController(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "controller not found"})
 		return
 	}
+
+	// Скрытый контроллер отвечает тем же «не найден», что и несуществующий:
+	// по разнице ответов можно было бы перечислить весь СКУД.
+	if !h.guard.AllowsACSController(r, id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "controller not found"})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, ctrl)
 }
 
@@ -101,7 +123,7 @@ func (h *ACSHandler) ListEvents(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	events, total, err := h.svc.ListEvents(r.Context(), page, pageSize)
+	events, total, err := h.svc.ListEvents(r.Context(), page, pageSize, allowedACSControllerFilter(r, h.guard))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -278,6 +300,14 @@ func (h *ACSHandler) OpenDoor(w http.ResponseWriter, r *http.Request) {
 	controllerID, err := uuid.Parse(chi.URLParam(r, "controllerID"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid controller id"})
+		return
+	}
+
+	// Открытие двери — действие с физическим последствием, и проверка
+	// доступа здесь важнее, чем в списке: команда уходит в контроллер, и
+	// отменить её нельзя.
+	if !h.guard.AllowsACSController(r, controllerID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "controller not found"})
 		return
 	}
 

@@ -26,6 +26,15 @@ type RouterConfig struct {
 	CameraSvc *service.CameraService
 	EventSvc  *service.EventService
 	ACSSvc    *service.ACSService
+	// CameraAccessSvc — разграничение прав: что какому пользователю видно.
+	//
+	// nil означает «проверки выключены»: такой сервер покажет весь парк
+	// любому вошедшему, поэтому в бою он всегда задан (см. main.go).
+	CameraAccessSvc *service.CameraAccessService
+	// ACSUserAccessSvc — доступ к контроллерам СКУД: чьи двери открываются.
+	ACSUserAccessSvc *service.ACSUserAccessService
+	// AccessGrantSvc — выдача прав на объекты (запись из интерфейса).
+	AccessGrantSvc *service.AccessGrantService
 	// ACSAccessSvc — подсистема доступа: владельцы карт, группы, двери.
 	ACSAccessSvc *service.ACSAccessService
 	// CardCapture — сбор карт со считывателя контроллера.
@@ -197,6 +206,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	ptzH := handlers.NewPTZHandler(cfg.CameraSvc)
 	docsH := handlers.NewAPIDocHandler()
 	eventH := handlers.NewEventHandler(cfg.EventSvc)
+
 	// Подсистема доступа: владельцы карт, группы и двери.
 	// Отдельный обработчик, потому что это другая предметная область —
 	// люди и права, а не устройства и события.
@@ -234,6 +244,29 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	}
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
+	snapH := handlers.NewSnapshotHandler(cfg.DB, cfg.StorageSvc)
+
+	// Проверка доступа к объектам — одна на все обработчики, которые
+	// показывают камеру, её поток, её записи или контроллер СКУД.
+	//
+	// Часть из них работает вне JWT-группы: тег <img>, hls.js и нативные
+	// плееры не умеют передавать заголовок Authorization. Такие запросы
+	// опознаёт сам guard — по токену из параметра, а не из контекста.
+	accessGuard := handlers.NewAccessGuard(cfg.CameraAccessSvc, cfg.ACSUserAccessSvc, userSvc, tokenAuth)
+	accessH := handlers.NewAccessHandler(
+		cfg.AccessGrantSvc, cfg.CameraAccessSvc, cfg.ACSUserAccessSvc,
+		cfg.CameraSvc, cfg.ACSSvc, cfg.ACSAccessSvc, userSvc,
+	)
+	cameraH = cameraH.WithAccess(cfg.CameraAccessSvc)
+	streamH = streamH.WithGuard(accessGuard)
+	webrtcH = webrtcH.WithGuard(accessGuard)
+	camPreviewH = camPreviewH.WithGuard(accessGuard)
+	eventH = eventH.WithGuard(accessGuard)
+	recH = recH.WithGuard(accessGuard)
+	snapH = snapH.WithGuard(accessGuard)
+	// СКУД: контроллеры, двери и журнал проходов.
+	acsH = acsH.WithGuard(accessGuard)
+	acsAccessH = acsAccessH.WithGuard(accessGuard)
 	statsH := handlers.NewStatsHandler(cfg.DB, cfg.SysReader, cfg.HostAgent, cfg.SipStatus)
 	// Перенос настроек: выгрузка на другой сервер и приём файла с него.
 	//
@@ -255,7 +288,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	if cfg.RetentionSvc != nil {
 		detH.WithRetention(cfg.RetentionSvc)
 	}
-	snapH := handlers.NewSnapshotHandler(cfg.DB, cfg.StorageSvc)
+
 	recogH := handlers.NewRecognitionHandler(postgres.NewRecognitionRepo(cfg.DB))
 	if cfg.StorageSvc != nil {
 		recogH.WithStorage(cfg.StorageSvc)
@@ -398,6 +431,31 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// его сотруднику как QR-код, чтобы тот не набирал ни адрес сервера,
 			// ни пароль на телефоне.
 			r.Post("/users/{id}/app-invite", userH.AppInvite)
+
+			// Временная блокировка учётной записи: доступ закрывается сразу
+			// и на всех устройствах. Право то же — users.manage.
+			r.Post("/users/{id}/block", userH.Block)
+			r.Post("/users/{id}/unblock", userH.Unblock)
+
+			// Права на объекты: какие камеры видны пользователю.
+			//
+			// Те же право `users.manage`, что и у самой карточки пользователя:
+			// выдача доступа — часть управления учётной записью. Проверка
+			// доступа к камерам здесь НЕ применяется намеренно: иначе
+			// администратор видел бы в дереве выдачи только свои камеры и не
+			// смог бы выдать чужие.
+			r.Get("/users/{id}/access", accessH.GetUserAccess)
+			r.Put("/users/{id}/access", accessH.PutUserAccess)
+			r.Get("/users/{id}/access/preview", accessH.Preview)
+
+			// Справочник для формы выдачи: все камеры и группы камер.
+			r.Get("/access/catalog", accessH.Catalog)
+
+			// Группы камер — именованные наборы, которые выдают целиком.
+			r.Get("/camera-groups", accessH.ListGroups)
+			r.Post("/camera-groups", accessH.SaveGroup)
+			r.Put("/camera-groups/{id}", accessH.SaveGroup)
+			r.Delete("/camera-groups/{id}", accessH.DeleteGroup)
 
 			// Камеры
 			r.Get("/cameras", cameraH.List)

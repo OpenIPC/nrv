@@ -177,11 +177,36 @@ func (r *ACSRepo) Update(ctx context.Context, c *domain.ACSController, newPasswo
 	return err
 }
 
-func (r *ACSRepo) ListEvents(ctx context.Context, page, pageSize int) ([]domain.ACSEvent, int64, error) {
+func (r *ACSRepo) ListEvents(ctx context.Context, page, pageSize int, controllerIDs []uuid.UUID) ([]domain.ACSEvent, int64, error) {
+	// controllerIDs — контроллеры, доступные тому, кто пришёл.
+	//
+	// nil означает «без ограничений» и ставится только при полном доступе;
+	// пустой массив — «не видно ничего». Фильтруем в запросе, а не после
+	// чтения: иначе в странице оказалось бы меньше строк, чем просили,
+	// а total показал бы чужие проходы.
+	// Условие строим отдельно для счётчика и для выборки: в выборке есть
+	// JOIN с acs_cards, у которой тоже есть колонка controller_id, — без
+	// псевдонима имени база отказывается выполнять запрос.
+	filter := ""
+	args := []interface{}{}
+	if controllerIDs != nil {
+		filter = " WHERE controller_id = ANY($1::uuid[])"
+		args = append(args, controllerIDs)
+	}
+
 	var total int64
-	r.db.QueryRow(ctx, `SELECT COUNT(*) FROM acs_events`).Scan(&total)
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM acs_events`+filter, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	where := filter
+	if filter != "" {
+		where = " WHERE e.controller_id = ANY($1::uuid[])"
+	}
 
 	offset := (page - 1) * pageSize
+	args = append(args, pageSize, offset)
+	limitArg, offsetArg := itoa(len(args)-1), itoa(len(args))
 	// Имя владельца карты подтягиваем из справочника: в событии хранится
 	// только код с карты, а оператору нужно видеть, кто это. card_number
 	// записан как "facility:card" — так его отдаёт контроллер, поэтому
@@ -195,8 +220,9 @@ func (r *ACSRepo) ListEvents(ctx context.Context, page, pageSize int) ([]domain.
 		LEFT JOIN acs_cards c
 		       ON c.controller_id = e.controller_id
 		      AND (c.facility::text || ':' || c.card::text) = e.card_number
-		ORDER BY e.timestamp DESC LIMIT $1 OFFSET $2
-	`, pageSize, offset)
+		`+where+`
+		ORDER BY e.timestamp DESC LIMIT $`+limitArg+` OFFSET $`+offsetArg+`
+	`, args...)
 	if err != nil {
 		return nil, 0, err
 	}

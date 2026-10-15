@@ -26,10 +26,19 @@ type ACSAccessHandler struct {
 	// Лежит здесь, а не в сервисе доступа: это действие оператора
 	// в интерфейсе, а не часть расчёта прав.
 	capture *service.CardCaptureManager
+	// guard — кому какие контроллеры доступны: справочник дверей тоже
+	// ограничен доступом, иначе в списках были бы видны чужие двери.
+	guard *AccessGuard
 }
 
 func NewACSAccessHandler(svc *service.ACSAccessService, storage *service.StorageService) *ACSAccessHandler {
 	return &ACSAccessHandler{svc: svc, storage: storage}
+}
+
+// WithGuard подключает проверку доступа к контроллерам СКУД.
+func (h *ACSAccessHandler) WithGuard(guard *AccessGuard) *ACSAccessHandler {
+	h.guard = guard
+	return h
 }
 
 // WithCardCapture подключает сбор карт со считывателя.
@@ -376,6 +385,10 @@ func (h *ACSAccessHandler) ListDoors(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Справочник дверей тоже ограничен доступом: иначе в выпадающих списках
+	// и на схемах были бы видны двери чужих контроллеров.
+	doors = h.guard.FilterACSDoorControllers(r, doors)
 	if doors == nil {
 		doors = []domain.ACSDoor{}
 	}
