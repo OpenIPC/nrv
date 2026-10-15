@@ -36,12 +36,16 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR=""
 SKIP_BUILD=0
 WITH_NVIDIA=0
-WITH_SIP=0
 WITH_MINIO=0
 SKIP_MODELS=0
 SKIP_IMAGES=0
 SKIP_APT=0
 FORCE=0
+# Домофония: имя с ENABLE_ выбрано намеренно. Раньше переключатель назывался
+# WITH_SIP и «выключено» означало ноль, а проверка смотрела на непустоту
+# переменной — из-за этого version.txt обещал домофонию и без неё, и на
+# объекте можно было решить, что комплект умеет больше, чем умеет.
+ENABLE_SIP_ONLY=0
 COMPOSE_EXTRA_ARGS=()
 
 while [ $# -gt 0 ]; do
@@ -56,7 +60,7 @@ while [ $# -gt 0 ]; do
         # а правился только, например, список пакетов.
         --force) FORCE=1; shift ;;
         --with-nvidia) WITH_NVIDIA=1; shift ;;
-        --with-sip) WITH_SIP=1; WITH_SIP_FLAG="--sip"; shift ;;
+        --with-sip) ENABLE_SIP_ONLY=1; shift ;;
         --with-minio) WITH_MINIO=1; shift ;;
         --skip-models) SKIP_MODELS=1; shift ;;
         -h|--help)
@@ -153,11 +157,22 @@ fi
 
 # Образы необязательных служб, которые не поднимали на сборочной машине,
 # придётся скачать: на объекте их взять будет неоткуда.
-if [ "$WITH_SIP" -eq 1 ]; then
-    $COMPOSE --profile sip pull asterisk || true
+if [ "$ENABLE_SIP_ONLY" -eq 1 ]; then
+    echo "Скачиваю образ домофонии (Asterisk)…"
+    # Ошибку скачивания здесь не глотаем: комплект без образа Asterisk выглядит
+    # готовым, а на объекте домофония просто не поднимется — это уже случалось.
+    if ! $COMPOSE --profile sip pull asterisk; then
+        echo "Не удалось скачать образ Asterisk — комплект с домофонией не собрать." >&2
+        echo "Соберите без --with-sip или проверьте сеть и docker pull." >&2
+        exit 1
+    fi
 fi
 if [ "$WITH_MINIO" -eq 1 ]; then
-    $COMPOSE --profile minio pull minio || true
+    echo "Скачиваю образ MinIO…"
+    if ! $COMPOSE --profile minio pull minio; then
+        echo "Не удалось скачать образ MinIO (его нет в реестрах — см. README)." >&2
+        exit 1
+    fi
 fi
 
 # Список образов собираем сами, а не ключом compose.
@@ -192,9 +207,24 @@ if [ "${#IMAGES[@]}" -eq 0 ]; then
     exit 1
 fi
 
-# Расширение зависит от того, чем архивируем: установщик определяет
-# распаковщик по имени файла, и ошибка в имени обернулась бы битым образом
-# на объекте.
+    # Проверяем, что образы запрошенных функций действительно попали в комплект.
+    for need in "asterisk:домофония" "minio:MinIO"; do
+        need_image="${need%%:*}"; need_title="${need##*:}"
+        case "$need_image" in
+            asterisk) [ "$ENABLE_SIP_ONLY" -eq 1 ] || continue ;;
+            minio) [ "$WITH_MINIO" -eq 1 ] || continue ;;
+        esac
+        found=0
+        for image in "${IMAGES[@]}"; do
+            case "$image" in *"$need_image"*) found=1 ;; esac
+        done
+        if [ "$found" -eq 0 ]; then
+            echo "Образ для «${need_title}» не попал в комплект — на объекте эта" >&2
+            echo "функция не поднимется. Проверьте, что образ есть на машине:" >&2
+            echo "  docker images | grep ${need_image}" >&2
+            exit 1
+        fi
+    done
 if command -v zstd >/dev/null 2>&1; then
     ARCHIVE_EXT=".tar.zst"
 else
@@ -367,7 +397,15 @@ say "Версия и контрольные суммы"
     # поэтому установщик по этой записи переименует загруженные образы —
     # иначе compose счёл бы их чужими и полез бы собирать заново (без сети).
     echo "Префикс образов: $(project_prefix "$PROJECT_DIR")"
-    echo "Функции: детекция (профиль detection)${WITH_SIP:+ + домофония}${WITH_MINIO:+ + minio}"
+    # Функции перечисляем только включённые: раньше строка показывала
+    # «домофония» и при выключенной (переменная была задана нулём, а проверка
+    # смотрела на непустоту), и по этой строке на объекте можно было решить,
+    # что комплект умеет больше, чем умеет.
+    FEATURES_TXT="видеонаблюдение, детекция"
+    if [ "$ENABLE_SIP_ONLY" = "1" ]; then FEATURES_TXT="$FEATURES_TXT, домофония"; fi
+    if [ "$WITH_MINIO" = "1" ]; then FEATURES_TXT="$FEATURES_TXT, minio"; fi
+    if [ "$WITH_NVIDIA" = "1" ]; then FEATURES_TXT="$FEATURES_TXT, пакеты видеокарты"; fi
+    echo "Функции: $FEATURES_TXT"
     echo "Образы:"
     for image in "${IMAGES[@]}"; do echo "  $image"; done
 } > "$OUT_DIR/version.txt"
