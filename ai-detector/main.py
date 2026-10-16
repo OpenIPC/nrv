@@ -20,11 +20,23 @@ from ultralytics import YOLO
 from nats.aio.client import Client as NATS
 from nats.aio.errors import ErrTimeout
 
-from detection_config import DetectionConfigStore, LineCrossingTracker, bbox_center
+from detection_config import (
+    DetectionConfigStore,
+    LineCrossingTracker,
+    bbox_center,
+    similar_plate,
+)
 from recognition import FaceRecognizer, PlateRecognizer
 from plate_format import PlateFormat
 from plate_zone import has_plate_zone, zone_box
 from audio_pipeline import AudioPipeline
+from detection_engines import (
+    cuda_info,
+    load_engines,
+    onnx_device,
+    report_runtime,
+    resolve_device as resolve_engine_device,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("ai-detector")
@@ -207,20 +219,6 @@ PLATE_CONFIRM_FRAMES = int(os.getenv("PLATE_CONFIRM_FRAMES", "2"))
 plate_votes: dict[str, dict[str, int]] = {}
 
 
-def _similar_plate(a: str, b: str) -> bool:
-    """Считает строки «тем же номером» при расхождении в один символ.
-
-    Tesseract на соседних кадрах может прочитать одну букву иначе. Строгое
-    равенство тогда не даст подтвердиться настоящему номеру, поэтому
-    допускаем одно расхождение (при равной длине).
-    """
-    if a == b:
-        return True
-    if len(a) != len(b):
-        return False
-    return sum(1 for x, y in zip(a, b) if x != y) <= 1
-
-
 def confirm_plates(camera_id: str, texts: list[str]) -> list[str]:
     """Оставляет только номера, подтверждённые соседними кадрами.
 
@@ -233,7 +231,7 @@ def confirm_plates(camera_id: str, texts: list[str]) -> list[str]:
     for text in texts:
         count = 1
         for seen, seen_count in previous.items():
-            if _similar_plate(text, seen):
+            if similar_plate(text, seen):
                 count = max(count, seen_count + 1)
                 break
         current[text] = count
@@ -327,13 +325,60 @@ async def main():
     # (MEDIAMTX_RTSP) больше не читается.
     go2rtc_host = os.getenv("GO2RTC_RTSP", "viewer:viewer@host.docker.internal:8554")
 
-    detector = AIDetector(model_path=model_path, device=device, conf=conf, track=track)
+    # Движки видеоаналитики: настройки страницы «Детекция» важнее значений
+    # установки. Переменные окружения остаются запасным вариантом — ими
+    # работает установка, где настройки ещё не сохраняли, и работа продолжается,
+    # если база при старте недоступна.
+    engines = load_engines(db_url)
+    cuda_ok, cuda_name = cuda_info()
+    objects_device, objects_note = resolve_engine_device(engines.objects_device, cuda_ok)
+    faces_device, faces_note = resolve_engine_device(engines.faces_device, cuda_ok)
+    plates_device, plates_note = resolve_engine_device(engines.plates_device, cuda_ok)
+    # Что выйдет на самом деле для моделей onnxruntime (лица и OCR номеров):
+    # их провайдер свой, и CUDA в нём появляется только со сборкой onnxruntime-gpu.
+    faces_real, faces_real_note = onnx_device(faces_device)
+    plates_real, plates_real_note = onnx_device(plates_device)
+    plate_ocr_model = os.getenv("PLATE_OCR_MODEL", "")
+
+    if engines.source == "настройки сервера":
+        model_path = engines.model_path or model_path
+        conf = engines.confidence
+        track = engines.tracking
+        enable_faces = engines.faces_enabled
+        enable_plates = engines.plates_enabled
+        plate_region = engines.plate_region
+        enable_audio = engines.audio_enabled
+
+    # Объекты — основа остальных движков: лицо ищется у человека, номер —
+    # у машины, и без детекции объектов эти движки работать не могут.
+    # Поэтому выключенные объекты выключают и их, а причина уходит в отчёт.
+    objects_enabled = engines.enabled and engines.objects_enabled
+    if not objects_enabled and (enable_faces or enable_plates):
+        logger.warning(
+            "детекция объектов выключена — лица и номера работать не будут"
+        )
+        enable_faces = False
+        enable_plates = False
+
+    logger.info(
+        f"Движки: объекты={objects_enabled}({objects_device}), лица={enable_faces}({faces_device}), "
+        f"номера={enable_plates}({plates_device}), звук={enable_audio}; источник: {engines.source}"
+    )
+
+    # Детектор объектов поднимаем только когда он включён: веса занимают
+    # память (в том числе видеопамять), и грузить их ради выключенного
+    # движка незачем. При выключенном детекторе конвейер кадров не стартует.
+    detector = None
+    if objects_enabled:
+        detector = AIDetector(model_path=model_path, device=objects_device, conf=conf, track=track)
+    else:
+        logger.info("детекция объектов выключена в настройках")
 
     # Распознавание лиц и номеров. Модели тяжёлые, поэтому грузятся один раз,
     # но не при старте: пока они грузятся, конвейер уже работает (см.
     # DeferredModel — иначе скачивание весов блокировало всю детекцию).
-    face_holder = DeferredModel(lambda: FaceRecognizer(device=device)) if enable_faces else None
-    plate_holder = DeferredModel(lambda: PlateRecognizer(region=plate_region)) if enable_plates else None
+    face_holder = DeferredModel(lambda: FaceRecognizer(device=faces_device)) if enable_faces else None
+    plate_holder = DeferredModel(lambda: PlateRecognizer(region=plate_region, device=plates_device)) if enable_plates else None
     # Веса детектора номеров качаем в фоне: без них детектор работает
     # морфологией, и это не должно задерживать приём кадров.
     if enable_plates:
@@ -696,9 +741,28 @@ async def main():
 
             # Лица и номера отправляются отдельными событиями: они не привязаны
             # к объектам YOLO и живут по своим правилам (порог, справочник).
+            #
+            # Номера дополнительно проходят проверку повторов: камеры без
+            # зоны читают номер с каждого кадра потока, и без неё стоящая
+            # машина давала бы событие несколько раз в секунду.
+            #
+            # Отдельная переменная, а не переприсваивание plate_probes: этот
+            # блок — внутри вложенной функции, и присваивание превратило бы
+            # внешнюю переменную в локальную, сломав чтение (проверено на
+            # живом запуске: воркер падал с «cannot access local variable»).
+            plate_to_send = plate_probes
+            if plate_to_send and cfg is not None:
+                # Сначала отмечаем видимость (см. mark_plate_seen), потом уже
+                # решаем, выдавать ли событие.
+                for p in plate_to_send:
+                    config_store.mark_plate_seen(camera_id, p.text, cfg)
+                plate_to_send = [
+                    p for p in plate_to_send
+                    if not config_store.plate_reported_recently(camera_id, p.text, cfg)
+                ]
             await publish_recognition(nc, camera_id, "face", face_probes,
                                       snapshot_b64, frame_size)
-            await publish_recognition(nc, camera_id, "plate", plate_probes,
+            await publish_recognition(nc, camera_id, "plate", plate_to_send,
                                       snapshot_b64, frame_size)
 
         if want_snapshot:
@@ -723,7 +787,7 @@ async def main():
                 logger.error(f"Worker error: {e}")
                 await asyncio.sleep(1)
 
-    worker_task = asyncio.create_task(worker())
+    worker_task = asyncio.create_task(worker()) if detector is not None else None
 
     # Быстрый поток кадров зоны номера.
     #
@@ -784,6 +848,12 @@ async def main():
         if not probes:
             return
 
+        # Отмечаем видимость номера ещё до подтверждения по кадрам: пока
+        # машина в кадре, запись не должна устаревать по паузе — иначе тот же
+        # стоящий во дворе номер приносит событие заново (см. mark_plate_seen).
+        for p in probes:
+            config_store.mark_plate_seen(camera_id, p.text, cfg)
+
         # Номер должен прочитаться на нескольких кадрах подряд.
         #
         # Кадры зоны идут 2,5 раза в секунду, машина стоит в кадре
@@ -799,6 +869,16 @@ async def main():
                          f"{[p.text for p in probes]}")
             return
         probes = [p for p in probes if p.text in confirmed]
+
+        # Один номер — одно событие, пока машина не уехала.
+        #
+        # Именно здесь, а не в момент отправки: снимок события берётся из
+        # основного потока запросом к публикатору, и делать его для события,
+        # которое не будет отправлено, — лишняя работа на ровном месте.
+        probes = [p for p in probes
+                  if not config_store.plate_reported_recently(camera_id, p.text, cfg)]
+        if not probes:
+            return
 
         snapshot_b64 = None
         if send_snapshot and cfg.save_snapshots:
@@ -897,9 +977,12 @@ async def main():
     # успевают забирать кадры из очереди. Меньшее число воркеров и было
     # причиной выбрасывания кадров.
     plate_workers = int(os.getenv("PLATE_WORKERS", "6"))
-    plate_tasks = [
-        asyncio.create_task(plate_worker(i)) for i in range(plate_workers)
-    ]
+    # Воркеры зоны нужны, только когда распознавание номеров включено:
+    # иначе они ждали бы кадров, которые никто не читает.
+    plate_tasks = (
+        [asyncio.create_task(plate_worker(i)) for i in range(plate_workers)]
+        if enable_plates else []
+    )
     logger.info(f"Запущено воркеров распознавания номеров: {plate_workers}")
 
     # Конвейер детекции звука. Работает параллельно видео-аналитике:
@@ -916,9 +999,57 @@ async def main():
         )
         audio_task = asyncio.create_task(pipeline.run())
 
+    # Отчёт о том, что удалось поднять на самом деле. Пишем в базу: страница
+    # «Детекция» показывает его рядом с выбором оператора, чтобы настройка
+    # «считать на видеокарте» не выглядела исполненной, когда исполнить её
+    # не удалось — нет драйвера, не хватило памяти, нет провайдера в образе.
+    report_runtime(db_url, {
+        "cuda_available": cuda_ok,
+        "cuda_name": cuda_name,
+        "engines": {
+            "objects": {
+                "enabled": detector is not None,
+                "device": objects_device if detector is not None else "",
+                "model": model_path,
+                "detail": objects_note or "",
+            },
+            "faces": {
+                "enabled": face_holder is not None,
+                # Устройство берём фактическое: лица считает onnxruntime, а
+                # его провайдер не тот же, что у torch (см. onnx_device).
+                "device": faces_real if face_holder is not None else "",
+                "model": "buffalo_l",
+                "detail": (faces_real_note or faces_note
+                           or ("" if face_holder is not None else "выключено в настройках")),
+            },
+            "plates": {
+                "enabled": plate_holder is not None,
+                "device": plates_real if plate_holder is not None else "",
+                "model": plate_ocr_model,
+                "detail": (plates_real_note or plates_note
+                           or ("" if plate_holder is not None else "выключено в настройках")),
+            },
+            "audio": {
+                "enabled": audio_task is not None,
+                # TFLite считает только на процессоре: показывать выбор
+                # устройства здесь было бы обманом.
+                "device": "cpu",
+                "model": "yamnet",
+                "detail": "" if audio_task is not None else "выключено в настройках",
+            },
+        },
+        "warnings": [n for n in (objects_note, faces_note, plates_note) if n],
+    })
+
     logger.info("AI Detector running. Ctrl+C to stop.")
     try:
-        await worker_task
+        if worker_task is not None:
+            await worker_task
+        else:
+            # Все движки выключены: конвейер кадров не запущен, но процесс
+            # должен жить — иначе контейнер перезапускался бы по кругу.
+            # Настройки вступят в силу после перезапуска (кнопка на странице).
+            await asyncio.Event().wait()
     except asyncio.CancelledError:
         pass
     finally:

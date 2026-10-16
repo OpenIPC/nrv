@@ -335,6 +335,10 @@ services:
       args:
         BASE_IMAGE: "${AI_BASE_IMAGE:-ubuntu:24.04}"
         TORCH_INDEX_URL: "${AI_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}"
+        # Сборка onnxruntime: обычная или с поддержкой видеокарты (лица и
+        # OCR номеров). Без onnxruntime-gpu выбор «видеокарта» для этих
+        # движков ничего не меняет.
+        ONNXRUNTIME_PACKAGE: "${AI_ONNXRUNTIME_PACKAGE:-onnxruntime}"
     restart: unless-stopped
     environment:
       NATS_URL: "nats://nats:4222"

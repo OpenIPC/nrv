@@ -204,9 +204,14 @@ class PlateRecognizer:
     # прочитано, и ждём следующий кадр.
     OCR_BUDGET_MS = 1000
 
-    def __init__(self, region: str = "ru"):
+    def __init__(self, region: str = "ru", device: str = "auto"):
         self.available = False
         self.region = region
+        # Устройство для нейросетевого OCR. Строка chosen на странице
+        # настроек детекции: «auto» — модель сама решит, cpu — только
+        # процессор. Значение влияет на fast-plate-ocr, где его можно
+        # задать; морфологический запасной путь всегда считает на CPU.
+        self.device = device
         self._pytesseract = None
         # Семафор вместо блокировки: параллельность ограничена, но не сведена
         # к одному вызову.
@@ -641,7 +646,7 @@ class PlateRecognizer:
         try:
             res = self._vehicle_model.predict(
                 img, conf=self.VEHICLE_CONF, classes=self.VEHICLE_CLASSES,
-                verbose=False)
+                device=self.device, verbose=False)
         except Exception as e:
             logger.debug(f"сбой поиска машин: {e}")
             return []
@@ -684,7 +689,8 @@ class PlateRecognizer:
             return None
 
         try:
-            res = self._model.predict(img, conf=self.MODEL_CONF, verbose=False)
+            res = self._model.predict(
+                img, conf=self.MODEL_CONF, device=self.device, verbose=False)
         except Exception as e:
             logger.debug(f"сбой модели номеров: {e}")
             return []
@@ -718,7 +724,7 @@ class PlateRecognizer:
             try:
                 from fast_plate_ocr import LicensePlateRecognizer
                 self._ocr_model = LicensePlateRecognizer(
-                    hub_ocr_model=self.ocr_model_name, device="auto")
+                    hub_ocr_model=self.ocr_model_name, device=self.device)
                 logger.info(f"OCR номеров: модель {self.ocr_model_name}")
             except Exception as e:
                 logger.warning(f"OCR номеров недоступен, остаёмся на tesseract: {e}")

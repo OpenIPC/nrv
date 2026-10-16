@@ -853,6 +853,9 @@ if [ "$WANT_GPU" -eq 1 ]; then
     set_env AI_DEVICE cuda
     set_env AI_BASE_IMAGE "nvidia/cuda:12.6.2-cudnn-runtime-ubuntu24.04"
     set_env AI_TORCH_INDEX_URL "https://download.pytorch.org/whl/cu126"
+    # Лица и OCR номеров считает onnxruntime, а не torch: без GPU-сборки
+    # этого пакета выбор «видеокарта» для них ничего не меняет.
+    set_env AI_ONNXRUNTIME_PACKAGE onnxruntime-gpu
     # Compose сам подхватывает docker-compose.override.yml, поэтому режим
     # сохраняется и в автозапуске, и в ручных командах без -f.
     if [ "$DRY_RUN" -eq 0 ]; then
@@ -866,6 +869,7 @@ else
     set_env AI_DEVICE cpu
     set_env AI_BASE_IMAGE ubuntu:24.04
     set_env AI_TORCH_INDEX_URL "https://download.pytorch.org/whl/cpu"
+    set_env AI_ONNXRUNTIME_PACKAGE onnxruntime
     # На машине без карты проброс GPU только мешает запуску.
     if [ "$DRY_RUN" -eq 0 ]; then
         rm -f docker-compose.override.yml

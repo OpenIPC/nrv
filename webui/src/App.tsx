@@ -14,6 +14,7 @@ import RecordingsPage from './pages/RecordingsPage'
 import LogsPage from './pages/LogsPage'
 import MajesticPage from './pages/MajesticPage'
 import RecognitionPage from './pages/RecognitionPage'
+import DetectionPage from './pages/DetectionPage'
 import ACSPage from './pages/ACSPage'
 import IntercomPage from './pages/IntercomPage'
 import IntercomAccountPage from './pages/IntercomAccountPage'
@@ -237,6 +238,18 @@ export default function App() {
                   element={
                     <RequirePermission perm="settings.manage">
                       <SettingsPage />
+                    </RequirePermission>
+                  }
+                />
+                {/* Движки видеоаналитики: чем и на каком устройстве считать.
+                    Право — на настройки сервера, потому что перезапуск
+                    контейнеров аналитики затрагивает весь сервер, а не одну
+                    камеру. */}
+                <Route
+                  path="/detection"
+                  element={
+                    <RequirePermission perm="settings.manage">
+                      <DetectionPage />
                     </RequirePermission>
                   }
                 />

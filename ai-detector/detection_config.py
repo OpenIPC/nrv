@@ -113,6 +113,11 @@ class DetectionConfigStore:
         self._last_event: dict[tuple[str, str], float] = {}
         # Состояние неподвижности: (камера, класс) -> (x, y, с какого времени)
         self._static_state: dict[tuple[str, str], tuple[float, float, float]] = {}
+        # Номера, о которых уже сообщили: камера -> {номер: когда видели
+        # последний раз}. Нужно, чтобы стоящая в кадре машина давала одно
+        # событие, а не по одному на каждое распознавание (см.
+        # plate_reported_recently).
+        self._plate_reported: dict[str, dict[str, float]] = {}
 
     def get(self, camera_id: str) -> Optional[DetectionConfig]:
         """Настройки камеры; None — если детекция для неё не настроена/выключена."""
@@ -360,6 +365,108 @@ class DetectionConfigStore:
             return True
         self._last_event[key] = now
         return False
+
+    def plate_reported_recently(self, camera_id: str, text: str,
+                               cfg: DetectionConfig) -> bool:
+        """Сообщали ли уже про этот номер, пока машина не уехала.
+
+        Зачем отдельная проверка, а не in_cooldown. Номера читаются с кадров
+        зоны дважды в секунду, и пауза по классу здесь не годится: она глушила
+        бы и вторую машину, приехавшую через полминуты. Ключ — сам номер,
+        поэтому другой номер проходит сразу.
+
+        Похожие прочтения считаются тем же номером. OCR на соседних кадрах
+        путает одну букву или цифру: на живой камере один и тот же номер
+        читался как E217HT14, E217HT16, E217HY14, E217HT17 — и каждое новое
+        прочтение давало отдельное событие с уведомлением. Пока номер виден,
+        расхождение в один символ — это дрожание распознавания, а не вторая
+        машина.
+
+        Событие выдаётся один раз, пока номер виден: время встречи
+        обновляется на каждом подтверждении. Как только машина уехала (номер
+        перестал подтверждаться), запись перестаёт обновляться и через
+        cooldown_sec тот же номер считается новым событием — повторный въезд
+        не теряется.
+
+        Проверено на живой камере: без этой проверки машина, стоящая во дворе,
+        дала 481 событие за восемь минут — уведомления шли потоком.
+        """
+        if cfg.cooldown_sec <= 0:
+            return False
+        now = time.time()
+        seen = self._plate_reported.setdefault(camera_id, {})
+
+        for known, last in list(seen.items()):
+            if now - last >= cfg.cooldown_sec:
+                # Прочтение устарело: машина могла уехать и вернуться, и тогда
+                # это уже новое событие, а не дрожание распознавания.
+                del seen[known]
+                continue
+            if known == text or similar_plate(known, text):
+                # Номер всё ещё в кадре: продлеваем «уже сообщено».
+                seen[known] = now
+                return True
+
+        seen[text] = now
+        self._prune_plate_state(now)
+        return False
+
+    def mark_plate_seen(self, camera_id: str, text: str,
+                       cfg: DetectionConfig) -> None:
+        """Отмечает, что номер виден в кадре — не решая про событие.
+
+        Зачем отдельно от plate_reported_recently. Распознавание даёт
+        прочтения и между событиями: один и тот же номер выходит как
+        E217HT14, E217HT16, E217HY14. Если обновлять «последний раз видели»
+        только при выдаче события, запись успевает устареть по паузе — и тот
+        же стоящий во дворе номер приносит событие заново (проверено на
+        живой камере: раз в минуту).
+
+        Новых записей здесь не появляется: первое событие по номеру
+        создаёт plate_reported_recently, а этот метод только подтверждает,
+        что номер всё ещё перед камерой.
+        """
+        if cfg.cooldown_sec <= 0:
+            return
+        seen = self._plate_reported.get(camera_id)
+        if not seen:
+            return
+        now = time.time()
+        for known in list(seen):
+            if known == text or similar_plate(known, text):
+                seen[known] = now
+                return
+
+    def _prune_plate_state(self, now: float):
+        """Убирает записи о номерах, которых давно не видно.
+
+        Без чистки словарь рос бы безгранично: на въезде номера сменяются
+        каждый день, и память занимали бы все когда-либо увиденные.
+        """
+        limit = now - 3600
+        for camera_id in list(self._plate_reported):
+            seen = self._plate_reported[camera_id]
+            for text in [t for t, at in seen.items() if at < limit]:
+                del seen[text]
+            if not seen:
+                del self._plate_reported[camera_id]
+
+
+def similar_plate(a: str, b: str) -> bool:
+    """Считает строки «тем же номером» при расхождении в один символ.
+
+    Распознавание на соседних кадрах может прочитать одну букву или цифру
+    иначе: на живом проезде один и тот же номер выходил как E217HT14 и
+    E217HT16. Строгое равенство тогда плодит события, а полное совпадение
+    требовать нельзя — настоящий номер так и не подтвердился бы.
+
+    Длина должна совпадать: разные длины — обычно разные номера или мусор.
+    """
+    if a == b:
+        return True
+    if len(a) != len(b):
+        return False
+    return sum(1 for x, y in zip(a, b) if x != y) <= 1
 
 
 def bbox_center(bbox: dict, frame_w: int, frame_h: int) -> dict:

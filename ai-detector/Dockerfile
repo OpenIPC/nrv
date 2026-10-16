@@ -12,6 +12,14 @@ FROM ${BASE_IMAGE}
 # Индекс PyTorch: CPU-сборка по умолчанию или CUDA 12.6 для видеокарты.
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 
+# Сборка onnxruntime: обычная (только процессор) или onnxruntime-gpu.
+#
+# Зачем отдельный выбор. Лица (insightface) и OCR номеров (fast-plate-ocr)
+# работают через onnxruntime, а не через torch: видеокарта им доступна только
+# в GPU-сборке. С обычным onnxruntime выбор «видеокарта» на странице «Детекция»
+# для этих движков ничего не меняет, и отчёт честно показывает «cpu».
+ARG ONNXRUNTIME_PACKAGE=onnxruntime
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -51,6 +59,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get purge -y --auto-remove build-essential python3.12-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Замена CPU-сборки onnxruntime на GPU-сборку.
+#
+# Почему именно так. insightface и fast-plate-ocr тянут onnxruntime как
+# зависимость, и в GPU-варианте его надо сначала убрать: два пакета
+# предоставляют один и тот же модуль, и какой из них окажется рабочим —
+# вопрос порядка установки, а не желания. Пакет onnxruntime-gpu несёт свои
+# библиотеки CUDA/cuDNN для Python, поэтому базовый образ должен быть с CUDA.
+#
+# Версия закреплена точно и намеренно (проверено на живом стенде).
+#
+# Свежие сборки onnxruntime-gpu (1.23 и новее, проверено на 1.31) собраны под
+# CUDA 13: системная проверка при запуске падает с «Failed to create
+# CUDAExecutionProvider. Require cuDNN 9.* and CUDA 13.*», провайдер молча
+# уходит на процессор — и лица с номерами остаются на CPU, хотя отчёт
+# показывает «cuda». Версия 1.22.0 работает с CUDA 12.6 (та же, что у torch
+# в этом образе): проверено созданием сессии — провайдеры
+# ['CUDAExecutionProvider', 'CPUExecutionProvider'].
+ARG ONNXRUNTIME_GPU_SPEC="onnxruntime-gpu==1.22.0"
+RUN if [ "$ONNXRUNTIME_PACKAGE" = "onnxruntime-gpu" ]; then \
+        pip uninstall -y --break-system-packages onnxruntime \
+        && pip install --break-system-packages --no-cache-dir "$ONNXRUNTIME_GPU_SPEC"; \
+    fi
+
+# Проверка при сборке: список провайдеров виден в журнале сборки.
+# На CPU-варианте в списке будет только CPUExecutionProvider — это норма.
+RUN python -c "import onnxruntime as ort; print('onnxruntime', ort.__version__, '| провайдеры:', ort.get_available_providers())" || true
 
 COPY . .
 

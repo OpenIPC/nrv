@@ -90,6 +90,10 @@ var routeRules = []Rule{
 	{Prefix: "/api/v1/plates", Perm: domain.PermEventsManage},
 	{Prefix: "/api/v1/recognition", Method: http.MethodGet, Perm: domain.PermEventsView},
 	{Prefix: "/api/v1/recognition", Perm: domain.PermDetectionManage},
+	// Видеоаналитика: чем считать, на каком устройстве и перезапуск
+	// контейнеров аналитики. Право то же, что на настройки детекции в
+	// карточке камеры: это одна и та же тема — что и как искать.
+	{Prefix: "/api/v1/detection", Perm: domain.PermDetectionManage},
 
 	// Звук: прослушивание (события звука и настройки).
 	{Prefix: "/api/v1/audio", Perm: domain.PermAudioListen},

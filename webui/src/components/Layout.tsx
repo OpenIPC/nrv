@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Video, AlertTriangle, HardDrive,
   Shield, LogOut, Camera, Search, Settings, ScanFace, Volume2, Share2,
   LayoutGrid, Bell, Server, ScrollText, Activity, Users, Map, EthernetPort, UserCog,
-  PhoneCall
+  PhoneCall, Cpu
 } from 'lucide-react'
 
 // Ключи перевода, а не готовые подписи: подпись берётся из словаря
@@ -29,6 +29,9 @@ const navItems = [
   // одной и той же ситуации — сначала смотрят логи, потом стример.
   { to: '/majestic', icon: Activity, key: 'nav.majestic', perm: 'cameras.manage' },
   { to: '/recognition', icon: ScanFace, key: 'nav.recognition', perm: 'events.view' },
+  // Детекция рядом с распознаванием: там справочники лиц и номеров,
+  // здесь — движки, на которых всё это считается.
+  { to: '/detection', icon: Cpu, key: 'nav.detection', perm: 'settings.manage' },
   { to: '/acs', icon: Shield, key: 'nav.acs', perm: 'acs.view' },
   // Планы помещений: схемы этажей с расстановкой устройств. Отдельно от
   // СКУД: там права и доступы, здесь место и состояние оборудования.

@@ -2927,6 +2927,111 @@ export const recognitionAPI = {
     api.patch<RecognitionSettings>('/settings/recognition', data),
   stats: () => api.get<{ faces: number; plates: number }>('/recognition/stats'),
 }
+
+// --- Движки видеоаналитики ---
+
+/**
+ * На чём считать движок.
+ *
+ * auto — видеокарта, если она есть; cpu — только процессор; gpu — только
+ * видеокарта. Выбор «gpu» без видеокарты — не ошибка сохранения: движок
+ * поднимется на процессоре и напишет об этом в отчёте, потому что увидеть
+ * причину медленной работы оператор должен на странице, а не в журнале.
+ */
+export type EngineDevice = 'auto' | 'cpu' | 'gpu'
+
+/** Детекция объектов (YOLO) и трекинг. */
+export interface ObjectEngineSettings {
+  enabled: boolean
+  device: EngineDevice
+  /** Файл весов. Пусто — значение, заданное при установке. */
+  model_path: string
+  /** Порог инференса модели: отсекает слабые находки до фильтров формы. */
+  confidence: number
+  /** Порог объединения рамок при подавлении пересечений. */
+  iou: number
+  /** Вести устойчивые номера объектов (ByteTrack). */
+  tracking: boolean
+}
+
+/** Распознавание лиц (insightface). */
+export interface FaceEngineSettings {
+  enabled: boolean
+  device: EngineDevice
+  min_confidence: number
+  /** Искать лица только там, где уже найден человек. */
+  requires_person: boolean
+}
+
+/** Распознавание автомобильных номеров. */
+export interface PlateEngineSettings {
+  enabled: boolean
+  device: EngineDevice
+  region: string
+  interval: number
+  confirm_frames: number
+}
+
+/**
+ * Анализ звука (YAMNet).
+ *
+ * Устройства здесь нет намеренно: модель работает через TFLite, а он считает
+ * только на процессоре. Выбор, который ничего не меняет, хуже его отсутствия.
+ */
+export interface AudioEngineSettings {
+  enabled: boolean
+  threshold: number
+}
+
+/** Все движки вместе — как один раздел настроек. */
+export interface DetectionEnginesSettings {
+  enabled: boolean
+  objects: ObjectEngineSettings
+  faces: FaceEngineSettings
+  plates: PlateEngineSettings
+  audio: AudioEngineSettings
+  updated_at?: string
+}
+
+/** Что движок сделал на самом деле. Докладывает детектор при запуске. */
+export interface EngineRuntime {
+  enabled: boolean
+  device: string
+  model: string
+  detail: string
+}
+
+/**
+ * Отчёт детектора о своём состоянии.
+ *
+ * Нужен, чтобы настройка «считать на видеокарте» не выглядела исполненной
+ * тогда, когда исполнить её не удалось.
+ */
+export interface DetectionRuntime {
+  reported_at: string
+  host: string
+  cuda_available: boolean
+  cuda_name?: string
+  engines: Record<string, EngineRuntime>
+  warnings?: string[]
+}
+
+export interface DetectionEnginesResponse {
+  settings: DetectionEnginesSettings
+  runtime: DetectionRuntime | null
+  /** Возможен ли перезапуск: служба управления хостом должна быть доступна. */
+  restart_available: boolean
+}
+
+export const detectionEnginesAPI = {
+  get: () => api.get<DetectionEnginesResponse>('/settings/detection'),
+  /** Сохраняет присланные блоки. Перезапуск — отдельным действием. */
+  update: (
+    data: Partial<Pick<DetectionEnginesSettings, 'enabled' | 'objects' | 'faces' | 'plates' | 'audio'>>,
+  ) => api.patch<{ settings: DetectionEnginesSettings; restart_required: boolean }>('/settings/detection', data),
+  restart: () =>
+    api.post<{ ok: boolean; dir: string; services: string[]; output: string }>('/detection/restart'),
+}
 // --- Пользователи и права ---
 
 /** Учётная запись сервера. */

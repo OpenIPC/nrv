@@ -6,7 +6,7 @@
 """
 from detection_config import (
     point_in_polygon, line_side, LineCrossingTracker, bbox_center,
-    DetectionConfig, DetectionConfigStore,
+    DetectionConfig, DetectionConfigStore, similar_plate,
 )
 
 failures = []
@@ -202,6 +202,67 @@ check("лица: выключены в настройках",
       store.should_recognize_faces(
           cfg_with(detect_types=["object"], face_requires_person=False), [
               {"object_class": "person", "confidence": 0.9}]) is False)
+
+print()
+if failures:
+    print(f"ПРОВАЛЕНО: {len(failures)} — {failures}")
+    raise SystemExit(1)
+
+# --- Повторы событий по номеру ---
+#
+# Стоящая во дворе машина распознаётся дважды в секунду. Без подавления это
+# дало на живой камере 481 событие за восемь минут, а уведомления шли
+# непрерывно. Проверяем: одно событие на номер, пока он в кадре; другой
+# номер проходит сразу; при выключенной паузе не подавляем ничего.
+plate_store = DetectionConfigStore("")
+plate_cfg = cfg_with(cooldown_sec=30)
+
+check("номера: первый раз про номер сообщаем",
+      plate_store.plate_reported_recently("cam1", "E217HT14", plate_cfg) is False)
+check("номера: повтор, пока машина в кадре, не сообщаем",
+      plate_store.plate_reported_recently("cam1", "E217HT14", plate_cfg) is True)
+check("номера: другой номер сообщаем сразу",
+      plate_store.plate_reported_recently("cam1", "A123BC77", plate_cfg) is False)
+check("номера: та же машина на другой камере — своё событие",
+      plate_store.plate_reported_recently("cam2", "E217HT14", plate_cfg) is False)
+check("номера: пауза выключена — не подавляем",
+      plate_store.plate_reported_recently("cam3", "E217HT14", cfg_with(cooldown_sec=0)) is False
+      and plate_store.plate_reported_recently("cam3", "E217HT14", cfg_with(cooldown_sec=0)) is False)
+
+# --- Дрожание распознавания ---
+#
+# Один и тот же номер на соседних кадрах читается по-разному: на живой
+# камере выходило E217HT14, E217HT16, E217HY14, E217HT17 — и каждое новое
+# прочтение давало отдельное событие с уведомлением. Пока номер виден,
+# расхождение в один символ — это дрожание, а не вторая машина.
+check("похожесть: одна буква — тот же номер",
+      similar_plate("E217HT14", "E217HT16") is True)
+check("похожесть: два отличия — разные номера",
+      similar_plate("E217HT14", "E217AB14") is False)
+check("похожесть: разные длины — разные номера",
+      similar_plate("E217H", "E217HT14") is False)
+
+check("номера: второе прочтение того же номера подавляем",
+      plate_store.plate_reported_recently("cam4", "E217HT14", plate_cfg) is False
+      and plate_store.plate_reported_recently("cam4", "E217HT16", plate_cfg) is True)
+check("номера: третье прочтение тоже подавляем",
+      plate_store.plate_reported_recently("cam4", "E217HY14", plate_cfg) is True)
+check("номера: другая машина (два отличия) — новое событие",
+      plate_store.plate_reported_recently("cam4", "A123BC77", plate_cfg) is False)
+
+# Пока машина в кадре, запись не должна устаревать по паузе: иначе тот же
+# стоящий номер приносит событие заново раз в cooldown_sec (проверено на
+# живой камере). mark_plate_seen обновляет «видели» на каждом распознавании.
+seen_store = DetectionConfigStore("")
+seen_cfg = cfg_with(cooldown_sec=30)
+check("видимость: первое событие выдаём",
+      seen_store.plate_reported_recently("cam5", "E217HT14", seen_cfg) is False)
+seen_store.mark_plate_seen("cam5", "E217HT16", seen_cfg)  # другое прочтение того же
+check("видимость: после отметки повтор не выдаём",
+      seen_store.plate_reported_recently("cam5", "E217HY14", seen_cfg) is True)
+check("видимость: отметка не создаёт записей для чужих номеров",
+      seen_store.plate_reported_recently("cam6", "A123BC77", seen_cfg) is False
+      and seen_store.plate_reported_recently("cam6", "A123BC77", seen_cfg) is True)
 
 print()
 if failures:

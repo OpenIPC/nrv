@@ -41,6 +41,11 @@ const (
 	// образа занимает больше минуты, и обрывать его нельзя: сертификат может
 	// остаться выпущенным, а служба — нет.
 	certificateTimeout = 240 * time.Second
+	// detectionRestartTimeout — перезапуск контейнеров видеоаналитики.
+	// Обычно это несколько секунд, но остановка детектора ждёт завершения
+	// текущего кадра, а запуск — освобождения памяти видеокарты прежним
+	// контейнером. Минуты на это не уходит, но и 30 секунд мало.
+	detectionRestartTimeout = 180 * time.Second
 )
 
 // Client обращается к агенту через локальный сокет.
@@ -102,6 +107,10 @@ func (c *Client) call(ctx context.Context, action string, payload map[string]any
 		// Выпуск сертификата ходит в Let's Encrypt и может скачивать образ
 		// acme.sh, поэтому лимит здесь свой.
 		deadline = time.Now().Add(certificateTimeout)
+	case "detection_restart":
+		// Перезапуск контейнеров детекции: агент останавливает и поднимает
+		// их, а это дольше обычного запроса.
+		deadline = time.Now().Add(detectionRestartTimeout)
 	}
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl

@@ -66,6 +66,16 @@ UPDATE_LOG = BACKUP_DIR / "update.log"
 GIT_TIMEOUT = 180
 BUILD_TIMEOUT = 3600
 
+# Сервисы видеоаналитики: их перезапускает страница настроек детекции.
+# Публикатор кадров идёт вместе с детектором: он готовит кадры по тем же
+# зонам и с той же частотой, и рассинхрон после смены настроек выглядел бы
+# как «детектор видит не то».
+DETECTION_SERVICES = ("ai-detector", "frame-publisher")
+
+# Перезапуск контейнеров аналитики: остановка ждёт завершения текущего кадра,
+# а запуск — освобождения памяти видеокарты прежним контейнером.
+DETECTION_RESTART_TIMEOUT = 180
+
 # Состояние установки: только одно обновление за раз.
 _update_lock = threading.Lock()
 _update_state = {
@@ -1094,6 +1104,50 @@ def docker_env():
     return {"DOCKER_CONFIG": str(DOCKER_CONFIG_DIR)}
 
 
+def restart_detection(payload) -> dict:
+    """Перезапускает контейнеры видеоаналитики.
+
+    Зачем это делает агент, а не бэкенд. Docker и каталог установки есть
+    только на хосте; бэкенд работает в контейнере и доступа к ним не имеет —
+    так уязвимость бэкенда не становится уязвимостью сервера.
+
+    Почему перезапуск, а не перечитывание настроек на ходу. Движки детекции
+    (YOLO, insightface, YAMNet) держат веса в памяти, а устройство вычислений
+    выбирается при загрузке модели. Прочитать новое значение на ходу можно,
+    применить его к уже загруженной модели — нет.
+
+    Почему `up -d --force-recreate`, а не `restart`. Пересоздание гарантирует,
+    что контейнер заново получит переменные окружения из .env: часть
+    параметров задаётся при установке, и после её правки простой перезапуск
+    оставил бы старые значения.
+    """
+    install_dir = payload.get("dir") or INSTALL_DIR_DEFAULT
+    services = payload.get("services") or list(DETECTION_SERVICES)
+
+    # Каталог проверяем до запуска compose: без него docker compose взял бы
+    # чужой файл из текущего каталога и перезапустил бы не то.
+    if not os.path.isdir(install_dir):
+        return {"ok": False, "error": f"каталог установки не найден: {install_dir}"}
+
+    compose = compose_command()
+    if not compose:
+        return {"ok": False, "error": "docker compose не найден на этом хосте"}
+
+    code, out, err = run(
+        compose + ["--profile", "detection", "up", "-d", "--no-deps",
+                   "--force-recreate", *services],
+        timeout=DETECTION_RESTART_TIMEOUT, check=False,
+        cwd=install_dir, env=docker_env(),
+    )
+    tail = "\n".join((out + "\n" + err).splitlines()[-20:])
+    if code != 0:
+        log.error("перезапуск аналитики не удался: %s", tail)
+        return {"ok": False, "error": f"контейнеры аналитики не перезапустились:\n{tail}"}
+
+    log.info("аналитика перезапущена в %s: %s", install_dir, ", ".join(services))
+    return {"ok": True, "dir": install_dir, "services": services, "output": tail}
+
+
 def compose_command():
     """Определяет, чем вызывать compose на этом хосте.
 
@@ -1577,6 +1631,7 @@ HANDLERS = {
     "update_rollback": rollback_update,
     "update_status": update_status,
     "turn_cert_issue": turn_cert_issue,
+    "detection_restart": restart_detection,
     "ping": lambda payload: {"ok": True, "pong": True},
 }
 

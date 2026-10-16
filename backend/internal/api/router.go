@@ -288,6 +288,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	if cfg.RetentionSvc != nil {
 		detH.WithRetention(cfg.RetentionSvc)
 	}
+	// Настройки движков видеоаналитики: чем и на каком устройстве считать.
+	// Перезапуск контейнеров выполняет служба на хосте — у бэкенда нет
+	// доступа к docker намеренно (см. handlers/updates.go).
+	detEnginesH := handlers.NewDetectionEnginesHandler(
+		postgres.NewDetectionSettingsRepo(cfg.DB), cfg.HostAgent, cfg.InstallDir,
+	)
 
 	recogH := handlers.NewRecognitionHandler(postgres.NewRecognitionRepo(cfg.DB))
 	if cfg.StorageSvc != nil {
@@ -575,6 +581,17 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// Настройки распознавания лиц и автомобильных номеров
 			r.Get("/settings/recognition", recogH.GetSettings)
 			r.Patch("/settings/recognition", recogH.UpdateSettings)
+
+			// Движки видеоаналитики: что поднято, на процессоре или на
+			// видеокарте, с какими моделями и порогами. Отдельно от настроек
+			// распознавания: там справочники и правила отбора событий, здесь —
+			// чем вообще считать.
+			r.Get("/settings/detection", detEnginesH.Get)
+			r.Patch("/settings/detection", detEnginesH.Update)
+			// Перезапуск контейнеров аналитики. Настройки движков вступают в
+			// силу при запуске: веса моделей грузятся в память, и устройство
+			// вычислений выбирается там же.
+			r.Post("/detection/restart", detEnginesH.Restart)
 
 			// Уведомления о событиях (Telegram).
 			// Отдельно от /settings: на этой странице есть проверка связи

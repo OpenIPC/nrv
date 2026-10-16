@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -261,6 +262,14 @@ func (r *DetectionSettingsRepo) GetServerSettings(ctx context.Context) (*domain.
 	// присмотр оказался бы выключен с нулевым периодом проверки.
 	applyMajesticDefaults(&out.Notifications.Majestic)
 
+	// Настройки движков видеоаналитики: если раздел ещё не сохраняли,
+	// отдаём значения по умолчанию. Пустая секция выглядела бы как «всё
+	// выключено», хотя детекция в это время работает — на значениях,
+	// заданных при установке.
+	if out.Detection.UpdatedAt.IsZero() {
+		out.Detection = domain.DefaultDetectionEngines()
+	}
+
 	return out, rows.Err()
 }
 
@@ -335,6 +344,21 @@ func applySetting(out *domain.ServerSettings, key string, raw []byte) error {
 			Token:    loaded.Token,
 			TokenSet: loaded.Token != "",
 		}
+	case "detection":
+		// Настройки движков видеоаналитики. Эту же строку читает сам
+		// детектор: он берёт её напрямую из таблицы, а не через этот
+		// репозиторий (см. ai-detector/detection_engines.py).
+		if err := json.Unmarshal(raw, &out.Detection); err != nil {
+			return fmt.Errorf("decode detection engines settings: %w", err)
+		}
+	case "detection_runtime":
+		// Отчёт детектора о том, что он поднял на самом деле. Пишет его
+		// только детектор, читает интерфейс.
+		var loaded domain.DetectionRuntimeStatus
+		if err := json.Unmarshal(raw, &loaded); err != nil {
+			return fmt.Errorf("decode detection runtime status: %w", err)
+		}
+		out.DetectionRuntime = &loaded
 	}
 	return nil
 }
@@ -370,6 +394,47 @@ func applyMajesticDefaults(cfg *domain.MajesticWatchConfig) {
 	if cfg.RestartCooldownSeconds <= 0 {
 		cfg.RestartCooldownSeconds = def.RestartCooldownSeconds
 	}
+}
+
+// UpdateDetectionEngines сохраняет настройки движков видеоаналитики.
+//
+// Отдельным ключом и отдельным методом, как каналы уведомлений: страница
+// настроек у детекции своя, и сохранение настроек сервера не должно её
+// затирать. Ключ читает ещё и сам детектор — уже без участия бэкенда.
+func (r *DetectionSettingsRepo) UpdateDetectionEngines(ctx context.Context, cfg domain.DetectionEnginesSettings) error {
+	cfg.UpdatedAt = time.Now()
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("собрать настройки движков: %w", err)
+	}
+	_, err = r.db.Exec(ctx, `
+		INSERT INTO server_settings (key, value, updated_at) VALUES ($1, $2::jsonb, now())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+		"detection", string(b))
+	if err != nil {
+		return fmt.Errorf("сохранить настройки движков: %w", err)
+	}
+	return nil
+}
+
+// SetDetectionRuntime записывает отчёт детектора о своём состоянии.
+//
+// Пишет его сам детектор при запуске: на каком устройстве он считает и какие
+// модели поднял. Хранится в базе, потому что детектор и бэкенд — разные
+// процессы, и другого канала сообщить о себе у детектора нет.
+func (r *DetectionSettingsRepo) SetDetectionRuntime(ctx context.Context, st domain.DetectionRuntimeStatus) error {
+	b, err := json.Marshal(st)
+	if err != nil {
+		return fmt.Errorf("собрать отчёт детектора: %w", err)
+	}
+	_, err = r.db.Exec(ctx, `
+		INSERT INTO server_settings (key, value, updated_at) VALUES ($1, $2::jsonb, now())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+		"detection_runtime", string(b))
+	if err != nil {
+		return fmt.Errorf("сохранить отчёт детектора: %w", err)
+	}
+	return nil
 }
 
 // UpdateServerSettings сохраняет переданные секции настроек.
