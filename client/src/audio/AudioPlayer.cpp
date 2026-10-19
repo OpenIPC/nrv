@@ -2,7 +2,54 @@
 
 #include <QDebug>
 #include <QMetaObject>
+#include <QStringList>
 #include <QTimer>
+
+namespace {
+
+/**
+ * Создаёт элемент вывода звука, перебирая варианты.
+ *
+ * Зачем перебор. `autoaudiosink` выбирает устройство сам, но на Windows он
+ * иногда не находит ни одного (нет плагина wasapi, служба звука ещё не
+ * поднялась, вывод занят эксклюзивно). Тогда звука нет вовсе, хотя дорожка
+ * в потоке есть, и по интерфейсу это неотличимо от «у камеры нет звука».
+ * Явные приёмники пробуем по очереди — так звук появляется там, где
+ * авто-выбор не сработал. Порядок: сначала то, что обычно есть на Windows,
+ * потом Linux.
+ *
+ * Переменная NVR_AUDIO_SINK остаётся: она нужна проверкам без звуковой
+ * карты (fakesink) и разбору жалоб «звука нет» на стенде.
+ */
+GstElement *createAudioSink(QString *usedName)
+{
+    QStringList candidates;
+    const QByteArray override = qgetenv("NVR_AUDIO_SINK");
+    if (!override.isEmpty()) {
+        candidates << QString::fromLatin1(override);
+    }
+    candidates << QStringLiteral("autoaudiosink")
+               << QStringLiteral("wasapi2sink")
+               << QStringLiteral("directsoundsink")
+               << QStringLiteral("wasapisink")
+               << QStringLiteral("pulsesink")
+               << QStringLiteral("alsasink");
+
+    for (const QString &name : candidates) {
+        GstElement *element = gst_element_factory_make(name.toLatin1().constData(), "out");
+        if (element) {
+            if (usedName) {
+                *usedName = name;
+            }
+            qInfo("Звук: вывод через %s", qPrintable(name));
+            return element;
+        }
+        qWarning("Звук: элемент вывода %s недоступен", qPrintable(name));
+    }
+    return nullptr;
+}
+
+} // namespace
 
 AudioPlayer::AudioPlayer(QObject *parent)
     : QObject(parent)
@@ -163,11 +210,9 @@ bool AudioPlayer::buildPipeline(const QString &url)
     // Устройство вывода можно подменить переменной окружения: это нужно
     // проверкам на машине без звуковой карты (fakesink) и разбору жалоб
     // «звука нет» на стенде — так видно, доходит ли звук до клиента вообще.
-    QByteArray sinkName = qgetenv("NVR_AUDIO_SINK");
-    if (sinkName.isEmpty()) {
-        sinkName = QByteArrayLiteral("autoaudiosink");
-    }
-    GstElement *sink = gst_element_factory_make(sinkName.constData(), "out");
+    // Если `autoaudiosink` не находит устройство, пробуем явные приёмники —
+    // см. createAudioSink.
+    GstElement *sink = createAudioSink(nullptr);
 
     // Заглушка на случай, если разборщик всё же отдаст не звук: дорожка
     // без получателя останавливает весь конвейер. Обычно сюда ничего не
@@ -196,6 +241,10 @@ bool AudioPlayer::buildPipeline(const QString &url)
             m_volumeElement = nullptr;
             m_videoSink = nullptr;
             setStatus(tr("Звук недоступен: не хватает элементов GStreamer"));
+            // В журнал — имена: без них на дежурной машине нельзя понять,
+            // чего именно не хватает в поставке GStreamer.
+            qWarning("Звук недоступен: не удалось создать все элементы конвейера "
+                     "(rtspsrc/decodebin/audioconvert/audioresample/volume/вывод)");
             return false;
         }
     }
@@ -246,6 +295,7 @@ bool AudioPlayer::buildPipeline(const QString &url)
             // «Нет звука у камеры» — самый частый случай, и это не поломка
             // клиента: часть камер отдаёт только видео.
             self->queueStatus(tr("Звук не получен: %1").arg(text));
+            qWarning("Звук не получен: %s", qPrintable(text));
             break;
         }
         case GST_MESSAGE_STATE_CHANGED: {
@@ -298,6 +348,7 @@ void AudioPlayer::start(const QString &url)
     QTimer::singleShot(5000, this, [this]() {
         if (m_pipeline && !m_audioLinked) {
             setStatus(tr("У камеры нет звуковой дорожки"));
+            qWarning("Звук: в потоке нет звуковой дорожки (камера отдаёт только видео?)");
         }
     });
 

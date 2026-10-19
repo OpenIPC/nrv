@@ -10,6 +10,10 @@ import Nvr 1.0
 ApplicationWindow {
     id: wallWindow
 
+    Theme {
+        id: theme
+    }
+
     /** Экран профиля, который показывает это окно. */
     property var wallScreen: null
 
@@ -20,7 +24,7 @@ ApplicationWindow {
     // одновременная запись visible и visibility даёт предупреждение
     // и непредсказуемое поведение.
     title: qsTr("NVR — видеостена")
-    color: "#0d1117"
+    color: theme.bg
 
     WallView {
         anchors.fill: parent

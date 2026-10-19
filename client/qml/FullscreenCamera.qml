@@ -11,6 +11,10 @@ import Nvr 1.0
 Window {
     id: viewer
 
+    Theme {
+        id: theme
+    }
+
     property string cameraId: ""
     property string cameraName: ""
 
@@ -73,6 +77,11 @@ Window {
 
     StreamPlayer {
         id: player
+        // Резервный адрес от сервера: если сохранённый в настройках адрес
+        // медиасервера не отвечает, плеер один раз попробует этот — и
+        // напишет об этом в журнал.
+        alternateUrl: viewer.cameraId.length > 0
+                      ? Api.streamFallbackUrl(viewer.cameraId, false) : ""
     }
 
     // Адрес пересчитываем по счётчику revisions: prepareStream отвечает
@@ -149,10 +158,12 @@ Window {
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.margins: 16
-            radius: 6
-            color: "#99000000"
-            width: header.width + 24
-            height: header.height + 16
+            radius: theme.radiusSmall
+            color: "#b30b0f14"
+            border.width: 1
+            border.color: theme.border
+            width: header.width + 28
+            height: header.height + 18
 
             Row {
                 id: header
@@ -161,18 +172,20 @@ Window {
 
                 Label {
                     text: viewer.cameraName.length > 0 ? viewer.cameraName : qsTr("Камера")
-                    color: "white"
+                    color: theme.text
                     font.pixelSize: 16
+                    font.bold: true
                 }
 
                 Label {
                     text: player.status
-                    color: "#ffb300"
+                    color: theme.warning
+                    font.pixelSize: theme.fontSmall
                 }
             }
         }
 
-        Button {
+        AppButton {
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: 16
@@ -195,7 +208,7 @@ Window {
             spacing: 8
             width: 200
 
-            Button {
+            AppButton {
                 width: parent.width
                 visible: Api.can("audio.listen")
                 checkable: true
@@ -224,7 +237,7 @@ Window {
             // Разговор: нажал — говоришь. Кнопка не «залипающая», потому
             // что открытый микрофон без присмотра — это запись всего,
             // что происходит в диспетчерской.
-            Button {
+            AppButton {
                 width: parent.width
                 visible: Api.can("audio.talk")
                 text: Talk.active ? qsTr("Говорить… (отпустить — стоп)") : qsTr("Удерживать для разговора")
@@ -236,8 +249,8 @@ Window {
                 width: parent.width
                 visible: text.length > 0
                 text: audio.status.length > 0 ? audio.status : Talk.status
-                color: "#ffb300"
-                font.pixelSize: 11
+                color: theme.warning
+                font.pixelSize: theme.fontSmall
                 wrapMode: Text.WordWrap
             }
 
@@ -248,8 +261,8 @@ Window {
                 width: parent.width
                 visible: Api.talkError.length > 0
                 text: Api.talkError
-                color: "#ff8a80"
-                font.pixelSize: 11
+                color: theme.danger
+                font.pixelSize: theme.fontSmall
                 wrapMode: Text.WordWrap
             }
 
@@ -259,8 +272,8 @@ Window {
                 width: parent.width
                 visible: Api.audioError.length > 0
                 text: Api.audioError
-                color: "#ff8a80"
-                font.pixelSize: 11
+                color: theme.danger
+                font.pixelSize: theme.fontSmall
                 wrapMode: Text.WordWrap
             }
         }

@@ -119,6 +119,17 @@ public:
      */
     Q_INVOKABLE QString streamUrl(const QString &cameraId, bool subStream) const;
 
+    /**
+     * Резервный адрес потока — тот же поток, но на адресе, который назвал
+     * сервер (`server_ip` в ответе `/client-stream`).
+     *
+     * Нужен, когда в настройках рабочего места остался адрес медиасервера
+     * от прежней установки: тогда сохранённый адрес не отвечает, а сервер
+     * при этом знает правильный. Пустая строка — резервного адреса нет
+     * (он совпадает с основным или сервер его не назвал).
+     */
+    Q_INVOKABLE QString streamFallbackUrl(const QString &cameraId, bool subStream) const;
+
     /** Снимок кадра: показывается в ячейке, пока нет потока. */
     Q_INVOKABLE QString snapshotUrl(const QString &cameraId) const;
 
@@ -350,6 +361,12 @@ private:
     // ответу сервера, чтобы не спрашивать его на каждую отрисовку ячейки.
     QHash<QString, QString> m_mainUrls;
     QHash<QString, QString> m_subUrls;
+    // Те же потоки на адресе, который назвал сервер. Заполняется только
+    // когда сохранённый в настройках адрес медиасервера с ним расходится:
+    // именно в этом случае клиент до сервера не доходит, а видео «висит
+    // на подключении».
+    QHash<QString, QString> m_fallbackMainUrls;
+    QHash<QString, QString> m_fallbackSubUrls;
     int m_streamsRevision = 0;
 
     QVariantList m_plans;

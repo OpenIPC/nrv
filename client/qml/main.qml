@@ -11,10 +11,15 @@ import Nvr 1.0
 ApplicationWindow {
     id: mainWindow
 
+    Theme {
+        id: theme
+    }
+
     visible: true
     width: 760
     height: 560
     title: qsTr("NVR — рабочие места")
+    color: theme.bg
 
     /** Окна стен: нужны, чтобы закрыть их при выходе и пересобрать при правке профиля. */
     property var wallWindows: []

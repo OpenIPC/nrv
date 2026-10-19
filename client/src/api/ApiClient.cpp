@@ -186,6 +186,8 @@ void ApiClient::logout()
     // Адреса потоков содержат учётные данные: после выхода их нужно забыть.
     m_mainUrls.clear();
     m_subUrls.clear();
+    m_fallbackMainUrls.clear();
+    m_fallbackSubUrls.clear();
 
     // Раскладка стен остаётся, а вот чужие схемы этажей — нет: следующий
     // пользователь входит со своими правами и своим списком планов.
@@ -457,11 +459,40 @@ void ApiClient::prepareStream(const QString &cameraId)
         const QString mainPath = info.value(QStringLiteral("main_path")).toString();
         const QString subPath = info.value(QStringLiteral("sub_path")).toString();
 
+        // Резервный адрес — тот же поток на хосте, который назвал сервер.
+        //
+        // Зачем: в настройках рабочего места может остаться адрес
+        // медиасервера от прежней установки (или локальный). Тогда клиент
+        // стучится в никуда, ячейка вечно висит на «Подключение…», а
+        // причина не видна — сохранённая настройка читается раньше ответа
+        // сервера. Сервер же отдаёт адрес, по которому клиент сам к нему
+        // дошёл, и он заведомо рабочий.
+        const QString serverIp = info.value(QStringLiteral("server_ip")).toString();
+        const bool hasFallback = !serverIp.isEmpty() && serverIp != host;
+        const auto buildFallback = [&](const QString &path) {
+            return QStringLiteral("rtsp://%1%2:%3%4")
+                .arg(credentials, serverIp)
+                .arg(port)
+                .arg(path);
+        };
+
         if (!mainPath.isEmpty()) {
             m_mainUrls.insert(cameraId, buildUrl(mainPath));
+            if (hasFallback) {
+                m_fallbackMainUrls.insert(cameraId, buildFallback(mainPath));
+            }
         }
         if (!subPath.isEmpty()) {
             m_subUrls.insert(cameraId, buildUrl(subPath));
+            if (hasFallback) {
+                m_fallbackSubUrls.insert(cameraId, buildFallback(subPath));
+            }
+        }
+
+        if (hasFallback) {
+            qInfo("Адрес медиасервера в настройках (%s) отличается от серверного (%s): "
+                  "при ошибке потока клиент переключится на серверный",
+                  qPrintable(host), qPrintable(serverIp));
         }
 
         ++m_streamsRevision;
@@ -764,6 +795,16 @@ QString ApiClient::streamUrl(const QString &cameraId, bool subStream) const
         .arg(credentials, m_mediaHost)
         .arg(m_mediaPort)
         .arg(path);
+}
+
+QString ApiClient::streamFallbackUrl(const QString &cameraId, bool subStream) const
+{
+    if (cameraId.isEmpty()) {
+        return QString();
+    }
+    const QHash<QString, QString> &cache = subStream ? m_fallbackSubUrls : m_fallbackMainUrls;
+    const auto cached = cache.constFind(cameraId);
+    return cached != cache.constEnd() ? cached.value() : QString();
 }
 
 QString ApiClient::snapshotUrl(const QString &cameraId) const

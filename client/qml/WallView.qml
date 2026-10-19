@@ -11,6 +11,15 @@ import Nvr 1.0
 Item {
     id: wall
 
+    Theme {
+        id: theme
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        color: theme.bg
+    }
+
     Component.onCompleted: console.log("стена создана, ячеек:", columns * rows)
 
     /**
@@ -132,23 +141,35 @@ Item {
         ToolBar {
             Layout.fillWidth: true
 
+            background: Rectangle {
+                color: theme.surface
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    height: 1
+                    color: theme.border
+                }
+            }
+
             RowLayout {
                 anchors.fill: parent
                 spacing: 8
 
                 Label {
                     text: qsTr("Оператор: %1").arg(Api.userName)
-                    Layout.leftMargin: 8
+                    color: theme.text
+                    font.pixelSize: theme.fontBase
+                    Layout.leftMargin: 12
                 }
 
                 // Состояние потока событий. Без него непонятно, почему
                 // тревог нет: не происходит событий или потеряна связь.
                 Rectangle {
                     id: liveIndicator
-                    width: 10
-                    height: 10
-                    radius: 5
-                    color: Live.connected ? "#4caf50" : "#e05252"
+                    width: 9
+                    height: 9
+                    radius: 4.5
+                    color: Live.connected ? theme.ok : theme.danger
                     Layout.leftMargin: 8
 
                     MouseArea {
@@ -169,7 +190,8 @@ Item {
                     text: wall.selectedCell >= 0
                           ? qsTr("Выберите камеру для ячейки %1").arg(wall.selectedCell + 1)
                           : qsTr("Ячейка → камера в списке. Двойное нажатие — на весь экран, правая кнопка — действия")
-                    color: "#666"
+                    color: theme.textMuted
+                    font.pixelSize: theme.fontSmall
                     Layout.fillWidth: true
                 }
 
@@ -177,7 +199,7 @@ Item {
                 // картинками, 4×4 — шестнадцать камер разом.
                 Repeater {
                     model: [[2, 2], [3, 3], [4, 4]]
-                    delegate: Button {
+                    delegate: AppButton {
                         text: modelData[0] + "×" + modelData[1]
                         checkable: true
                         checked: wall.screen !== null && wall.screen.columns === modelData[0]
@@ -194,7 +216,7 @@ Item {
                 // Что показывает рабочее место: сетка потоков или схема
                 // этажа. Кнопка «План» появляется только при праве на
                 // планы — прятать недоступное правило проекта.
-                Button {
+                AppButton {
                     text: qsTr("Сетка")
                     checkable: true
                     checked: wall.content !== "plan"
@@ -205,7 +227,7 @@ Item {
                     }
                 }
 
-                Button {
+                AppButton {
                     visible: Api.can("plans.view")
                     text: qsTr("План")
                     checkable: true
@@ -233,14 +255,15 @@ Item {
                     }
                 }
 
-                Button {
+                AppButton {
                     text: qsTr("Обновить")
                     enabled: !Api.busy
                     onClicked: Api.refreshCameras()
                 }
 
-                Button {
+                AppButton {
                     text: qsTr("Выйти")
+                    Layout.rightMargin: 8
                     onClicked: Api.logout()
                 }
             }
@@ -252,9 +275,18 @@ Item {
             spacing: 0
 
             Frame {
-                Layout.preferredWidth: 260
+                Layout.preferredWidth: 264
                 Layout.fillHeight: true
                 padding: 0
+                background: Rectangle {
+                    color: theme.surface
+                    Rectangle {
+                        anchors.right: parent.right
+                        width: 1
+                        height: parent.height
+                        color: theme.border
+                    }
+                }
                 // В режиме плана список отнимал бы место у схемы этажа:
                 // назначать камеры там не во что.
                 visible: wall.content !== "plan"
@@ -266,6 +298,7 @@ Item {
                     model: Api.cameras
 
                     delegate: ItemDelegate {
+                        id: camDelegate
                         width: ListView.view.width
                         text: modelData.name && modelData.name.length > 0
                               ? modelData.name
@@ -275,13 +308,27 @@ Item {
                                 wall.screen.assign(wall.selectedCell, modelData.id)
                             }
                         }
+
+                        contentItem: Text {
+                            text: camDelegate.text
+                            color: theme.text
+                            font.pixelSize: theme.fontBase
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: 12
+                        }
+
+                        background: Rectangle {
+                            color: camDelegate.hovered ? theme.surfaceAlt : "transparent"
+                        }
                     }
 
                     Label {
                         anchors.centerIn: parent
                         visible: cameraList.count === 0
                         text: Api.busy ? qsTr("Загрузка…") : qsTr("Камер нет")
-                        color: "#888"
+                        color: theme.textMuted
+                        font.pixelSize: theme.fontSmall
                     }
                 }
             }
@@ -303,8 +350,8 @@ Item {
 
         GridLayout {
             columns: wall.columns
-            columnSpacing: 2
-            rowSpacing: 2
+            columnSpacing: 3
+            rowSpacing: 3
 
             Repeater {
                 id: cells

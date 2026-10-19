@@ -2,6 +2,7 @@
 
 #include <QImage>
 #include <QDebug>
+#include <QUrl>
 
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
@@ -162,6 +163,26 @@ bool StreamPlayer::buildPipeline(const QString &url)
                 g_error_free(err);
             }
             g_free(debug);
+
+            // Сначала пробуем резервный адрес, потом программный декодер.
+            //
+            // Порядок именно такой: если сохранённый в настройках адрес
+            // медиасервера неверен, никакой декодер не поможет — нужен
+            // другой адрес, который сервер уже назвал в ответе.
+            const QString current = self->m_url;
+            if (!self->m_alternateUrl.isEmpty()
+                    && self->m_alternateUrl != current
+                    && self->m_fallbackTriedFor != current) {
+                self->m_fallbackTriedFor = self->m_alternateUrl;
+                const QString alternate = self->m_alternateUrl;
+                qWarning("Поток не открылся (%s), пробую адрес сервера: %s",
+                         qPrintable(text), qPrintable(alternate));
+                QMetaObject::invokeMethod(self, [self, alternate]() {
+                    self->startUrl(alternate, false);
+                }, Qt::QueuedConnection);
+                break;
+            }
+
             self->queueStatus(text);
             // Аппаратный декодер мог не подняться (нет устройства VAAPI,
             // драйвер видеокарты, удалённый рабочий стол). Пробуем ещё раз
@@ -192,7 +213,21 @@ bool StreamPlayer::buildPipeline(const QString &url)
     return true;
 }
 
+void StreamPlayer::setAlternateUrl(const QString &value)
+{
+    if (m_alternateUrl == value) {
+        return;
+    }
+    m_alternateUrl = value;
+    emit alternateUrlChanged();
+}
+
 void StreamPlayer::start(const QString &url)
+{
+    startUrl(url, true);
+}
+
+void StreamPlayer::startUrl(const QString &url, bool resetFallback)
 {
     if (url.isEmpty()) {
         stop();
@@ -209,16 +244,34 @@ void StreamPlayer::start(const QString &url)
     // оставшиеся от старого потока кадры показывались бы как «живые».
     stop();
 
+    // Новый основной адрес — значит и резервный надо пробовать заново.
+    // При переключении на резервный адрес флаг намеренно сохраняется,
+    // иначе недоступность обоих адресов давала бы бесконечный цикл
+    // перезапусков.
+    if (resetFallback) {
+        m_fallbackTriedFor.clear();
+    }
+
     if (!buildPipeline(url)) {
         return;
     }
 
     m_url = url;
     gst_element_set_state(m_pipeline, GST_STATE_PLAYING);
-    // Пишем выбранный декодер: без этой строки в журнале не отличить
-    // «поток не идёт» от «декодер не поднялся» — на стенде это разные
-    // поломки с разным лечением.
-    qInfo("Поток открыт, декодер %s", qPrintable(m_decoder));
+    // Пишем выбранный декодер и адрес: без этого строки в журнале не
+    // отличить «поток не идёт» от «декодер не поднялся», а главное — не
+    // видно, к какому серверу клиент пошёл на самом деле.
+    //
+    // Статус «Поток открыт» печатается ещё до подключения: это значит
+    // только то, что конвейер собран. Если в адресе окажется локальный
+    // хост (например, сохранённый с прежней установки media/host), видео
+    // не пойдёт никогда, и без этой строки причину искать вслепую.
+    // Учётные данные из адреса убираем: пароль в журнал попадать не должен.
+    QUrl safeUrl(url);
+    safeUrl.setPassword(QString());
+    safeUrl.setUserName(QString());
+    qInfo("Поток открыт, декодер %s, адрес %s", qPrintable(m_decoder),
+          qPrintable(safeUrl.toString()));
     setStatus(tr("Подключение…"));
     emit activeChanged();
 }

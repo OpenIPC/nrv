@@ -31,6 +31,15 @@ class StreamPlayer : public QObject
     Q_PROPERTY(bool active READ active NOTIFY activeChanged)
     /** Состояние словами: показывается в ячейке вместо чёрного экрана. */
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    /**
+     * Резервный адрес того же потока.
+     *
+     * Если основной адрес не отвечает (в настройках рабочего места остался
+     * медиасервер от прежней установки), плеер один раз пробует этот — и
+     * сообщает об этом в журнал. Пустая строка — резервного адреса нет.
+     */
+    Q_PROPERTY(QString alternateUrl READ alternateUrl WRITE setAlternateUrl
+               NOTIFY alternateUrlChanged)
 
 public:
     explicit StreamPlayer(QObject *parent = nullptr);
@@ -38,6 +47,8 @@ public:
 
     bool active() const { return m_pipeline != nullptr; }
     QString status() const { return m_status; }
+    QString alternateUrl() const { return m_alternateUrl; }
+    void setAlternateUrl(const QString &value);
 
     /** Запускает поток. Повторный вызов с тем же адресом ничего не делает. */
     Q_INVOKABLE void start(const QString &url);
@@ -47,6 +58,7 @@ public:
 signals:
     void activeChanged();
     void statusChanged();
+    void alternateUrlChanged();
     /** Новый кадр. Приходит из потока GStreamer, а не из главного. */
     void frameReady(const QImage &image);
 
@@ -74,6 +86,16 @@ private:
      * в главный поток.
      */
     void scheduleSoftwareFallback();
+    /**
+     * Запуск конкретного адреса.
+     *
+     * resetFallback — сбрасывать ли признак «резервный адрес уже
+     * пробовали». При обычном запуске его надо сбросить: сменилась камера
+     * или сервер, и пробовать снова есть смысл. При переключении на
+     * резервный адрес — нет, иначе при недоступности обоих адресов плеер
+     * перезапускался бы бесконечно.
+     */
+    void startUrl(const QString &url, bool resetFallback);
 
     GstElement *m_pipeline = nullptr;
     QString m_url;
@@ -82,4 +104,7 @@ private:
     QString m_decoder;
     /** Адрес, для которого уже перешли на программный декодер. */
     QString m_softwareForUrl;
+    /** Резервный адрес и признак того, что его уже пробовали для m_url. */
+    QString m_alternateUrl;
+    QString m_fallbackTriedFor;
 };

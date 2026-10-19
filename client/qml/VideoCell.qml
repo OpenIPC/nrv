@@ -30,12 +30,25 @@ Rectangle {
     /** Правая кнопка: меню действий с ячейкой (открыть на весь экран, очистить). */
     signal cellMenuRequested()
 
-    color: "#0d1117"
-    border.width: cell.alarmed ? 3 : (cell.selected ? 2 : 1)
-    border.color: cell.alarmed ? "#e05252" : (cell.selected ? "#2196f3" : "#1f2733")
+    color: theme.bg
+    border.width: cell.alarmed ? 2 : (cell.selected ? 2 : 1)
+    border.color: cell.alarmed ? theme.danger
+                               : (cell.selected ? theme.accent : theme.border)
+    radius: theme.radiusSmall
+
+    Theme {
+        id: theme
+    }
 
     StreamPlayer {
         id: player
+        // Резервный адрес — тот, что назвал сам сервер в ответе
+        // /client-stream. Нужен, когда в настройках рабочего места
+        // остался адрес медиасервера от прежней установки: сохранённая
+        // настройка читается раньше ответа сервера, и без запасного
+        // адреса ячейка навсегда осталась бы на «Подключение…».
+        alternateUrl: cell.cameraId.length > 0
+                      ? Api.streamFallbackUrl(cell.cameraId, true) : ""
     }
 
     Component.onCompleted: console.log("ячейка", cell.cellIndex, "готова")
@@ -109,7 +122,8 @@ Rectangle {
         anchors.centerIn: parent
         visible: cell.cameraId.length === 0
         text: qsTr("Ячейка %1").arg(cell.cellIndex + 1)
-        color: "#4a5768"
+        color: theme.textMuted
+        font.pixelSize: theme.fontSmall
     }
 
     // Причина, по которой камеры нет: чаще всего её удалили на сервере,
@@ -121,23 +135,34 @@ Rectangle {
         visible: cell.cameraId.length > 0 && !player.active
                  && Api.cameraError(cell.cameraId).length > 0
         text: Api.cameraError(cell.cameraId)
-        color: "#e05252"
-        font.pixelSize: 12
+        color: theme.danger
+        font.pixelSize: theme.fontSmall
         wrapMode: Text.WordWrap
         horizontalAlignment: Text.AlignHCenter
     }
 
     // Состояние подключения: причина видна словами, а не только по картинке.
-    Label {
+    // Подложка обязательна: сообщение ложится поверх изображения, и без неё
+    // светлый текст на светлом кадре не читается.
+    Rectangle {
         anchors.left: parent.left
+        anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.margins: 6
+        height: statusLabel.implicitHeight + 10
+        radius: theme.radiusSmall - 2
+        color: "#cc0b0f14"
         visible: player.status.length > 0
-        text: player.status
-        color: "#ffb300"
-        font.pixelSize: 11
-        wrapMode: Text.WordWrap
-        width: parent.width - 12
+
+        Label {
+            id: statusLabel
+            anchors.fill: parent
+            anchors.margins: 5
+            text: player.status
+            color: theme.warning
+            font.pixelSize: theme.fontSmall
+            wrapMode: Text.WordWrap
+        }
     }
 
     // Мигание при тревоге. Три вспышки, а не постоянное свечение:
@@ -146,9 +171,10 @@ Rectangle {
     Rectangle {
         id: alarmFlash
         anchors.fill: parent
-        color: "#e05252"
+        color: theme.danger
         opacity: 0
         visible: cell.alarmed
+        radius: theme.radiusSmall
 
         SequentialAnimation {
             running: alarmFlash.visible
@@ -166,15 +192,26 @@ Rectangle {
         }
     }
 
-    Label {
+    // Бейдж тревоги: подложка + скругление, чтобы надпись не сливалась
+    // с пестрым кадром камеры.
+    Rectangle {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.margins: 6
         visible: cell.alarmed
-        text: qsTr("ТРЕВОГА")
-        color: "#ff8a80"
-        font.bold: true
-        font.pixelSize: 11
+        width: alarmLabel.implicitWidth + 12
+        height: alarmLabel.implicitHeight + 6
+        radius: theme.radiusSmall - 2
+        color: "#d92b2b"
+
+        Label {
+            id: alarmLabel
+            anchors.centerIn: parent
+            text: qsTr("ТРЕВОГА")
+            color: "#ffffff"
+            font.bold: true
+            font.pixelSize: theme.fontSmall - 1
+        }
     }
 
     MouseArea {
