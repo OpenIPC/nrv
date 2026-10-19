@@ -668,12 +668,14 @@ fi
 say "Настройки окружения"
 
 random_secret() {
+    # Аргумент — длина в байтах (по умолчанию 32, то есть 64 символа hex).
     # openssl есть не всегда (минимальные установки), поэтому есть запасной
-    # путь: чтение из /dev/urandom. Оба дают 32 байта случайности.
+    # путь: чтение из /dev/urandom.
+    local bytes="${1:-32}"
     if command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex 32
+        openssl rand -hex "$bytes"
     else
-        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+        head -c "$bytes" /dev/urandom | od -An -tx1 | tr -d ' \n'
     fi
 }
 
@@ -693,7 +695,15 @@ else
     cp .env.example .env
 
     JWT="$(random_secret)"
-    DB_PASS="$(random_secret)"
+    # Пароль базы — 24 байта (48 символов), а не 32.
+    #
+    # Asterisk держит параметры подключения в буфере на 64 байта и обрезает
+    # строку до 63 символов. С паролем в 64 символа станция получает
+    # усечённый пароль, не подключается к базе и не читает абонентов —
+    # домофония не работает целиком, а драйвер при этом не печатает причину
+    # (в сообщении PQresultErrorMessage(NULL)), и в журнале остаётся только
+    # «Failed to connect database». Проверено на живой машине.
+    DB_PASS="$(random_secret 24)"
     RTSP_PASS="$(random_secret)"
 
     # Правки делаем только по конкретным ключам: значения в .env.example

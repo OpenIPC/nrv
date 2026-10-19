@@ -536,3 +536,94 @@ docker stats --no-stream
 df -h
 nvidia-smi          # если используется GPU
 ```
+
+## Домофония не работает: Asterisk не подключается к базе
+
+**Симптом.** Панели и приложения не регистрируются, в интерфейсе нет линий,
+звонки не проходят. В журнале Asterisk повторяется:
+
+```
+ERROR: res_config_pgsql.c:1636 pgsql_reconnect: PostgreSQL RealTime:
+       Failed to connect database nvr on 127.0.0.1:
+```
+
+Причина в сообщении **не видна**: драйвер подставляет в него
+`PQresultErrorMessage(NULL)` вместо настоящей ошибки, поэтому строка
+обрывается после двоеточия.
+
+**Проверка по шагам.**
+
+```bash
+# 1. Что драйвер думает о подключении (покажет хост, порт и пользователя)
+docker exec nvr-asterisk-1 asterisk -rx "realtime show pgsql status"
+
+# 2. Тот же путь подключения, что у Asterisk: через опубликованный порт базы
+PW=$(sudo grep '^DB_PASSWORD=' /opt/nvr/.env | cut -d= -f2)
+docker run --rm --network host -e PGPASSWORD="$PW" postgres:16-alpine \
+  psql -h 127.0.0.1 -p 5434 -U nvr -d nvr -tAc "select 1"
+
+# 3. Живые ли абоненты в базе
+docker exec nvr-postgres-1 psql -U nvr -d nvr -tAc \
+  "select count(*) from ps_endpoints"
+```
+
+**Причина 1: слишком длинный пароль базы.** Asterisk держит параметры
+подключения в буферах по 64 байта (`MAX_DB_OPTION_SIZE` в
+`res_config_pgsql.c`) и обрезает строку до 63 символов. Установщик раньше
+генерировал 32 байта — это ровно 64 символа в hex, то есть пароль обрезался
+на один символ и подключение не проходило. Проверяется так:
+
+```bash
+# полный пароль работает, а обрезанный до 63 — уже нет
+PW=$(sudo grep '^DB_PASSWORD=' /opt/nvr/.env | cut -d= -f2)
+docker run --rm --network host -e PGPASSWORD="${PW%?}" postgres:16-alpine \
+  psql -h 127.0.0.1 -p 5434 -U nvr -d nvr -tAc "select 1"
+# FATAL: password authentication failed for user "nvr"
+```
+
+Лечение: пароль базы не длиннее 63 символов (установщик теперь берёт
+24 байта — 48 символов). Бэкенд при старте пишет в журнал ошибку, если
+пароль в `DATABASE_URL` длиннее. Смена применяется так:
+
+```bash
+NEW=$(openssl rand -hex 24)
+docker exec nvr-postgres-1 psql -U nvr -d nvr -c "ALTER USER nvr WITH PASSWORD '$NEW';"
+sudo sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=$NEW|; \
+             s|^DATABASE_URL=.*|DATABASE_URL=postgres://nvr:$NEW@localhost:5434/nvr?sslmode=disable|" /opt/nvr/.env
+cd /opt/nvr && sudo docker compose up -d --no-deps --force-recreate backend
+```
+
+**Причина 2: порядок запуска.** Конфигурацию `res_pgsql.conf` пишет сервер при
+старте. Если Asterisk поднялся **раньше** на доли секунды, он прочитал прежний
+файл и держит старые параметры до перезапуска — в журнале та же ошибка при
+верной базе. Признак: время файла `res_pgsql.conf` позже времени запуска
+контейнера.
+
+```bash
+stat -c '%y' /opt/nvr/asterisk/config/res_pgsql.conf
+docker inspect -f '{{.State.StartedAt}}' nvr-asterisk-1
+docker restart nvr-asterisk-1   # после того как сервер записал конфиг
+docker exec nvr-asterisk-1 asterisk -rx "realtime show pgsql status"
+# Connected to nvr@127.0.0.1, port 5434 with username nvr
+# docker exec nvr-asterisk-1 asterisk -rx "pjsip show endpoints"
+```
+
+**Причина 3: в устройствах прописан прежний адрес сервера.** После замены
+роутера сервер может получить другой адрес, а панели и телефоны обращаются по
+тому, который был записан при настройке, — и просто не шлют SIP-пакеты.
+Проверка: в журнале Asterisk нет ни одного `REGISTER sip:`:
+
+```bash
+docker exec nvr-asterisk-1 asterisk -rx "pjsip set logger on"
+sleep 40
+docker exec nvr-asterisk-1 asterisk -rx "pjsip set logger off"
+docker logs --since 45s nvr-asterisk-1 2>&1 | grep -c "REGISTER sip:"
+```
+
+Если ноль — верните серверу прежний адрес (второй адрес на интерфейсе
+достаточно: устройства найдут сервер, а пробросы портов останутся как есть):
+
+```bash
+sudo nmcli connection modify "Профиль 1" +ipv4.addresses 192.168.1.49/24
+sudo nmcli connection up "Профиль 1"
+```

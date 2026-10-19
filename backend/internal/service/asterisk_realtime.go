@@ -102,7 +102,18 @@ func parseDatabaseURL(databaseURL string) (*pgConn, error) {
 		return nil, fmt.Errorf("ожидалась строка подключения PostgreSQL, получена схема %q", u.Scheme)
 	}
 
-	conn := &pgConn{host: u.Hostname(), port: 5432, name: strings.TrimPrefix(u.Path, "/")}
+	// Asterisk работает в контейнере с сетью хоста, и `localhost` резолвится
+	// там в IPv6 ::1 — это первая строка /etc/hosts. База публикуется только
+	// на IPv4 (`127.0.0.1:5434` в ports), поэтому подключение по имени падало
+	// с «PostgreSQL RealTime: Failed to connect database»: станция не читала
+	// абонентов из базы, и домофония не работала вовсе — ни из дома, ни
+	// снаружи. Пишем адрес явно: он одинаков на любой установке.
+	host := u.Hostname()
+	if host == "localhost" || host == "::1" {
+		host = "127.0.0.1"
+	}
+
+	conn := &pgConn{host: host, port: 5432, name: strings.TrimPrefix(u.Path, "/")}
 	if p := u.Port(); p != "" {
 		port, err := strconv.Atoi(p)
 		if err != nil {
@@ -117,6 +128,22 @@ func parseDatabaseURL(databaseURL string) (*pgConn, error) {
 	if conn.host == "" || conn.name == "" || conn.user == "" {
 		return nil, fmt.Errorf("в строке подключения не хватает хоста, имени базы или пользователя")
 	}
+
+	// Asterisk хранит параметры подключения в буферах по 64 байта
+	// (MAX_DB_OPTION_SIZE в res_config_pgsql.c) и обрезает строку до 63
+	// символов. Пароль из 64 символов — ровно такой даёт генерация 32 байт
+	// в hex — станция получает усечённым и подключиться не может. При этом
+	// причину она не печатает: в сообщении стоит PQresultErrorMessage(NULL),
+	// поэтому в журнале видно только «Failed to connect database» без
+	// объяснения, а не работающая база выглядит как «станция не читает
+	// абонентов» — так домофония отказывала целиком, ни из дома, ни снаружи.
+	// Проверяем длину здесь, пока причина ещё видна.
+	if len(conn.password) > 63 {
+		log.Error().
+			Int("длина", len(conn.password)).
+			Msg("пароль базы длиннее 63 символов: Asterisk его обрежет и не подключится — сократите пароль в DATABASE_URL и смените его в базе")
+	}
+
 	return conn, nil
 }
 
