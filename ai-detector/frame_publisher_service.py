@@ -452,10 +452,20 @@ class FramePublisher:
 
         wanted = {c["id"]: c for c in cameras}
 
-        # Останавливаем воркеры камер, которых больше нет
-        for cam_id in list(self.tasks):
+        # Останавливаем воркеры камер, которых больше нет.
+        #
+        # В self.tasks ключи двух видов: сам id камеры и «id:plate» — быстрый
+        # поток кадров зоны номера. Сравнивать с набором камер надо только
+        # базовую часть ключа: иначе суффиксная задача каждый цикл выглядит
+        # как «камера удалена», её отменяют и тут же создают заново, а вместе
+        # с ней заново подключается ffmpeg — около полутора секунд кадры зоны
+        # не публикуются. Машина, проехавшая зону в это окно, остаётся без
+        # распознанного номера, и по логу это выглядит как «детектор не
+        # сработал», хотя поток просто перезапускался.
+        for key in list(self.tasks):
+            cam_id = key.split(":", 1)[0]
             if cam_id not in wanted:
-                self.tasks.pop(cam_id).cancel()
+                self.tasks.pop(key).cancel()
                 logger.info(f"[{cam_id[:8]}] камера удалена — публикация остановлена")
 
         # Запускаем воркеры для новых камер
@@ -641,10 +651,16 @@ class FramePublisher:
         """Раз в минуту пишет, сколько кадров ушло."""
         while True:
             await asyncio.sleep(60)
-            alive = sum(1 for cid in self.tasks if not self.failures.get(cid))
+            # Считаем только камеры: в self.tasks кроме них лежат задачи
+            # быстрого потока зоны номера с ключом «id:plate». Пока их
+            # учитывали наравне с камерами, в сводке стояло «24/26» и
+            # приходилось выяснять, что за лишние две единицы — по такой
+            # цифре сразу не видно, все ли камеры работают.
+            cam_keys = [key for key in self.tasks if ":" not in key]
+            alive = sum(1 for cid in cam_keys if not self.failures.get(cid))
             total = sum(self.published.values())
             logger.info(
-                f"статистика: камер активно {alive}/{len(self.tasks)}, "
+                f"статистика: камер активно {alive}/{len(cam_keys)}, "
                 f"кадров опубликовано {total}"
             )
 
