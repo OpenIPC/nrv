@@ -19,6 +19,10 @@ jobs:
   build:
     name: Собрать nvr-wall.exe
     runs-on: windows-latest
+    # Предел на всё задание. Без него зависшее скачивание или установщик
+    # держат сборку до шести часов — и со стороны это выглядит как «висит»,
+    # без единой строки в отчёте. Сборка с нуля занимает около 13 минут.
+    timeout-minutes: 45
 
     env:
       # Версии GStreamer перебираются по порядку. Так надёжнее, чем
@@ -78,10 +82,23 @@ jobs:
               $file = "$package-msvc-x86_64-$version.msi"
               $msi = Join-Path $env:RUNNER_TEMP $file
 
-              try {
-                Invoke-WebRequest "$base/$file" -OutFile $msi -ErrorAction Stop
-              } catch {
-                Write-Host "Не скачался $base/$file — $($_.Exception.Message)"
+              # Скачивание с таймаутом и повторами: у Invoke-WebRequest по
+              # умолчанию таймаута нет, и медленный ответ сайта GStreamer
+              # превращался в «сборка висит» — в журнале при этом ничего.
+              $downloaded = $false
+              for ($attempt = 1; $attempt -le 3 -and -not $downloaded; $attempt++) {
+                try {
+                  Invoke-WebRequest "$base/$file" -OutFile $msi -TimeoutSec 300 -ErrorAction Stop
+                  $downloaded = $true
+                } catch {
+                  Write-Host "Попытка $attempt из 3 не удалась: $($_.Exception.Message)"
+                  if ($attempt -lt 3) {
+                    Start-Sleep -Seconds 10
+                  }
+                }
+              }
+              if (-not $downloaded) {
+                Write-Host "Не скачался $base/$file за 3 попытки"
                 $ok = $false
                 break
               }
