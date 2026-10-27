@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -998,14 +999,7 @@ func (h *SipHandler) MyLine(w http.ResponseWriter, r *http.Request) {
 	// Приложению нужен адрес WebSocket-транспорта Asterisk. Без него
 	// регистрация невозможна: у chan_pjsip это единственный способ
 	// подключиться, обычный UDP-транспорт приложению недоступен.
-	wsPort := h.wsPort
-	if wsPort == 0 {
-		wsPort = 8088
-	}
-	wsScheme := "ws"
-	if strings.HasPrefix(strings.ToLower(h.publicURL), "https") {
-		wsScheme = "wss"
-	}
+	wsURL := h.websocketURL(r)
 
 	video, codec := false, ""
 	var settings *domain.SipSettings
@@ -1022,7 +1016,7 @@ func (h *SipHandler) MyLine(w http.ResponseWriter, r *http.Request) {
 		"username":     user.Username,
 		"server":       host,
 		"port":         5060,
-		"ws_url":       fmt.Sprintf("%s://%s:%d/ws", wsScheme, host, wsPort),
+		"ws_url":       wsURL,
 		"uri":          fmt.Sprintf("sip:%s@%s", line.Number, host),
 		"video":        video,
 		"video_codec":  codec,
@@ -1131,6 +1125,42 @@ func (h *SipHandler) requestAddress(r *http.Request) string {
 		return host
 	}
 	return h.serverAddress(r)
+}
+
+// websocketURL собирает адрес SIP over WebSocket, который получает приложение.
+//
+// Правило простое: если клиент пришёл по HTTPS-адресу из PUBLIC_URL, то и
+// WebSocket открывается на том же защищённом входе — wss://домен/ws. Порт
+// 8088 у станции отдаёт обычный HTTP без шифрования, поэтому схема wss на
+// нём не поднимается вовсе: JsSIP получает отказ рукопожатия, линия навсегда
+// остаётся в состоянии «failed», и звонки не идут ни в одну сторону.
+//
+// Проверено на живой установке: после перевода панели на HTTPS регистрация
+// приложений прекратилась, хотя видео с камер продолжало работать — оно идёт
+// другим путём, через WebRTC, и смену схемы панели не замечает. Внешне это
+// выглядит как «видео есть, телефония не соединяется».
+//
+// Запасной путь — прямой ws://адрес:порт/ws. Он нужен там, где приложение
+// открывают по локальному адресу сервера, без прокси и сертификата, и
+// повторяет прежнее поведение.
+func (h *SipHandler) websocketURL(r *http.Request) string {
+	// Сверяем узел, а не весь адрес: порт в PUBLIC_URL — это порт веб-доступа,
+	// и для HTTPS он же и есть вход прокси. Без сверки узла локальный вход
+	// (http://192.168.1.10:3001) получил бы адрес наружного домена и перестал
+	// бы работать внутри дома.
+	if u, err := url.Parse(h.publicURL); err == nil && u.Host != "" &&
+		strings.EqualFold(u.Scheme, "https") &&
+		strings.EqualFold(cleanAddress(r.Host), u.Hostname()) {
+		// Порт берём из PUBLIC_URL: если он там не указан, это 443, и
+		// дописывать его в адрес незачем.
+		return fmt.Sprintf("wss://%s/ws", u.Host)
+	}
+
+	wsPort := h.wsPort
+	if wsPort == 0 {
+		wsPort = 8088
+	}
+	return fmt.Sprintf("ws://%s:%d/ws", h.requestAddress(r), wsPort)
 }
 
 // cleanAddress убирает из адреса схему, порт и путь.
