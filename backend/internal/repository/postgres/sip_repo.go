@@ -231,6 +231,114 @@ func (r *SipRepo) PinNumber(ctx context.Context, userID uuid.UUID, number string
 	return nil
 }
 
+// PinnedNumbers отдаёт закреплённые номера всех учётных записей.
+//
+// Один запрос на весь список, а не запрос на каждого пользователя: страница
+// пользователей показывает номер рядом с логином, и N+1 здесь означал бы
+// отдельное обращение к базе на каждую строку.
+func (r *SipRepo) PinnedNumbers(ctx context.Context) (map[uuid.UUID]string, error) {
+	rows, err := r.db.Query(ctx, `SELECT user_id, number FROM user_sip_numbers`)
+	if err != nil {
+		return nil, fmt.Errorf("read pinned sip numbers: %w", err)
+	}
+	defer rows.Close()
+
+	numbers := make(map[uuid.UUID]string)
+	for rows.Next() {
+		var (
+			userID uuid.UUID
+			number string
+		)
+		if err := rows.Scan(&userID, &number); err != nil {
+			return nil, fmt.Errorf("scan pinned sip number: %w", err)
+		}
+		numbers[userID] = number
+	}
+	return numbers, rows.Err()
+}
+
+// NumberFree сообщает, свободен ли номер для этой учётной записи.
+//
+// Проверяются оба места, где номер может быть занят: закрепление за другим
+// человеком и строка абонента. Одного закрепления мало — устройства заводят
+// вручную и без учётной записи, а одного списка абонентов мало: линию могли
+// удалить, а номер за человеком остался.
+func (r *SipRepo) NumberFree(ctx context.Context, number string, userID uuid.UUID) (bool, error) {
+	var taken bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM user_sip_numbers WHERE number = $1 AND user_id <> $2
+			UNION ALL
+			SELECT 1 FROM sip_accounts WHERE number = $1
+			   AND (user_id IS NULL OR user_id <> $2)
+		)`, number, userID).Scan(&taken)
+	if err != nil {
+		return false, fmt.Errorf("check sip number: %w", err)
+	}
+	return !taken, nil
+}
+
+// SetUserNumber меняет закреплённый за учётной записью номер и, если линия
+// уже заведена, переносит её на новый номер.
+//
+// Всё одной транзакцией: закрепление без линии и линия со старым номером
+// означали бы, что приложение регистрируется на один номер, а в карточке и
+// в маршрутах вызова числится другой.
+func (r *SipRepo) SetUserNumber(ctx context.Context, userID uuid.UUID, number string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("начать транзакцию: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Прежний номер нужен только для того, чтобы убрать регистрацию,
+	// оставшуюся от него: у приложения она висит в ps_contacts до истечения
+	// срока, и по ней станция продолжала бы считать старый номер в сети.
+	var previous string
+	if err := tx.QueryRow(ctx,
+		`SELECT number FROM user_sip_numbers WHERE user_id = $1`, userID).
+		Scan(&previous); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("read previous sip number: %w", err)
+	}
+	if previous == "" {
+		if err := tx.QueryRow(ctx,
+			`SELECT number FROM sip_accounts WHERE user_id = $1`, userID).
+			Scan(&previous); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read previous line number: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO user_sip_numbers (user_id, number)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id) DO UPDATE SET number = EXCLUDED.number`,
+		userID, number); err != nil {
+		return fmt.Errorf("pin sip number: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE sip_accounts SET number = $2, updated_at = now() WHERE user_id = $1`,
+		userID, number); err != nil {
+		return fmt.Errorf("move sip line to number %s: %w", number, err)
+	}
+
+	if previous != "" && previous != number {
+		// `id` контакта у Asterisk — это «номер;@…», а `endpoint` может
+		// хранить имя абонента, поэтому проверяем оба поля: где-то из них
+		// номер точно есть, а лишних удалений здесь не бывает.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM ps_contacts WHERE id LIKE $1 OR endpoint = $2`,
+			previous+";%", previous); err != nil {
+			return fmt.Errorf("delete stale registration of %s: %w", previous, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("зафиксировать смену номера SIP: %w", err)
+	}
+	return nil
+}
+
 // DeleteAccountByUser убирает линию владельца вместе с его учётной записью.
 func (r *SipRepo) DeleteAccountByUser(ctx context.Context, userID uuid.UUID) error {
 	_, err := r.db.Exec(ctx, `DELETE FROM sip_accounts WHERE user_id = $1`, userID)

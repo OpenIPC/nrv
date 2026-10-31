@@ -14,7 +14,7 @@
 
 import { UA, WebSocketInterface, debug as sipDebug } from 'jssip';
 import type { RTCSession } from 'jssip/lib/RTCSession';
-import { MediaStream } from 'react-native-webrtc';
+import { MediaStream, mediaDevices } from 'react-native-webrtc';
 import type { MediaStreamTrack } from 'react-native-webrtc';
 
 import { installSipPolyfills } from './sipPolyfills';
@@ -215,6 +215,15 @@ const INVITE_TIMEOUT_MS = 25000;
  * с большим запасом: молчание дольше означает обрыв, а не задержку.
  */
 const RESPONSE_TIMEOUT_MS = 10000;
+
+/**
+ * Сколько ждём, пока телефон выдаст камеру и микрофон.
+ *
+ * Семь секунд: разрешения уже спрошены, устройства свободны — быстрее
+ * отвечает любой исправный телефон. Ждать дольше нельзя: всё это время
+ * человек слышит «Дозвон» и не понимает, почему никто не отвечает.
+ */
+const MEDIA_TIMEOUT_MS = 7000;
 
 /**
  * SipClient — линия приложения.
@@ -459,20 +468,124 @@ export class SipClient {
     }
     this.inviteSent = false;
 
-    try {
-      // ICE-серверы приходят с сервера вместе с реквизитами линии. Без них
-      // звонок из чужой сети соединяется, но остаётся без звука и видео:
-      // прямой путь между телефоном и станцией там не прокладывается.
-      ua.call(`sip:${target}@${this.line.server}`, {
-        mediaConstraints: { audio: true, video: wantVideo },
-        pcConfig: this.pcConfig(),
-      });
-    } catch (error) {
-      this.reportCallFailure(
-        target,
-        wantVideo,
-        error instanceof Error ? error.message : 'не удалось начать вызов',
+    // Медиа спрашиваем сами, а не отдаём это JsSIP.
+    //
+    // Почему: JsSIP ждёт getUserMedia без ограничения по времени. Если
+    // камера занята другим приложением или нативный слой молчит, вызов
+    // висит в «Дозвон» до срабатывания сторожа (25 с), а INVITE на станцию
+    // так и не уходит — снаружи это выглядит как «звонки не проходят и на
+    // станции их нет». Проверено на живом телефоне 27.10.2026: микрофон
+    // отдельно отвечает за секунды, а запрос «микрофон и камера» зависал.
+    //
+    // Поэтому берём медиа с таймаутом и, если камера не ответила, звоним
+    // со звуком: разговор важнее картинки.
+    void (async () => {
+      const stream = await this.acquireMedia(wantVideo);
+      if (!stream) {
+        this.reportCallFailure(target, wantVideo, 'телефон не выдал микрофон');
+        return;
+      }
+      // Пока ждали медиа, клиента могли пересоздать (например, возврат в
+      // приложение) или начать другой вызов — тогда поток не нужен.
+      if (this.ua !== ua || this.state.call) {
+        this.stopTracks(stream);
+        return;
+      }
+      this.update({ localStream: stream });
+      try {
+        // ICE-серверы приходят с сервера вместе с реквизитами линии. Без них
+        // звонок из чужой сети соединяется, но остаётся без звука и видео:
+        // прямой путь между телефоном и станцией там не прокладывается.
+        ua.call(`sip:${target}@${this.line.server}`, {
+          mediaStream: stream,
+          // JsSIP выкинет из потока то, что запрещено этими ограничениями,
+          // поэтому видео здесь ровно тогда, когда камера его дала.
+          mediaConstraints: {
+            audio: true,
+            video: wantVideo && (stream.getVideoTracks?.() ?? []).length > 0,
+          },
+          pcConfig: this.pcConfig(),
+        });
+      } catch (error) {
+        this.stopTracks(stream);
+        this.reportCallFailure(
+          target,
+          wantVideo,
+          error instanceof Error ? error.message : 'не удалось начать вызов',
+        );
+      }
+    })();
+  }
+
+  /**
+   * Забирает у телефона микрофон и, если нужно, камеру.
+   *
+   * Возвращает null, только если не удалось получить даже звук: без него
+   * звонок бессмыслен. Отказ камеры — не повод отменять вызов, и человек у
+   * двери важнее картинки.
+   */
+  private async acquireMedia(video: boolean): Promise<MediaStream | null> {
+    if (video) {
+      const withVideo = await this.mediaWithTimeout(
+        { audio: true, video: { facingMode: 'user' } },
+        'микрофон и камера',
       );
+      if (withVideo) {
+        return withVideo;
+      }
+      this.note('камера не ответила, звоним со звуком');
+    }
+    return this.mediaWithTimeout({ audio: true, video: false }, 'микрофон');
+  }
+
+  /**
+   * Запрашивает медиа с ограничением по времени.
+   *
+   * Гонка, а не просто await: нативный слой умеет не ответить ни успехом,
+   * ни ошибкой, и тогда ожидание не кончается никогда.
+   */
+  private mediaWithTimeout(constraints: object, label: string): Promise<MediaStream | null> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const finish = (value: MediaStream | null) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve(value);
+      };
+
+      timer = setTimeout(() => {
+        this.note(`медиа (${label}): нет ответа за ${Math.round(MEDIA_TIMEOUT_MS / 1000)} с`);
+        finish(null);
+      }, MEDIA_TIMEOUT_MS);
+
+      // try/catch вокруг вызова, а не только .catch: нативный модуль умеет
+      // бросить исключение синхронно, до того как появится промис.
+      try {
+        mediaDevices.getUserMedia(constraints as never).then(
+          (stream) => finish(stream as unknown as MediaStream),
+          (error: unknown) => {
+            this.note(`медиа (${label}): ${error instanceof Error ? error.message : 'ошибка'}`);
+            finish(null);
+          },
+        );
+      } catch (error) {
+        this.note(`медиа (${label}): ${error instanceof Error ? error.message : 'ошибка'}`);
+        finish(null);
+      }
+    });
+  }
+
+  /** Останавливает дорожки потока, который так и не пошёл в дело. */
+  private stopTracks(stream: MediaStream): void {
+    for (const track of stream.getTracks?.() ?? []) {
+      try {
+        track.stop();
+      } catch {
+        // Дорожка могла быть уже остановлена — это не ошибка.
+      }
     }
   }
 

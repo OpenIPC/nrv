@@ -11,6 +11,7 @@ import (
 	"github.com/nvr/backend/internal/domain"
 	"github.com/nvr/backend/internal/repository/postgres"
 	"github.com/nvr/backend/internal/service"
+	"github.com/rs/zerolog/log"
 )
 
 // UserHandler — управление пользователями сервера и их правами.
@@ -19,10 +20,44 @@ import (
 // здесь остаётся только работа с данными.
 type UserHandler struct {
 	svc *service.UserService
+	// status — состояние регистрации линий в Asterisk. Может быть nil:
+	// на установке без телефонии спрашивать не у кого, и люди считаются
+	// в сети только по активности в панели.
+	status service.SipStatusSource
 }
 
 func NewUserHandler(svc *service.UserService) *UserHandler {
 	return &UserHandler{svc: svc}
+}
+
+// WithSipStatus подключает источник состояния SIP-линий.
+func (h *UserHandler) WithSipStatus(status service.SipStatusSource) *UserHandler {
+	h.status = status
+	return h
+}
+
+// presenceWindow — сколько времени после последнего запроса человек ещё
+// считается работающим.
+//
+// Три минуты, а не одна: отметка в базу пишется раз в минуту, и окно в
+// минуту давало бы мигание «офлайн» между двумя отметками. Больше — уже
+// неправда: закрытую вкладку тогда видно слишком долго.
+const presenceWindow = 3 * time.Minute
+
+// applyPresence расставляет признак «в сети».
+//
+// Источника два, и это не избыточность: в панели человек заметен по своим
+// запросам, а в мобильном приложении — по регистрации линии на станции.
+// Приложение в фоне запросов к API почти не делает, но линию держит; без
+// второго источника человек с телефоном выглядел бы отключившимся.
+func applyPresence(users []domain.User, registered map[string]bool, now time.Time) {
+	for i := range users {
+		u := &users[i]
+		u.Online = u.SipNumber != "" && registered[u.SipNumber]
+		if !u.Online && u.LastSeenAt != nil && now.Sub(*u.LastSeenAt) < presenceWindow {
+			u.Online = true
+		}
+	}
 }
 
 // List — GET /api/v1/users
@@ -35,6 +70,21 @@ func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 	if users == nil {
 		users = []domain.User{}
 	}
+
+	// Состояние линий спрашиваем одним запросом на весь список: у Asterisk
+	// это одна команда, а не обращение на каждого человека.
+	registered := map[string]bool{}
+	if h.status != nil {
+		if reg, err := h.status.RegisteredNumbers(r.Context()); err == nil {
+			registered = reg
+		} else {
+			// Без телефонии список всё равно нужен; о людях, которые видны
+			// только через приложение, просто не будет отметки.
+			log.Warn().Err(err).Msg("не удалось прочитать состояние регистрации SIP")
+		}
+	}
+	applyPresence(users, registered, time.Now())
+
 	writeJSON(w, http.StatusOK, users)
 }
 
@@ -103,6 +153,42 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, postgres.ErrUsernameTaken) {
+			status = http.StatusConflict
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+// SetSipNumber — PUT /api/v1/users/{id}/sip-number
+//
+// Закрепляет за учётной записью другой внутренний номер SIP. Отдельный
+// маршрут, а не поле в общем PUT: смена номера — действие с последствиями
+// (телефон сотрудника настроен на прежний номер), и случайно сохранить её
+// вместе с правкой роли не должно быть возможно.
+func (h *UserHandler) SetSipNumber(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный идентификатор пользователя"})
+		return
+	}
+
+	var req struct {
+		Number string `json:"number"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	user, err := h.svc.SetSipNumber(r.Context(), id, req.Number)
+	if err != nil {
+		// Занятый номер — конфликт, а не ошибка ввода: на него интерфейс
+		// отвечает подсказкой «выберите другой», а не красным сообщением
+		// формы.
+		status := http.StatusBadRequest
+		if errors.Is(err, service.ErrSipNumberTaken) {
 			status = http.StatusConflict
 		}
 		writeJSON(w, status, map[string]string{"error": err.Error()})

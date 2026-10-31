@@ -5,6 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/nvr/backend/internal/domain"
@@ -24,7 +27,29 @@ type UserLineProvisioner interface {
 	RemoveLine(ctx context.Context, userID uuid.UUID) error
 	// RenameLine меняет подпись линии вслед за именем владельца.
 	RenameLine(ctx context.Context, userID uuid.UUID, name string) error
+	// PinnedNumbers отдаёт закреплённые номера всех учётных записей.
+	PinnedNumbers(ctx context.Context) (map[uuid.UUID]string, error)
+	// SetNumber закрепляет за учётной записью другой номер.
+	SetNumber(ctx context.Context, userID uuid.UUID, number string) (string, error)
 }
+
+// Номера приложений. Диапазон тот же, что в диалплане (`_3XX` в
+// extensions.conf): 301 — первый свободный, 300 занят браузерным приложением
+// из первой версии страницы. Выдавать номер вне диапазона нельзя: на него
+// не найдётся правила вызова, и звонок уйдёт в пустоту.
+const (
+	appNumberMin = 301
+	appNumberMax = 399
+)
+
+var (
+	// ErrSipNumberTaken — номер занят другим абонентом или другой учётной
+	// записью. Отдельная ошибка, а не текст: интерфейс показывает её как
+	// конфликт, а не как ошибку ввода.
+	ErrSipNumberTaken = errors.New("этот номер уже занят")
+	// ErrSipDisabled — телефония не настроена, линии выдавать некуда.
+	ErrSipDisabled = errors.New("телефония на этом сервере не настроена")
+)
 
 // UserLineService — линии SIP у учётных записей сервера.
 //
@@ -123,6 +148,72 @@ func (s *UserLineService) numberFor(ctx context.Context, userID uuid.UUID) (stri
 		return "", err
 	}
 	return free, nil
+}
+
+// PinnedNumbers отдаёт закреплённые номера всех учётных записей.
+func (s *UserLineService) PinnedNumbers(ctx context.Context) (map[uuid.UUID]string, error) {
+	if s == nil || s.repo == nil {
+		return nil, nil
+	}
+	return s.repo.PinnedNumbers(ctx)
+}
+
+// SetNumber закрепляет за учётной записью другой номер.
+//
+// Отдельный шаг, а не поле в карточке на автомате: номер прописан в
+// телефоне сотрудника, в правилах вызова и в памяти тех, кто его набирает.
+// Поэтому смена выполняется только по явному действию оператора, и после
+// неё приложение нужно открыть заново — оно получит новые реквизиты линии
+// при следующем запуске.
+func (s *UserLineService) SetNumber(ctx context.Context, userID uuid.UUID, raw string) (string, error) {
+	if s == nil || s.repo == nil {
+		return "", ErrSipDisabled
+	}
+
+	number, err := normalizeAppNumber(raw)
+	if err != nil {
+		return "", err
+	}
+
+	current, pinned, err := s.repo.NumberForUser(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if pinned && current == number {
+		// Номер не изменился — ничего не трогаем: лишняя пересборка
+		// конфигурации обрывает регистрацию приложения без причины.
+		return number, nil
+	}
+
+	free, err := s.repo.NumberFree(ctx, number, userID)
+	if err != nil {
+		return "", err
+	}
+	if !free {
+		return "", ErrSipNumberTaken
+	}
+
+	if err := s.repo.SetUserNumber(ctx, userID, number); err != nil {
+		return "", err
+	}
+	log.Info().Str("number", number).Str("previous", current).
+		Msg("номер SIP учётной записи изменён")
+	s.sync()
+	return number, nil
+}
+
+// normalizeAppNumber приводит введённый номер к виду, который понимает
+// диалплан, и отсекает всё, что за пределы диапазона приложений.
+//
+// Пустые места и ведущие нули убираем молча: « 301 » и «0301» администратор
+// вводит не со зла, а номер при этом один и тот же.
+func normalizeAppNumber(raw string) (string, error) {
+	number := strings.TrimSpace(raw)
+	n, err := strconv.Atoi(number)
+	if err != nil || n < appNumberMin || n > appNumberMax {
+		return "", fmt.Errorf("номер приложения — от %d до %d", appNumberMin, appNumberMax)
+	}
+	return strconv.Itoa(n), nil
 }
 
 // RemoveLine убирает линию владельца.

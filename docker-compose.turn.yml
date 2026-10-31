@@ -12,9 +12,12 @@
 # где разрешены только 80/443.
 #
 # Включается отдельным профилем, потому что нужен не каждой установке,
-# а той, к которой обращаются снаружи:
+# а той, к которой обращаются снаружи. Файл подключается вторым: сама служба
+# описана здесь, а не в docker-compose.yml, поэтому без явного -f команда
+# «--profile turn» не находит службу turn и ничего не запускает — так TURN
+# и остался лежать незапущенным, а звонки зависали на сборе ICE.
 #
-#   docker compose --profile turn up -d turn
+#   docker compose -f docker-compose.yml -f docker-compose.turn.yml --profile turn up -d turn
 #
 # Что подготовить заранее:
 #   * в .env — TURN_USER, TURN_PASSWORD, TURN_REALM, TURN_EXTERNAL_IP.

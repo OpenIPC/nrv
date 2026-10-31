@@ -17,6 +17,16 @@ interface FormState {
   /** Куда можно входить: веб-интерфейс и приложение — независимо. */
   webAccess: boolean
   appAccess: boolean
+  /**
+   * Внутренний номер SIP, закреплённый за учётной записью.
+   *
+   * Поле есть только при правке: новому человеку номер выдаётся сам, по
+   * порядку свободных. Менять его — отдельное действие с предупреждением,
+   * потому что номер уже прописан в его телефоне.
+   */
+  sipNumber: string
+  /** Номер на момент открытия карточки: по нему видно, меняли ли его. */
+  sipNumberOriginal: string
 }
 
 const emptyForm: FormState = {
@@ -29,6 +39,8 @@ const emptyForm: FormState = {
   // только запутала бы — непонятно, что именно забыли выдать.
   webAccess: true,
   appAccess: true,
+  sipNumber: '',
+  sipNumberOriginal: '',
 }
 
 /** Данные открытого окна подключения приложения. */
@@ -108,6 +120,27 @@ export default function UsersPage() {
   }, [load])
 
   /**
+   * Тихая перезагрузка списка — только ради статуса «в сети».
+   *
+   * Без неё администратор видит картинку на момент открытия страницы: через
+   * полчаса все всё ещё «офлайн», хотя люди работают. Спиннер и сообщения
+   * об ошибках здесь не нужны — страница уже показывает данные.
+   */
+  const refreshPresence = useCallback(async () => {
+    try {
+      const res = await usersAPI.list()
+      setUsers(res.data)
+    } catch {
+      // Молча: следующий толчок через полминуты, скорее всего, пройдёт.
+    }
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => void refreshPresence(), 30_000)
+    return () => window.clearInterval(timer)
+  }, [refreshPresence])
+
+  /**
    * Права, сгруппированные по разделам.
    *
    * Группы строим из списка, который отдал сервер, а не из своего перечня:
@@ -144,6 +177,8 @@ export default function UsersPage() {
       // открытым везде, как было до разделения.
       webAccess: user.web_access !== false,
       appAccess: user.app_access !== false,
+      sipNumber: user.sip_number ?? '',
+      sipNumberOriginal: user.sip_number ?? '',
     })
   }
 
@@ -179,6 +214,10 @@ export default function UsersPage() {
   const save = async () => {
     if (!form) return
     setSaving(true)
+    // Менялся ли номер SIP: если нет — не трогаем его вовсе, потому что
+    // смена номера пересобирает конфигурацию станции и обрывает
+    // регистрацию приложения без причины.
+    let sipNumberFailed = false
     try {
       if (form.id) {
         await usersAPI.update(form.id, {
@@ -191,6 +230,17 @@ export default function UsersPage() {
           web_access: form.webAccess,
           app_access: form.appAccess,
         })
+        const number = form.sipNumber.trim()
+        if (number && number !== form.sipNumberOriginal) {
+          try {
+            await usersAPI.setSipNumber(form.id, number)
+          } catch (err: any) {
+            // Остальные поля уже сохранены, поэтому не откатываем всё
+            // сообщение целиком: показываем именно ошибку номера.
+            sipNumberFailed = true
+            toast.error(err.response?.data?.error || t('usersPage.sipNumberFailed'))
+          }
+        }
       } else {
         await usersAPI.create({
           username: form.username,
@@ -201,7 +251,9 @@ export default function UsersPage() {
           app_access: form.appAccess,
         })
       }
-      toast.success(t('usersPage.saved'))
+      if (!sipNumberFailed) {
+        toast.success(t('usersPage.saved'))
+      }
       setForm(null)
       await load()
       // Если правили самого себя, меню должно перестроиться сразу.
@@ -305,10 +357,11 @@ export default function UsersPage() {
             <span className="spinner" />
           </div>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
             <thead>
               <tr style={{ textAlign: 'left', color: 'var(--text-muted, #888)' }}>
                 <th style={{ padding: '10px 12px' }}>{t('usersPage.login')}</th>
+                <th style={{ padding: '10px 12px', width: 150 }}>{t('usersPage.state')}</th>
                 <th style={{ padding: '10px 12px' }}>{t('usersPage.role')}</th>
                 <th style={{ padding: '10px 12px' }}>{t('usersPage.permissions')}</th>
                 <th style={{ padding: '10px 12px', width: 200 }} />
@@ -319,6 +372,16 @@ export default function UsersPage() {
                 <tr key={user.id} style={{ borderTop: '1px solid var(--border, #333)' }}>
                   <td style={{ padding: '10px 12px', fontWeight: 600 }}>
                     {user.username}
+                    {/* Номер видён рядом с логином: именно его человек
+                        набирает с трубки, и искать его в разделе домофонии
+                        приходилось бы каждый раз. */}
+                    {user.sip_number && (
+                      <div
+                        style={{ marginTop: 4, color: 'var(--text-muted, #888)', fontSize: 12, fontWeight: 400 }}
+                      >
+                        {t('usersPage.sipNumberShort', { number: user.sip_number })}
+                      </div>
+                    )}
                     {/* Метка блокировки прямо в списке: разблокировать
                         забывают, и человек остаётся без доступа неделями. */}
                     {user.blocked && (
@@ -341,6 +404,31 @@ export default function UsersPage() {
                           </div>
                         )}
                       </div>
+                    )}
+                  </td>
+                  <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                    {/* Точка и слово, а не только цвет: статус читают и
+                        те, кто цветов не различает. */}
+                    {user.online ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span
+                          style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: '50%',
+                            background: 'var(--success, #22c55e)',
+                          }}
+                        />
+                        {t('usersPage.online')}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted, #888)', fontSize: 13 }}>
+                        {user.last_seen_at
+                          ? t('usersPage.lastSeen', {
+                              time: formatDateTime(user.last_seen_at),
+                            })
+                          : t('usersPage.notSeenRecently')}
+                      </span>
                     )}
                   </td>
                   <td style={{ padding: '10px 12px' }}>
@@ -464,6 +552,26 @@ export default function UsersPage() {
                 ))}
               </select>
             </label>
+
+            {/* Номер SIP меняется отдельным запросом и только при правке:
+                новому человеку он выдаётся сам, а смена ломает уже
+                настроенный телефон. */}
+            {form.id && (
+              <label style={{ display: 'block', marginTop: 12 }}>
+                <div style={{ marginBottom: 6 }}>{t('usersPage.sipNumber')}</div>
+                <input
+                  className="input"
+                  value={form.sipNumber}
+                  onChange={(e) => setForm({ ...form, sipNumber: e.target.value })}
+                  placeholder="301"
+                  inputMode="numeric"
+                  style={{ maxWidth: 160 }}
+                />
+                <div style={{ color: 'var(--text-muted, #888)', fontSize: 12, marginTop: 4 }}>
+                  {t('usersPage.sipNumberHint')}
+                </div>
+              </label>
+            )}
 
             {/* Куда учётной записи можно входить. Две независимые галочки:
                 бывает и «только веб» (дежурный за компьютером), и «только

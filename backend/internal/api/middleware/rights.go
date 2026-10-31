@@ -105,6 +105,8 @@ var routeRules = []Rule{
 	// целиком — камеры, СКУД, домофонию и учётные записи сразу, — поэтому
 	// право то же, что и на настройки сервера.
 	{Prefix: "/api/v1/config", Perm: domain.PermSettingsManage},
+	{Prefix: "/api/v1/notifications/register", Perm: ""},
+	{Prefix: "/api/v1/notifications/devices", Perm: domain.PermSettingsManage},
 	{Prefix: "/api/v1/notifications", Perm: domain.PermSettingsManage},
 	{Prefix: "/api/v1/webhooks", Perm: domain.PermSettingsManage},
 	{Prefix: "/api/v1/rtsp", Perm: domain.PermSettingsManage},
@@ -251,6 +253,11 @@ func RequirePermission(users *service.UserService) func(http.Handler) http.Handl
 				writeJSON(w, http.StatusForbidden, "недостаточно прав: "+perm)
 				return
 			}
+
+			// Отмечаем присутствие после всех проверок: запрос без прав
+			// или закрытой учётной записи не должен выглядеть в списке
+			// пользователей как работа человека.
+			users.TouchPresence(r.Context(), user.ID)
 
 			next.ServeHTTP(w, r.WithContext(
 				context.WithValue(

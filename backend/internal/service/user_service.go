@@ -82,13 +82,28 @@ type UserService struct {
 
 	mu    sync.Mutex
 	cache map[uuid.UUID]userCacheEntry
+
+	// presence — когда в последний раз отмечали активность каждой учётной
+	// записи. В памяти, а не в базе: значение нужно только чтобы не писать
+	// UPDATE на каждый запрос, а после перезапуска сервиса лишняя запись
+	// на человека никому не мешает.
+	presenceMu sync.Mutex
+	presence   map[uuid.UUID]time.Time
 }
+
+// presenceInterval — как часто отметка активности попадает в базу.
+//
+// Минута — компромисс: при большей паузе человек, закрывший вкладку, ещё
+// долго выглядит в сети, при меньшей — открытая панель с опросом каждые
+// десять секунд заваливает базу одинаковыми UPDATE.
+const presenceInterval = time.Minute
 
 func NewUserService(repo *postgres.UserRepo, lines UserLineProvisioner) *UserService {
 	return &UserService{
-		repo:  repo,
-		lines: lines,
-		cache: make(map[uuid.UUID]userCacheEntry),
+		repo:     repo,
+		lines:    lines,
+		cache:    make(map[uuid.UUID]userCacheEntry),
+		presence: make(map[uuid.UUID]time.Time),
 	}
 }
 
@@ -104,7 +119,49 @@ func (s *UserService) WithInvites(repo *postgres.AppInviteRepo) *UserService {
 
 // List возвращает всех пользователей.
 func (s *UserService) List(ctx context.Context) ([]domain.User, error) {
-	return s.repo.List(ctx)
+	users, err := s.repo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Номер SIP дописываем отдельным запросом на весь список, а не разбираем
+	// его из строки пользователя: он живёт в таблице телефонии, и учётные
+	// записи без линии должны оставаться обычными записями.
+	if s.lines != nil && len(users) > 0 {
+		numbers, err := s.lines.PinnedNumbers(ctx)
+		if err != nil {
+			// Без номеров список всё равно полезен: права и доступы важнее,
+			// а «нет номера» выглядит честнее, чем пустая страница.
+			log.Warn().Err(err).Msg("не удалось прочитать закреплённые номера SIP")
+		} else {
+			for i := range users {
+				users[i].SipNumber = numbers[users[i].ID]
+			}
+		}
+	}
+	return users, nil
+}
+
+// TouchPresence отмечает, что учётной записью только что работали.
+//
+// Вызывается из middleware на каждом запросе с токеном, но в базу пишет не
+// чаще раза в минуту на человека: страница панели опрашивает сервер каждые
+// несколько секунд, и запись на каждый запрос была бы нагрузкой без пользы.
+//
+// Ошибку только пишем в журнал: отметка активности — вспомогательные данные,
+// и отказ базы не должен превращать рабочий запрос в ошибку.
+func (s *UserService) TouchPresence(ctx context.Context, id uuid.UUID) {
+	s.presenceMu.Lock()
+	if last, ok := s.presence[id]; ok && time.Since(last) < presenceInterval {
+		s.presenceMu.Unlock()
+		return
+	}
+	s.presence[id] = time.Now()
+	s.presenceMu.Unlock()
+
+	if err := s.repo.TouchLastSeen(ctx, id); err != nil {
+		log.Warn().Err(err).Msg("не удалось отметить активность учётной записи")
+	}
 }
 
 // Create добавляет пользователя.
@@ -166,8 +223,46 @@ func (s *UserService) Create(ctx context.Context, req CreateUserRequest) (*domai
 		if err := s.lines.EnsureLine(ctx, user); err != nil {
 			log.Warn().Err(err).Str("user", user.Username).
 				Msg("не удалось выдать учётной записи линию SIP")
+		} else if numbers, err := s.lines.PinnedNumbers(ctx); err == nil {
+			// Номер возвращаем сразу, чтобы карточка только что заведённого
+			// человека показывала его без перезагрузки списка.
+			user.SipNumber = numbers[user.ID]
 		}
 	}
+	return user, nil
+}
+
+// SetSipNumber закрепляет за учётной записью другой внутренний номер.
+//
+// Право проверяет middleware (`users.manage`): номер — часть учётной записи,
+// а не настроек телефонии, и менять его должен тот, кто заводит людей.
+func (s *UserService) SetSipNumber(
+	ctx context.Context,
+	id uuid.UUID,
+	number string,
+) (*domain.User, error) {
+	if s.lines == nil {
+		return nil, ErrSipDisabled
+	}
+
+	user, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, errors.New("пользователь не найден")
+	}
+
+	pinned, err := s.lines.SetNumber(ctx, id, number)
+	if err != nil {
+		return nil, err
+	}
+
+	// Учётная запись могла быть заведена до появления телефонии: линии ещё
+	// нет, а номер уже хотят закрепить. Досоздаём её — иначе закрепление
+	// осталось бы записью в таблице, до которой никто не дозвонится.
+	if err := s.lines.EnsureLine(ctx, user); err != nil {
+		log.Warn().Err(err).Str("user", user.Username).
+			Msg("не удалось завести линию SIP после смены номера")
+	}
+	user.SipNumber = pinned
 	return user, nil
 }
 

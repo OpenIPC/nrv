@@ -183,7 +183,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		userSvc = userSvc.WithInvites(postgres.NewAppInviteRepo(cfg.DB))
 	}
 	authH = authH.WithAppInvites(userSvc)
-	userH := handlers.NewUserHandler(userSvc)
+	userH := handlers.NewUserHandler(userSvc).
+		// Признак «в сети» в списке людей: живая линия SIP или свежая
+		// активность в панели.
+		WithSipStatus(cfg.SipStatus)
 	cameraH := handlers.NewCameraHandler(cfg.CameraSvc)
 	streamH := handlers.NewStreamHandler(cfg.CameraSvc, cfg.Go2rtcAPI, cfg.Go2rtcPublicHost, tokenAuth)
 	// WHEP-прокси для мобильного приложения: адрес медиасервера тот же,
@@ -443,6 +446,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/users/{id}/block", userH.Block)
 			r.Post("/users/{id}/unblock", userH.Unblock)
 
+					// Номер SIP в карточке человека. Отдельный маршрут: смена
+					// номера ломает уже настроенный телефон, и сохранять её
+					// вместе с правкой роли нельзя.
+					r.Put("/users/{id}/sip-number", userH.SetSipNumber)
 			// Права на объекты: какие камеры видны пользователю.
 			//
 			// Те же право `users.manage`, что и у самой карточки пользователя:

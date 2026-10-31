@@ -3058,6 +3058,17 @@ export interface UserAccount {
   web_access?: boolean
   /** Разрешён ли вход из мобильного приложения. */
   app_access?: boolean
+  /**
+   * Внутренний номер SIP, закреплённый за учётной записью.
+   *
+   * Пусто — телефония не настроена или номер ещё не выдан: он появляется
+   * сам при первом входе в приложение.
+   */
+  sip_number?: string
+  /** Работает ли человек прямо сейчас: живая линия SIP или свежие запросы. */
+  online?: boolean
+  /** Когда учётная запись последний раз обращалась к серверу. */
+  last_seen_at?: string
 }
 
 /**
@@ -3130,6 +3141,15 @@ export const usersAPI = {
     api.post<UserAccount>(`/users/${id}/block`, data),
   /** Возвращает доступ учётной записи. */
   unblock: (id: string) => api.post<UserAccount>(`/users/${id}/unblock`, {}),
+  /**
+   * Закрепляет за учётной записью другой внутренний номер SIP.
+   *
+   * Отдельный запрос, а не поле в update: номер прописан в телефоне
+   * сотрудника, и менять его вместе с правкой роли — значит менять его
+   * незаметно.
+   */
+  setSipNumber: (id: string, number: string) =>
+    api.put<UserAccount>(`/users/${id}/sip-number`, { number }),
 }
 
 export const meAPI = {

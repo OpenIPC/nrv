@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,7 +35,7 @@ func NewUserRepo(db *pgxpool.Pool) *UserRepo {
 // и колонка, забытая в одном из них, даёт странную картину: «заблокирован
 // при входе, но не в списке». Такое замечают только случайно.
 const userColumns = `id, username, password_hash, role, permissions, created_at,
-	blocked, blocked_until, block_reason, web_access, app_access`
+     blocked, blocked_until, block_reason, web_access, app_access, last_seen_at`
 
 // rowScanner — общее для pgx.Row и pgx.Rows: оба умеют Scan.
 type rowScanner interface {
@@ -46,7 +47,7 @@ func scanUser(s rowScanner) (*domain.User, error) {
 	var u domain.User
 	var perms []byte
 	err := s.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &perms, &u.CreatedAt,
-		&u.Blocked, &u.BlockedUntil, &u.BlockReason, &u.WebAccess, &u.AppAccess)
+		&u.Blocked, &u.BlockedUntil, &u.BlockReason, &u.WebAccess, &u.AppAccess, &u.LastSeenAt)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +108,19 @@ func (r *UserRepo) List(ctx context.Context) ([]domain.User, error) {
 		users = append(users, *u)
 	}
 	return users, rows.Err()
+}
+
+// TouchLastSeen отмечает, что учётной записью только что работали.
+//
+// Вызывается не на каждый запрос: сервис сам решает, когда писать в базу
+// (раз в минуту на человека), иначе одно открытое окно панели давало бы
+// сотню UPDATE в минуту на пустом месте.
+func (r *UserRepo) TouchLastSeen(ctx context.Context, id uuid.UUID) error {
+	if _, err := r.db.Exec(ctx,
+		`UPDATE users SET last_seen_at = now() WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("touch last seen: %w", err)
+	}
+	return nil
 }
 
 // SetBlock закрывает или открывает доступ учётной записи.
