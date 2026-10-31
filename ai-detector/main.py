@@ -22,6 +22,7 @@ from nats.aio.errors import ErrTimeout
 
 from detection_config import (
     DetectionConfigStore,
+    EpisodeTracker,
     LineCrossingTracker,
     bbox_center,
     similar_plate,
@@ -463,6 +464,9 @@ async def main():
         logger.warning("DATABASE_URL не задан — фильтрация по настройкам отключена")
 
     crossings = LineCrossingTracker()
+    # Эпизоды: пока объект в кадре, повторных событий не пишем — иначе одна
+    # машина у подъезда дает десятки записей за вечер (см. EpisodeTracker).
+    episodes = EpisodeTracker(float(os.getenv("EPISODE_GAP_SEC", "60")))
     # Время последнего предупреждения «линия не считается» по камерам
     line_warn_at: dict[str, float] = {}
     # Последний кадр основного потока по камере.
@@ -746,7 +750,18 @@ async def main():
                 if config_store.is_static(cfg, camera_id, ev["object_class"],
                                           ev["bbox"], w, h):
                     continue
+                # Пауза камеры остаётся как жёсткий нижний предел: трекер
+                # иногда перевыдаёт track_id на каждом кадре, и тогда ключ
+                # эпизода меняется — без этой проверки событий стало бы
+                # больше, чем до эпизодов.
                 if config_store.in_cooldown(camera_id, ev["object_class"], cfg):
+                    continue
+                # Эпизод вместо кадрового события: событие пишется только
+                # когда объект появился (или вернулся после долгого
+                # отсутствия).
+                if not episodes.begin(camera_id, ev.get("track_id"),
+                                      ev["object_class"], cfg.cooldown_sec,
+                                      time.monotonic()):
                     continue
                 events.append(ev)
 
@@ -926,6 +941,23 @@ async def main():
                 await asyncio.sleep(1)
 
     worker_task = asyncio.create_task(worker()) if detector is not None else None
+
+    async def report_episodes():
+        """Пишет в журнал, сколько событий свернулось в эпизоды.
+
+        Без этой строки эффект от эпизодов нечем проверить: по журналу видно
+        только отдельные события, и непонятно, экономит ли схема записи или
+        молча гасит нужное.
+        """
+        while True:
+            await asyncio.sleep(600)
+            stats = episodes.stats()
+            logger.info(
+                f"эпизоды: начато {stats['episodes']}, "
+                f"повторов подавлено {stats['suppressed']}, "
+                f"объектов в памяти {stats['keys']}")
+
+    episode_task = asyncio.create_task(report_episodes())
 
     # Быстрый поток кадров зоны номера.
     #
@@ -1193,6 +1225,7 @@ async def main():
     finally:
         for task in plate_tasks:
             task.cancel()
+        episode_task.cancel()
         if audio_task is not None:
             audio_task.cancel()
         await nc.close()

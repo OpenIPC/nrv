@@ -560,3 +560,79 @@ class LineCrossingTracker:
         stale = [k for k, (_, ts) in self._state.items() if now - ts > max_age]
         for k in stale:
             self._state.pop(k, None)
+
+
+class EpisodeTracker:
+    """Эпизоды: одно событие на появление объекта, а не на каждый кадр.
+
+    Зачем. Пауза между событиями (cooldown) гасит поток одинаковых строк, но
+    у неё есть изъян: пока объект в кадре, каждые N секунд пишется новое
+    событие. Машина, простоявшая во дворе полчаса, даёт десятки записей,
+    и в архиве они выглядят как десятки разных происшествий — оператору
+    приходится глазами склеивать их обратно.
+
+    Что делаем. Событием считаем НАЧАЛО появления. Пока объект виден, эпизод
+    продолжается и новых записей не создаёт; когда объект пропал и вернулся
+    позже, чем через gap секунд, начинается новый эпизод.
+
+    Ключ — track_id, если трекер его даёт: тогда две разные машины в кадре
+    остаются двумя эпизодами. Без track_id остаётся класс, и эпизод выходит
+    грубее, но не грубее, чем было с одной только паузой.
+
+    Настройки камеры не расширяем: gap — это общий параметр установки
+    (EPISODE_GAP_SEC), а cooldown камеры работает как нижняя граница. Так у
+    уже настроенных камер поведение не меняется внезапно.
+    """
+
+    # Записи о старых эпизодах удаляются: за сутки ключей может накопиться
+    # много (каждая машина — свой трек), а помнить их дольше часа незачем.
+    MAX_AGE = 3600.0
+
+    def __init__(self, default_gap: float = 60.0):
+        self.default_gap = default_gap
+        # (камера, ключ) -> время последнего появления
+        self._last_seen: dict[tuple[str, str], float] = {}
+        # Сколько эпизодов начато — для журнала и проверки на живом стенде.
+        self.started = 0
+        self.suppressed = 0
+
+    def begin(self, camera_id: str, track_id, obj_class: str,
+              cooldown_sec: float, now: float) -> bool:
+        """True — это начало нового эпизода, событие нужно записать.
+
+        Метод вызывается на каждый кадр для каждого объекта, поэтому должен
+        быть дешёвым: только словарь и сравнение чисел.
+        """
+        key = f"track:{track_id}" if track_id is not None else f"class:{obj_class}"
+        gap = max(float(self.default_gap), float(cooldown_sec or 0))
+        state_key = (camera_id, key)
+
+        last = self._last_seen.get(state_key)
+        self._last_seen[state_key] = now
+
+        # Периодическая уборка: словарь не должен расти бесконечно на камере
+        # с плотным движением.
+        if len(self._last_seen) % 500 == 0:
+            self.prune(now)
+
+        if last is None or now - last >= gap:
+            self.started += 1
+            return True
+
+        self.suppressed += 1
+        return False
+
+    def stats(self) -> dict:
+        """Счётчики для периодического журнала."""
+        return {
+            "episodes": self.started,
+            "suppressed": self.suppressed,
+            "keys": len(self._last_seen),
+        }
+
+    def prune(self, now: float | None = None, max_age: float = MAX_AGE):
+        """Убирает записи об объектах, которых давно не видно."""
+        now = now if now is not None else time.monotonic()
+        stale = [k for k, ts in self._last_seen.items() if now - ts > max_age]
+        for k in stale:
+            self._last_seen.pop(k, None)
