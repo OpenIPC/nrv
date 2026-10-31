@@ -60,14 +60,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# CLIP для поиска по архиву «по смыслу» (см. embeddings.py).
+# CLIP/SigLIP для поиска по архиву «по смыслу» (см. embeddings.py).
 #
 # Отдельным слоем, а не строкой в requirements.txt: правка requirements
 # заставляет pip пересобирать все зависимости, включая insightface из
 # исходников (несколько минут на каждую правку). Здесь ставится только сам
-# open_clip и его мелкие зависимости; веса (~350 МБ) в образ не запекаются —
-# они лежат в томе clip_models и качаются при первом старте.
-RUN pip install --break-system-packages --no-cache-dir open_clip_torch
+# open_clip и его мелкие зависимости; веса в образ не запекаются — они лежат
+# в томе clip_models и качаются при первом старте.
+#
+# transformers нужен для токенизатора SigLIP: open_clip берёт его из
+# HuggingFace-репозитория модели, а не из своего словаря.
+RUN pip install --break-system-packages --no-cache-dir \
+    open_clip_torch "transformers>=4.40"
 
 # Замена CPU-сборки onnxruntime на GPU-сборку.
 #

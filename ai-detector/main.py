@@ -305,15 +305,21 @@ class DeferredModel:
 
 
 def load_embedder(device):
-    """Создаёт и загружает CLIP для поиска по смыслу.
+    """Создаёт и загружает модель поиска по смыслу.
 
     Отдельная функция — чтобы открыть импорт внутри DeferredModel: без
     установленной библиотеки контейнер должен подняться и работать без
     поиска по картинкам, а не падать при старте.
+
+    Модель выбирается переменными окружения: у разных установок разное
+    железо, и менять код ради смены весов неправильно. Векторы разных
+    моделей в базе не смешиваются — они подписаны именем модели.
     """
     from embeddings import ClipEmbedder
 
-    embedder = ClipEmbedder(device=device)
+    model_name = os.getenv("EMBED_MODEL", "ViT-B-32")
+    pretrained = os.getenv("EMBED_PRETRAINED", "laion2b_s34b_b79k")
+    embedder = ClipEmbedder(model_name=model_name, pretrained=pretrained, device=device)
     embedder.load()
     return embedder
 
@@ -544,10 +550,16 @@ async def main():
                 {"error": "failed to embed query"}).encode())
             return
 
+        # scale/bias нужны бэкенду, чтобы перевести косинус в вероятность:
+        # у SigLIP шкала косинуса не такая, как у CLIP, и общий порог для
+        # них не работает.
+        scale, bias = embedder.logit_params()
         await msg.respond(json.dumps({
             "model": embedder.label,
             "dim": len(vector),
             "vector": vector,
+            "scale": scale,
+            "bias": bias,
         }).encode())
 
     await nc.subscribe("ai.embed.text", cb=handle_embed_text)

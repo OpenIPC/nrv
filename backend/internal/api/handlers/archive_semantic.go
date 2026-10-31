@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -21,7 +22,10 @@ import (
 // способа доставки запроса в модель (сейчас это NATS до контейнера
 // детектора), а тесты обходятся заглушкой.
 type TextEmbedder interface {
-	EmbedText(ctx context.Context, text string) ([]float32, string, error)
+	// EmbedText возвращает вектор запроса, имя модели и её параметры
+	// калибровки (масштаб и сдвиг логита). Без них косинус нельзя перевести
+	// в вероятность: у SigLIP шкала косинуса на порядок меньше, чем у CLIP.
+	EmbedText(ctx context.Context, text string) ([]float32, string, float64, float64, error)
 }
 
 // ArchiveSearchHandler ищет записи по описанию: «красная машина», «человек
@@ -159,6 +163,10 @@ func (h *ArchiveSearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	var (
 		queryVector []float32
 		model       string
+		// Параметры калибровки: score = sigmoid(scale*cos + bias).
+		// Нули означают «модель их не отдаёт» — тогда работаем с косинусом.
+		modelScale float64
+		modelBias  float64
 	)
 	if similarTo != "" {
 		queryVector, model, err = h.vectorForEvent(r.Context(), similarTo, cameraFilter)
@@ -167,7 +175,8 @@ func (h *ArchiveSearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		queryVector, model, err = h.embedder.EmbedText(r.Context(), query)
+		vector, name, scale, bias, embedErr := h.embedder.EmbedText(r.Context(), query)
+		err = embedErr
 		if err != nil {
 			log.Warn().Err(err).Str("query", query).Msg("модель поиска по смыслу недоступна")
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -175,6 +184,8 @@ func (h *ArchiveSearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		queryVector, model = vector, name
+		modelScale, modelBias = scale, bias
 	}
 
 	candidates, err := h.candidates(r.Context(), windowStart, windowEnd, cameraFilter, model)
@@ -189,9 +200,20 @@ func (h *ArchiveSearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	// цвет» отвечает приблизительно, а metadata — точно.
 	search := parseArchiveSearch(query)
 
-	// Векторная выдача. Отбрасываем совсем непохожие: у CLIP даже случайные
-	// пары дают 0.15–0.2, и без порога в список попадал бы мусор.
-	const minScore = 0.2
+	// Оценка сходства. Если модель отдала и масштаб, и сдвиг логита, считаем
+	// вероятность: sigmoid(scale*cos + bias). Так обучен SigLIP, и только так
+	// его маленькие косинусы (0.05 — уже уверенное совпадение) ложатся в
+	// осмысленный порог. У CLIP сдвига нет: он обучался softmax-лоссом, и
+	// sigmoid там давал бы единицу на любом кадре — поэтому признак
+	// калибровки именно сдвиг, а не масштаб.
+	calibrated := modelBias != 0
+	minScore := defaultMinScore(model, calibrated)
+	if raw := r.URL.Query().Get("min_score"); raw != "" {
+		if parsed, parseErr := strconv.ParseFloat(raw, 32); parseErr == nil && parsed >= 0 && parsed <= 1 {
+			minScore = float32(parsed)
+		}
+	}
+
 	vectorHits := make([]SemanticResult, 0, 64)
 	for _, candidate := range candidates {
 		// Названный класс и цвет — жёсткие условия и для векторов: «красная
@@ -203,7 +225,11 @@ func (h *ArchiveSearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		if len(search.Colors) > 0 && !containsValue(search.Colors, candidate.color) {
 			continue
 		}
-		score := vector.Cosine(queryVector, candidate.vector)
+		cos := vector.Cosine(queryVector, candidate.vector)
+		score := cos
+		if calibrated {
+			score = float32(sigmoid(modelScale*float64(cos) + modelBias))
+		}
 		if score < minScore {
 			continue
 		}
@@ -515,6 +541,29 @@ func (h *ArchiveSearchHandler) lexicalCandidates(
 	return hits, rows.Err()
 }
 
+// sigmoid переводит логит в вероятность.
+func sigmoid(x float64) float64 {
+	return 1 / (1 + math.Exp(-x))
+}
+
+// defaultMinScore — порог по умолчанию для конкретной модели.
+//
+// Калиброванный случай (модель отдала масштаб логита): 0.5 — «модель
+// считает, что подходит чаще, чем нет».
+//
+// Некалиброванный — это поиск «похожих» по сохранённому вектору: там
+// сравниваются две картинки, и работаем с косинусом. У SigLIP шкала
+// косинуса та же, что у текста (маленькая), у CLIP — обычная.
+func defaultMinScore(model string, calibrated bool) float32 {
+	if calibrated {
+		return 0.5
+	}
+	if strings.Contains(strings.ToLower(model), "siglip") {
+		return 0.5
+	}
+	return 0.2
+}
+
 // containsValue сообщает, есть ли значение в списке.
 func containsValue(values []string, value string) bool {
 	for _, item := range values {
@@ -525,7 +574,8 @@ func containsValue(values []string, value string) bool {
 	return false
 }
 
-// intersectCameras пересекает запрошенные камеры с разрешёнными.//
+// intersectCameras пересекает запрошенные камеры с разрешёнными.
+//
 // nil в любом из аргументов означает «без ограничений». Пустой непустой
 // срез — «ни одной»: если запрошены только чужие камеры, результат пуст,
 // и подменять его на «все» нельзя.

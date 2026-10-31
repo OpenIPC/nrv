@@ -47,17 +47,23 @@ type embedReply struct {
 	Model  string    `json:"model"`
 	Dim    int       `json:"dim"`
 	Vector []float32 `json:"vector"`
-	Error  string    `json:"error"`
+	// Scale и Bias — параметры калибровки модели: вероятность считается
+	// как sigmoid(scale*cos + bias). У CLIP сдвига нет, у SigLIP есть оба,
+	// и без них один порог не годится для разных моделей.
+	Scale float64 `json:"scale"`
+	Bias  float64 `json:"bias"`
+	Error string  `json:"error"`
 }
 
-// EmbedText возвращает вектор запроса и имя модели, которая его посчитала.
+// EmbedText возвращает вектор запроса, имя модели и параметры её
+// калибровки (масштаб и сдвиг логита).
 //
 // Контекст ограничен таймаутом: если детектор занят загрузкой весов, лучше
 // показать оператору «модель ещё готовится», чем держать запрос минуту.
-func (e *TextEmbedder) EmbedText(ctx context.Context, text string) ([]float32, string, error) {
+func (e *TextEmbedder) EmbedText(ctx context.Context, text string) ([]float32, string, float64, float64, error) {
 	payload, err := json.Marshal(map[string]string{"text": text})
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, 0, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, e.timeout)
@@ -65,21 +71,21 @@ func (e *TextEmbedder) EmbedText(ctx context.Context, text string) ([]float32, s
 
 	msg, err := e.nc.RequestWithContext(ctx, TextEmbedderSubject, payload)
 	if err != nil {
-		return nil, "", ErrEmbedderUnavailable
+		return nil, "", 0, 0, ErrEmbedderUnavailable
 	}
 
 	var reply embedReply
 	if err := json.Unmarshal(msg.Data, &reply); err != nil {
-		return nil, "", ErrEmbedderUnavailable
+		return nil, "", 0, 0, ErrEmbedderUnavailable
 	}
 	if reply.Error != "" || len(reply.Vector) == 0 {
-		return nil, "", ErrEmbedderUnavailable
+		return nil, "", 0, 0, ErrEmbedderUnavailable
 	}
 	if reply.Dim > 0 && reply.Dim != len(reply.Vector) {
-		return nil, "", ErrEmbedderUnavailable
+		return nil, "", 0, 0, ErrEmbedderUnavailable
 	}
 
-	return reply.Vector, reply.Model, nil
+	return reply.Vector, reply.Model, reply.Scale, reply.Bias, nil
 }
 
 // Close закрывает соединение с NATS.
