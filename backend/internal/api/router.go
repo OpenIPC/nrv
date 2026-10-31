@@ -79,6 +79,8 @@ type RouterConfig struct {
 	// nil означает, что модель недоступна: поиск по картинке выключен,
 	// а остальной архив работает как раньше.
 	Embedder handlers.TextEmbedder
+	// SavedSearchSvc — сохранённые поиски и уведомления о совпадениях.
+	SavedSearchSvc *service.SavedSearchService
 	// AudioSvc обеспечивает звук с камер (транскодирование G.711 → AAC)
 	AudioSvc *service.AudioService
 	// HealthSvc собирает показатели здоровья камер OpenIPC (Majestic)
@@ -254,6 +256,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	snapH := handlers.NewSnapshotHandler(cfg.DB, cfg.StorageSvc)
 	// Поиск по архиву «по смыслу»: векторы событий плюс модель детектора.
 	archiveH := handlers.NewArchiveSearchHandler(cfg.DB, cfg.Embedder)
+	// Сохранённые поиски: критерии и уведомления о совпадениях.
+	savedH := handlers.NewSavedSearchHandler(cfg.SavedSearchSvc)
 
 	// Проверка доступа к объектам — одна на все обработчики, которые
 	// показывают камеру, её поток, её записи или контроллер СКУД.
@@ -710,6 +714,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// Поиск по описанию: «красная машина», «человек с сумкой».
 			// Векторы событий считает детектор, сравнение — здесь.
 			r.Get("/archive/search", archiveH.Search)
+
+			// Сохранённые поиски: «сообщи, если появится красная машина».
+			r.Get("/archive/saved-searches", savedH.List)
+			r.Post("/archive/saved-searches", savedH.Create)
+			r.Patch("/archive/saved-searches/{id}", savedH.Update)
+			r.Delete("/archive/saved-searches/{id}", savedH.Delete)
 
 			// СКУД
 			r.Get("/acs/controllers", acsH.ListControllers)

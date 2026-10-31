@@ -1,16 +1,16 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
-  eventsAPI, recordingsAPI, camerasAPI, archiveAPI,
+  eventsAPI, recordingsAPI, camerasAPI, archiveAPI, savedSearchAPI,
   type CalendarDay, type TimelineItem, type Camera, type DetectionEvent,
   type TimelineDetectionMark, type TimelineMatch, type TimelineSearchInfo,
-  type SemanticMatch,
+  type SemanticMatch, type SavedSearch,
 } from '../api/client'
 import ArchivePlayer from '../components/ArchivePlayer'
 import { useToast } from '../context/ToastContext'
 import {
   Calendar, ChevronLeft, ChevronRight, Play, Loader2, Film, Clock,
-  X, Video, Search, RotateCcw,
+  X, Video, Search, RotateCcw, Bell, Save,
 } from 'lucide-react'
 
 /**
@@ -249,6 +249,10 @@ export default function RecordingsPage() {
    * пользуется: результаты у них разные.
    */
   const [searchMode, setSearchMode] = useState<'text' | 'semantic'>('text')
+  // Сохранённые поиски: «сообщи, если появится красная машина».
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([])
+  const [savedSaving, setSavedSaving] = useState(false)
+
   const [semanticResults, setSemanticResults] = useState<SemanticMatch[]>([])
   const [semanticLoading, setSemanticLoading] = useState(false)
   const [semanticError, setSemanticError] = useState('')
@@ -688,6 +692,81 @@ export default function RecordingsPage() {
     }
   }, [selectedDate, timeFrom, timeTo, camerasKey, t])
 
+  // Список сохранённых поисков: небольшой, поэтому читаем при открытии
+  // страницы, без отдельного экрана настроек.
+  const loadSavedSearches = useCallback(() => {
+    savedSearchAPI.list()
+      .then((res) => setSavedSearches(res.data.searches || []))
+      .catch(() => setSavedSearches([]))
+  }, [])
+
+  useEffect(() => { loadSavedSearches() }, [loadSavedSearches])
+
+  /**
+   * Сохраняет текущий отбор как поиск.
+   *
+   * Критерии уходят текстом и готовыми фильтрами: сервер сам разберёт
+   * «красная машина» в car+red, а если текста нет — возьмёт то, что
+   * выбрано в панели.
+   */
+  const saveCurrentSearch = useCallback(async () => {
+    const text = searchInput.trim() || searchQuery.trim()
+    const chosenCameras = cameraMode === 'selected' ? selected : []
+
+    if (!text && chosenCameras.length === 0 && detectionFilter === 'all') {
+      toast.error(t('recordingsPage.savedSearchEmpty'))
+      return
+    }
+
+    // Имя по умолчанию — сам запрос: его видно в списке, и оно понятно
+    // без пояснений. Без текста называем по камерам.
+    const name = text || (chosenCameras.length > 0
+      ? `${t('recordingsPage.savedSearchCameras')}: ${chosenCameras.length}`
+      : t('recordingsPage.savedSearchFilter'))
+
+    setSavedSaving(true)
+    try {
+      const res = await savedSearchAPI.create({
+        name,
+        query_text: text,
+        detection_kinds: detectionFilter === 'all' || detectionFilter === 'none'
+          ? []
+          : [detectionFilter],
+        camera_ids: chosenCameras,
+        notify: true,
+      })
+      setSavedSearches((prev) => [res.data, ...prev])
+      toast.success(t('recordingsPage.savedSearchSaved'))
+    } catch {
+      toast.error(t('recordingsPage.savedSearchFailed'))
+    } finally {
+      setSavedSaving(false)
+    }
+  }, [searchInput, searchQuery, cameraMode, selected, detectionFilter, toast, t])
+
+  const toggleSavedNotify = useCallback(async (item: SavedSearch) => {
+    const next = !item.notify
+    setSavedSearches((prev) => prev.map((s) => (s.id === item.id ? { ...s, notify: next } : s)))
+    try {
+      await savedSearchAPI.setNotify(item.id, next)
+    } catch {
+      // Возвращаем как было: интерфейс не должен показывать состояние,
+      // которого нет в базе.
+      setSavedSearches((prev) => prev.map((s) => (s.id === item.id ? { ...s, notify: item.notify } : s)))
+      toast.error(t('recordingsPage.savedSearchFailed'))
+    }
+  }, [toast, t])
+
+  const removeSavedSearch = useCallback(async (item: SavedSearch) => {
+    setSavedSearches((prev) => prev.filter((s) => s.id !== item.id))
+    try {
+      await savedSearchAPI.remove(item.id)
+    } catch {
+      loadSavedSearches()
+      toast.error(t('recordingsPage.savedSearchFailed'))
+    }
+  }, [loadSavedSearches, toast, t])
+
   /** Сброс всех фильтров к состоянию «весь день, все камеры, без поиска». */
   const resetFilters = useCallback(() => {
     setTimeFrom('')
@@ -1080,6 +1159,80 @@ export default function RecordingsPage() {
             </span>
           )}
         </div>
+      </div>
+
+      {/*
+        Сохранённые поиски.
+
+        Здесь же, а не на отдельной странице: сохранить нужно именно тот
+        отбор, который оператор только что собрал выше, а не набирать его
+        заново в другом месте.
+      */}
+      <div className="card" style={{ marginBottom: 16, padding: '10px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <Bell size={15} style={{ color: 'var(--accent)' }} />
+          <span style={{ fontWeight: 600, fontSize: 13 }}>
+            {t('recordingsPage.savedSearchTitle')}
+          </span>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => void saveCurrentSearch()}
+            disabled={savedSaving}
+          >
+            {savedSaving ? <Loader2 size={12} className="spin" /> : <Save size={12} />}
+            {' '}{t('recordingsPage.savedSearchSave')}
+          </button>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            {t('recordingsPage.savedSearchHint')}
+          </span>
+        </div>
+
+        {savedSearches.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            {savedSearches.map((item) => (
+              <span
+                key={item.id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, fontSize: 12,
+                  padding: '3px 10px', borderRadius: 14,
+                  border: '1px solid var(--border)', color: 'var(--text-secondary)',
+                }}
+              >
+                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }} title={item.query_text}>
+                  {item.name}
+                </span>
+                {(item.object_classes.length > 0 || item.colors.length > 0) && (
+                  <span style={{ opacity: 0.75 }}>
+                    {[...item.object_classes, ...item.colors].join(' · ')}
+                  </span>
+                )}
+                {item.triggered_count > 0 && (
+                  <span style={{ opacity: 0.6 }}>
+                    {t('recordingsPage.savedSearchTriggered', { count: item.triggered_count })}
+                  </span>
+                )}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={item.notify}
+                    onChange={() => void toggleSavedNotify(item)}
+                  />
+                  {t('recordingsPage.savedSearchNotify')}
+                </label>
+                <button
+                  onClick={() => void removeSavedSearch(item)}
+                  title={t('recordingsPage.savedSearchDelete')}
+                  style={{
+                    background: 'transparent', border: 'none', cursor: 'pointer',
+                    color: 'inherit', padding: 0, lineHeight: 1, fontSize: 14,
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/*

@@ -317,6 +317,11 @@ func main() {
 			notifier.AttachClip(clip.CameraID, clip.EventTime, clip.Path)
 		}
 	})
+	// Сохранённые поиски: «сообщи, если появится красная машина».
+	// Сервис держит список в кэше и перечитывает его раз в 15 секунд,
+	// поэтому проверка на каждом событии почти ничего не стоит.
+	savedSearchSvc := service.NewSavedSearchService(db)
+
 	if detSubscriber != nil {
 		detSubscriber.WithRecording(recordingMgr)
 		detSubscriber.WithNotifier(notifierAdapter{svc: notifier})
@@ -324,6 +329,7 @@ func main() {
 		// Тревога должна появиться на стене в момент события, а не при
 		// следующем обновлении страницы.
 		detSubscriber.WithLive(liveHub)
+		detSubscriber.WithSavedSearch(service.SavedSearchAdapter{Service: savedSearchSvc})
 	}
 
 	// Съёмка по событиям доступа: подключаем камеры, хранилище и запись.
@@ -640,6 +646,7 @@ func main() {
 		DB:               db,
 		// nil допустим: тогда поиск по описанию отвечает «модель недоступна».
 		Embedder:         embedder,
+		SavedSearchSvc:   savedSearchSvc,
 		Go2rtcAPI:        cfg.Go2rtcAPI,
 		Go2rtcPublicHost: cfg.Go2rtcPublicHost,
 		Scanner:          scanner,

@@ -74,6 +74,9 @@ type DetectionSubscriber struct {
 	// карточки). Отдельно от webhooks: там получатель — чужая программа,
 	// здесь — рабочие места операторов.
 	live LiveBroadcaster
+	// savedSearch — сохранённые поиски: совпало событие — уходит отдельное
+	// уведомление. nil допустим: поиски могут быть не настроены.
+	savedSearch SavedSearchMatcher
 }
 
 // Notifier отправляет уведомления о событиях во внешние каналы.
@@ -84,6 +87,25 @@ type Notifier interface {
 	// NotifyEvent отправляет уведомление. Вызов не блокирующий:
 	// отправка в Telegram не должна задерживать сохранение событий.
 	NotifyEvent(ctx context.Context, ev NotificationEvent)
+}
+
+// SavedSearchMatch — сохранённый поиск, которому соответствует событие.
+type SavedSearchMatch struct {
+	ID   uuid.UUID
+	Name string
+	// QueryText — исходный запрос: попадает в текст уведомления, чтобы
+	// оператор сразу понимал, почему пришло сообщение.
+	QueryText string
+}
+
+// SavedSearchMatcher находит сохранённые поиски под новое событие.
+//
+// Интерфейс, а не сервис: пакет nats не должен зависеть от service —
+// сервис уже импортирует nats (вебхуки), и обратная зависимость замкнула
+// бы цикл импортов.
+type SavedSearchMatcher interface {
+	MatchEvent(cameraID uuid.UUID, objectClass, color, kind string) []SavedSearchMatch
+	MarkTriggered(ctx context.Context, id uuid.UUID)
 }
 
 // SnapshotSaver сохраняет снимок события и возвращает путь к нему.
@@ -119,6 +141,12 @@ type EventRecorder interface {
 // WithRecording подключает запись видео по событиям.
 func (s *DetectionSubscriber) WithRecording(rec EventRecorder) *DetectionSubscriber {
 	s.recorder = rec
+	return s
+}
+
+// WithSavedSearch подключает сохранённые поиски.
+func (s *DetectionSubscriber) WithSavedSearch(matcher SavedSearchMatcher) *DetectionSubscriber {
+	s.savedSearch = matcher
 	return s
 }
 
@@ -403,6 +431,34 @@ func (s *DetectionSubscriber) saveEvent(ctx context.Context, ev *DetectionEvent)
 	// клиентов. Запрашиваем один раз: это обращение к базе на каждое
 	// событие, а детекций при движении бывает много.
 	cameraName := s.cameraName(ctx, cameraID)
+
+	// Сохранённые поиски: «сообщи, если появится красная машина».
+	//
+	// Проверяем после того, как событие сохранено: уведомление должно
+	// ссылаться на существующую запись, иначе открыть её из сообщения
+	// будет нечем. Ошибка проверки не влияет на сохранение события.
+	if s.savedSearch != nil {
+		color, _ := ev.Metadata["color"].(string)
+		for _, hit := range s.savedSearch.MatchEvent(cameraID, ev.ObjectClass, color, string(trigger)) {
+			if s.notifier != nil {
+				s.notifier.NotifyEvent(context.Background(), NotificationEvent{
+					// Отдельный тип: получатель должен отличать «сработку
+					// детектора» от «совпадение с моим поиском».
+					Type:       "saved_search",
+					CameraID:   cameraID,
+					CameraName: cameraName,
+					Detail:     hit.Name,
+					Class:      ev.ObjectClass,
+					Confidence: ev.Confidence,
+					Time:       eventTime,
+					Snapshot:   SnapshotFromBase64(ev.SnapshotJPEG),
+				})
+			}
+			s.savedSearch.MarkTriggered(context.Background(), hit.ID)
+			log.Debug().Str("saved_search", hit.Name).Str("class", ev.ObjectClass).
+				Msg("событие совпало с сохранённым поиском")
+		}
+	}
 
 	// Уведомление о событии. Снимок передаём уже декодированным: для
 	// уведомления нужны байты JPEG, а не путь в хранилище.

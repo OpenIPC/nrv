@@ -1925,6 +1925,17 @@ export default {
     searchModeHint:
       'По словам — точные совпадения: класс, номер, имя. По смыслу — похожие кадры (нужна модель)',
     searchSemanticPlaceholder: 'Опишите кадр: красная машина, человек с сумкой…',
+    savedSearchTitle: 'Сохранённые поиски',
+    savedSearchHint: 'Сохраните отбор — и система сообщит о совпадениях в новых событиях',
+    savedSearchSave: 'Сохранить поиск',
+    savedSearchSaved: 'Поиск сохранён',
+    savedSearchFailed: 'Не удалось сохранить поиск',
+    savedSearchEmpty: 'Нечего сохранять: задайте запрос или выберите фильтры',
+    savedSearchCameras: 'Камеры',
+    savedSearchFilter: 'Фильтр архива',
+    savedSearchNotify: 'уведомлять',
+    savedSearchDelete: 'Удалить поиск',
+    savedSearchTriggered: 'сработал: {{count}}',
     semanticTitle: 'Найдено по описанию',
     semanticEmpty: 'Похожих кадров не нашлось — попробуйте другое описание',
     semanticUnavailable:

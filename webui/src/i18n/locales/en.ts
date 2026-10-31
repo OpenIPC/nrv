@@ -1893,6 +1893,17 @@ export default {
     searchModeHint:
       'By words — exact matches: class, plate, name. By meaning — similar frames (model required)',
     searchSemanticPlaceholder: 'Describe the frame: red car, person with a bag…',
+    savedSearchTitle: 'Saved searches',
+    savedSearchHint: 'Save the filter — the system will report matches in new events',
+    savedSearchSave: 'Save search',
+    savedSearchSaved: 'Search saved',
+    savedSearchFailed: 'Failed to save the search',
+    savedSearchEmpty: 'Nothing to save: set a query or pick filters',
+    savedSearchCameras: 'Cameras',
+    savedSearchFilter: 'Archive filter',
+    savedSearchNotify: 'notify',
+    savedSearchDelete: 'Delete search',
+    savedSearchTriggered: 'triggered: {{count}}',
     semanticTitle: 'Found by description',
     semanticEmpty: 'No similar frames found — try another description',
     semanticUnavailable:

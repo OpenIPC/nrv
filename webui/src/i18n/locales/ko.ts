@@ -1762,6 +1762,17 @@ export default {
     searchModeHint:
       '단어로 — 정확한 일치: 클래스, 번호, 이름. 의미로 — 유사한 장면(모델 필요)',
     searchSemanticPlaceholder: '장면 설명: 빨간 자동차, 가방을 든 사람…',
+    savedSearchTitle: '저장된 검색',
+    savedSearchHint: '필터를 저장하면 새 이벤트에서 일치하는 항목을 알려줍니다',
+    savedSearchSave: '검색 저장',
+    savedSearchSaved: '검색이 저장되었습니다',
+    savedSearchFailed: '검색을 저장하지 못했습니다',
+    savedSearchEmpty: '저장할 내용이 없습니다: 검색어나 필터를 지정하세요',
+    savedSearchCameras: '카메라',
+    savedSearchFilter: '아카이브 필터',
+    savedSearchNotify: '알림',
+    savedSearchDelete: '검색 삭제',
+    savedSearchTriggered: '작동: {{count}}',
     semanticTitle: '설명으로 찾은 결과',
     semanticEmpty: '유사한 장면이 없습니다 — 다른 설명을 시도하세요',
     semanticUnavailable:

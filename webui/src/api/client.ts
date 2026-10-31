@@ -2192,6 +2192,48 @@ export interface SemanticSearchData {
   results: SemanticMatch[]
 }
 
+/** Сохранённый поиск по архиву. */
+export interface SavedSearch {
+  id: string
+  name: string
+  query_text: string
+  /** Разобранные критерии: классы и цвета. Пусто — не ограничивать. */
+  object_classes: string[]
+  colors: string[]
+  /** Типы детекций: object, line, plate, face. */
+  detection_kinds: string[]
+  camera_ids: string[]
+  notify: boolean
+  triggered_count: number
+  last_triggered_at?: string
+  created_at: string
+}
+
+export interface SavedSearchInput {
+  name: string
+  query_text?: string
+  object_classes?: string[]
+  colors?: string[]
+  detection_kinds?: string[]
+  camera_ids?: string[]
+  notify?: boolean
+}
+
+/**
+ * Сохранённые поиски: «сообщи, если появится красная машина».
+ *
+ * Критерии разбирает сервер из текста запроса: в базе лежат машинные
+ * названия («car», «red»), а оператор пишет по-русски.
+ */
+export const savedSearchAPI = {
+  list: () => api.get<{ searches: SavedSearch[] }>('/archive/saved-searches'),
+  create: (input: SavedSearchInput) =>
+    api.post<SavedSearch>('/archive/saved-searches', input),
+  setNotify: (id: string, notify: boolean) =>
+    api.patch<{ ok: boolean }>(`/archive/saved-searches/${id}`, { notify }),
+  remove: (id: string) => api.delete(`/archive/saved-searches/${id}`),
+}
+
 export const archiveAPI = {
   /**
    * Поиск по архиву «по смыслу».
