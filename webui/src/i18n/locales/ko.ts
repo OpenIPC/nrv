@@ -788,6 +788,13 @@ export default {
     modelPath: '모델 파일',
     modelPathHint: '비우면 설치 시 지정된 모델',
     modelPathPlaceholder: '예: yolov8n.pt',
+    ignoreZones: '무시 영역',
+    ignoreZonesHint:
+      '객체를 계산하지 않는 영역입니다(울타리 뒤 도로, 나뭇가지 등). 프레임을 클릭해 점을 찍으세요. 새 영역은 첫 클릭으로 시작됩니다. 최소 3개의 점이 필요합니다.',
+    ignoreZoneFinish: '영역 완료',
+    ignoreZoneClear: '모두 제거',
+    ignoreZoneChip: '영역 {{index}} · 점 {{count}}개',
+    ignoreZoneRemove: '영역 삭제',
     confidence: '추론 임계값',
     confidenceHint: '모양과 크기 필터 전에 약한 결과를 제거합니다',
     iou: '박스 병합 임계값',

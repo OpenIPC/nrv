@@ -1204,6 +1204,13 @@ export default {
     ocrHint:
       'Plates below the threshold are not saved. Raise it if the events contain a lot of noise.',
 
+    ignoreZones: 'Ignore zones',
+    ignoreZonesHint:
+      'Areas where objects are not counted: the road behind the fence, branches, the neighbouring plot. Click the frame to place points — each new zone starts with the first click. At least three points are needed.',
+    ignoreZoneFinish: 'Finish zone',
+    ignoreZoneClear: 'Remove all',
+    ignoreZoneChip: 'Zone {{index}} · {{count}} points',
+    ignoreZoneRemove: 'Delete zone',
     confidence: 'Confidence threshold: {{value}}%',
     confidenceHint:
       'Objects below the threshold are ignored. Lower means more finds but also more false ones. On real cameras most objects have a confidence of 40–60%: with a threshold above 60% there will be almost no finds.',

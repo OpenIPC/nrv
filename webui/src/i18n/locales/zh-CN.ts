@@ -772,6 +772,13 @@ export default {
     modelPath: '模型文件',
     modelPathHint: '留空——使用安装时的模型',
     modelPathPlaceholder: '例如 yolov8n.pt',
+    ignoreZones: '忽略区域',
+    ignoreZonesHint:
+      '在此区域内不计算对象：栅栏外的道路、树枝、邻居的地块等。点击画面添加顶点，第一次点击开始新区域。至少需要三个顶点。',
+    ignoreZoneFinish: '完成区域',
+    ignoreZoneClear: '全部移除',
+    ignoreZoneChip: '区域 {{index}} · {{count}} 个顶点',
+    ignoreZoneRemove: '删除区域',
     confidence: '推理阈值',
     confidenceHint: '在形状与尺寸过滤前剔除弱结果',
     iou: '框合并阈值',

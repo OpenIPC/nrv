@@ -30,7 +30,7 @@ func (r *DetectionSettingsRepo) Get(ctx context.Context, cameraID uuid.UUID) (*d
 		VALUES ($1)
 		ON CONFLICT (camera_id) DO UPDATE SET camera_id = EXCLUDED.camera_id
 		RETURNING camera_id, enabled, object_classes, min_confidence, detect_types,
-		          zone, line, line_direction, save_snapshots, record_mode,
+		          zone, ignore_zones, line, line_direction, save_snapshots, record_mode,
 		          prebuffer_sec, postbuffer_sec, cooldown_sec,
 		          plate_zone, plate_min_length, plate_max_length, plate_pattern,
 		          plate_min_confidence,
@@ -38,10 +38,10 @@ func (r *DetectionSettingsRepo) Get(ctx context.Context, cameraID uuid.UUID) (*d
 		          face_min_confidence, face_requires_person, class_thresholds, updated_at`
 
 	var s domain.DetectionSettings
-	var zoneRaw, lineRaw, plateZoneRaw, classThresholdsRaw []byte
+	var zoneRaw, ignoreZonesRaw, lineRaw, plateZoneRaw, classThresholdsRaw []byte
 	err := r.db.QueryRow(ctx, q, cameraID).Scan(
 		&s.CameraID, &s.Enabled, &s.ObjectClasses, &s.MinConfidence, &s.DetectTypes,
-		&zoneRaw, &lineRaw, &s.LineDirection, &s.SaveSnapshots, &s.RecordMode,
+		&zoneRaw, &ignoreZonesRaw, &lineRaw, &s.LineDirection, &s.SaveSnapshots, &s.RecordMode,
 		&s.PrebufferSec, &s.PostbufferSec, &s.CooldownSec,
 		&plateZoneRaw, &s.PlateMinLength, &s.PlateMaxLength, &s.PlatePattern,
 		&s.PlateMinConfidence,
@@ -53,6 +53,7 @@ func (r *DetectionSettingsRepo) Get(ctx context.Context, cameraID uuid.UUID) (*d
 	}
 
 	s.Zone = decodePoints(zoneRaw)
+	s.IgnoreZones = decodePolygons(ignoreZonesRaw)
 	s.Line = decodePoints(lineRaw)
 	s.PlateZone = decodePoints(plateZoneRaw)
 	s.ClassThresholds = decodeThresholds(classThresholdsRaw)
@@ -64,7 +65,7 @@ func (r *DetectionSettingsRepo) Get(ctx context.Context, cameraID uuid.UUID) (*d
 func (r *DetectionSettingsRepo) GetIfExists(ctx context.Context, cameraID uuid.UUID) (*domain.DetectionSettings, error) {
 	const q = `
 		SELECT camera_id, enabled, object_classes, min_confidence, detect_types,
-		       zone, line, line_direction, save_snapshots, record_mode,
+		       zone, ignore_zones, line, line_direction, save_snapshots, record_mode,
 		       prebuffer_sec, postbuffer_sec, cooldown_sec,
 		       plate_zone, plate_min_length, plate_max_length, plate_pattern,
 		       plate_min_confidence,
@@ -73,10 +74,10 @@ func (r *DetectionSettingsRepo) GetIfExists(ctx context.Context, cameraID uuid.U
 		FROM detection_settings WHERE camera_id = $1`
 
 	var s domain.DetectionSettings
-	var zoneRaw, lineRaw, plateZoneRaw, classThresholdsRaw []byte
+	var zoneRaw, ignoreZonesRaw, lineRaw, plateZoneRaw, classThresholdsRaw []byte
 	err := r.db.QueryRow(ctx, q, cameraID).Scan(
 		&s.CameraID, &s.Enabled, &s.ObjectClasses, &s.MinConfidence, &s.DetectTypes,
-		&zoneRaw, &lineRaw, &s.LineDirection, &s.SaveSnapshots, &s.RecordMode,
+		&zoneRaw, &ignoreZonesRaw, &lineRaw, &s.LineDirection, &s.SaveSnapshots, &s.RecordMode,
 		&s.PrebufferSec, &s.PostbufferSec, &s.CooldownSec,
 		&plateZoneRaw, &s.PlateMinLength, &s.PlateMaxLength, &s.PlatePattern,
 		&s.PlateMinConfidence,
@@ -91,6 +92,7 @@ func (r *DetectionSettingsRepo) GetIfExists(ctx context.Context, cameraID uuid.U
 	}
 
 	s.Zone = decodePoints(zoneRaw)
+	s.IgnoreZones = decodePolygons(ignoreZonesRaw)
 	s.Line = decodePoints(lineRaw)
 	s.PlateZone = decodePoints(plateZoneRaw)
 	s.ClassThresholds = decodeThresholds(classThresholdsRaw)
@@ -102,7 +104,7 @@ func (r *DetectionSettingsRepo) GetIfExists(ctx context.Context, cameraID uuid.U
 func (r *DetectionSettingsRepo) ListEnabled(ctx context.Context) ([]domain.DetectionSettings, error) {
 	const q = `
 		SELECT camera_id, enabled, object_classes, min_confidence, detect_types,
-		       zone, line, line_direction, save_snapshots, record_mode,
+		       zone, ignore_zones, line, line_direction, save_snapshots, record_mode,
 		       prebuffer_sec, postbuffer_sec, cooldown_sec,
 		       plate_zone, plate_min_length, plate_max_length, plate_pattern,
 		       plate_min_confidence,
@@ -119,10 +121,10 @@ func (r *DetectionSettingsRepo) ListEnabled(ctx context.Context) ([]domain.Detec
 	var out []domain.DetectionSettings
 	for rows.Next() {
 		var s domain.DetectionSettings
-		var zoneRaw, lineRaw, plateZoneRaw, classThresholdsRaw []byte
+		var zoneRaw, ignoreZonesRaw, lineRaw, plateZoneRaw, classThresholdsRaw []byte
 		if err := rows.Scan(
 			&s.CameraID, &s.Enabled, &s.ObjectClasses, &s.MinConfidence, &s.DetectTypes,
-			&zoneRaw, &lineRaw, &s.LineDirection, &s.SaveSnapshots, &s.RecordMode,
+			&zoneRaw, &ignoreZonesRaw, &lineRaw, &s.LineDirection, &s.SaveSnapshots, &s.RecordMode,
 			&s.PrebufferSec, &s.PostbufferSec, &s.CooldownSec,
 			&plateZoneRaw, &s.PlateMinLength, &s.PlateMaxLength, &s.PlatePattern,
 			&s.PlateMinConfidence,
@@ -132,6 +134,7 @@ func (r *DetectionSettingsRepo) ListEnabled(ctx context.Context) ([]domain.Detec
 			return nil, fmt.Errorf("scan detection settings: %w", err)
 		}
 		s.Zone = decodePoints(zoneRaw)
+		s.IgnoreZones = decodePolygons(ignoreZonesRaw)
 		s.Line = decodePoints(lineRaw)
 		s.PlateZone = decodePoints(plateZoneRaw)
 		s.ClassThresholds = decodeThresholds(classThresholdsRaw)
@@ -152,6 +155,7 @@ func (r *DetectionSettingsRepo) Update(ctx context.Context, cameraID uuid.UUID, 
 			min_confidence = COALESCE($4, detection_settings.min_confidence),
 			detect_types   = COALESCE($5, detection_settings.detect_types),
 			zone           = COALESCE($6::jsonb, detection_settings.zone),
+			ignore_zones   = COALESCE($26::jsonb, detection_settings.ignore_zones),
 			line           = COALESCE($7::jsonb, detection_settings.line),
 			line_direction = COALESCE($8, detection_settings.line_direction),
 			save_snapshots = COALESCE($9, detection_settings.save_snapshots),
@@ -173,18 +177,24 @@ func (r *DetectionSettingsRepo) Update(ctx context.Context, cameraID uuid.UUID, 
 			class_thresholds     = COALESCE($25::jsonb, detection_settings.class_thresholds),
 			updated_at     = now()
 		RETURNING camera_id, enabled, object_classes, min_confidence, detect_types,
-		          zone, line, line_direction, save_snapshots, record_mode,
+		          zone, ignore_zones, line, line_direction, save_snapshots, record_mode,
 		          prebuffer_sec, postbuffer_sec, cooldown_sec,
 		          plate_zone, plate_min_length, plate_max_length, plate_pattern,
 		          plate_min_confidence,
 		          min_object_area, max_object_area, max_aspect_ratio, static_seconds,
 		          face_min_confidence, face_requires_person, class_thresholds, updated_at`
 
-	var zoneJSON, lineJSON, plateZoneJSON *string
+	var zoneJSON, ignoreZonesJSON, lineJSON, plateZoneJSON *string
 	if req.Zone != nil {
 		b, _ := json.Marshal(req.Zone)
 		s := string(b)
 		zoneJSON = &s
+	}
+	// nil — не менять, [] — очистить все чёрные зоны.
+	if req.IgnoreZones != nil {
+		b, _ := json.Marshal(req.IgnoreZones)
+		s := string(b)
+		ignoreZonesJSON = &s
 	}
 	if req.Line != nil {
 		b, _ := json.Marshal(req.Line)
@@ -208,7 +218,7 @@ func (r *DetectionSettingsRepo) Update(ctx context.Context, cameraID uuid.UUID, 
 	}
 
 	var s domain.DetectionSettings
-	var zoneRaw, lineRaw, plateZoneRaw, classThresholdsRaw []byte
+	var zoneRaw, ignoreZonesRaw, lineRaw, plateZoneRaw, classThresholdsRaw []byte
 	err := r.db.QueryRow(ctx, q,
 		cameraID, req.Enabled, req.ObjectClasses, req.MinConfidence, req.DetectTypes,
 		zoneJSON, lineJSON, req.LineDirection, req.SaveSnapshots, req.RecordMode,
@@ -216,10 +226,10 @@ func (r *DetectionSettingsRepo) Update(ctx context.Context, cameraID uuid.UUID, 
 		plateZoneJSON, req.PlateMinLength, req.PlateMaxLength, req.PlatePattern,
 		req.PlateMinConfidence,
 		req.MinObjectArea, req.MaxObjectArea, req.MaxAspectRatio, req.StaticSeconds,
-		req.FaceMinConfidence, req.FaceRequiresPerson, classThresholdsJSON,
+		req.FaceMinConfidence, req.FaceRequiresPerson, classThresholdsJSON, ignoreZonesJSON,
 	).Scan(
 		&s.CameraID, &s.Enabled, &s.ObjectClasses, &s.MinConfidence, &s.DetectTypes,
-		&zoneRaw, &lineRaw, &s.LineDirection, &s.SaveSnapshots, &s.RecordMode,
+		&zoneRaw, &ignoreZonesRaw, &lineRaw, &s.LineDirection, &s.SaveSnapshots, &s.RecordMode,
 		&s.PrebufferSec, &s.PostbufferSec, &s.CooldownSec,
 		&plateZoneRaw, &s.PlateMinLength, &s.PlateMaxLength, &s.PlatePattern,
 		&s.PlateMinConfidence,
@@ -231,6 +241,7 @@ func (r *DetectionSettingsRepo) Update(ctx context.Context, cameraID uuid.UUID, 
 	}
 
 	s.Zone = decodePoints(zoneRaw)
+	s.IgnoreZones = decodePolygons(ignoreZonesRaw)
 	s.Line = decodePoints(lineRaw)
 	s.PlateZone = decodePoints(plateZoneRaw)
 	s.ClassThresholds = decodeThresholds(classThresholdsRaw)
@@ -595,4 +606,22 @@ func decodePoints(raw []byte) []domain.Point {
 		return []domain.Point{}
 	}
 	return pts
+}
+
+// decodePolygons разбирает массив полигонов (зоны игнорирования).
+//
+// Пустой массив возвращается как пустой срез, а не nil: интерфейс
+// обращается к длине списка, и nil в JSON превратился бы в null.
+func decodePolygons(raw []byte) [][]domain.Point {
+	out := [][]domain.Point{}
+	if len(raw) == 0 {
+		return out
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return [][]domain.Point{}
+	}
+	if out == nil {
+		return [][]domain.Point{}
+	}
+	return out
 }

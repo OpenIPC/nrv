@@ -260,6 +260,23 @@ func validateDetectionSettings(req *domain.UpdateDetectionSettingsRequest) error
 			return errStr("class_thresholds: values must be between 0 and 1")
 		}
 	}
+
+	// Зоны игнорирования: каждая — либо пустая (её просто нет), либо
+	// замкнутый полигон. Две точки многоугольником не являются, и такая
+	// зона молча не работала бы — лучше сказать об этом сразу.
+	for _, zone := range req.IgnoreZones {
+		if len(zone) == 0 {
+			continue
+		}
+		if len(zone) < 3 {
+			return errStr("ignore_zones: a polygon needs at least 3 points")
+		}
+		for _, point := range zone {
+			if err := checkNorm(point); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

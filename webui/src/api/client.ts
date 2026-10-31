@@ -2670,6 +2670,8 @@ export interface DetectionSettings {
   min_confidence: number
   detect_types: DetectType[]
   zone: Point[]
+  // ignore_zones — чёрные зоны: внутри них объекты не считаются.
+  ignore_zones?: Point[][]
   line: Point[]
   line_direction: LineDirection
   save_snapshots: boolean

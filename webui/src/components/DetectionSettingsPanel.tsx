@@ -68,6 +68,8 @@ function toForm(s: DetectionSettings) {
     min_confidence: s.min_confidence ?? 0.4,
     detect_types: (s.detect_types || ['object']) as DetectType[],
     zone: s.zone || [],
+    // Чёрные зоны: массив полигонов.
+    ignore_zones: (s.ignore_zones || []) as Point[][],
     line: s.line || [],
     line_direction: s.line_direction || 'both',
     save_snapshots: s.save_snapshots ?? true,
@@ -121,6 +123,12 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl, zoneSnap
   // внешне это выглядело как «точки не ставятся», без единой ошибки.
   const lineImgRef = useRef<HTMLImageElement>(null)
   const zoneImgRef = useRef<HTMLImageElement>(null)
+  // Кадр для разметки чёрных зон. Отдельный ref: картинка своя, потому что
+  // разметка идёт по основному потоку (как и у зоны номеров).
+  const ignoreImgRef = useRef<HTMLImageElement>(null)
+  // Индекс зоны, в которую добавляются точки. null — следующая точка
+  // начнёт новую зону.
+  const [activeIgnoreZone, setActiveIgnoreZone] = useState<number | null>(null)
   // Счётчик пересечений линии за сутки. Нужен, чтобы работу линии было видно
   // сразу: без него пересечение отличается от обычной детекции только
   // содержимым метаданных события.
@@ -286,6 +294,57 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl, zoneSnap
     }
   }
 
+
+  /**
+   * Клик по кадру в разделе чёрных зон — добавляет вершину.
+   *
+   * Если активной зоны нет, начинается новая: так разметка в один клик
+   * быстрее, чем «создать зону → нарисовать → завершить» на каждый случай.
+   */
+  const handleIgnoreClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const p = pointFromClick(e, ignoreImgRef.current)
+    if (!p) return
+
+    // Индекс берём из текущего состояния, а сам массив меняем функционально:
+    // два быстрых щелчка подряд иначе прочитали бы один и тот же список
+    // и второй клик потерялся бы.
+    const index = activeIgnoreZone !== null &&
+      activeIgnoreZone < form.ignore_zones.length
+      ? activeIgnoreZone
+      : form.ignore_zones.length
+
+    setForm((current) => {
+      if (!current) return current
+      const zones = current.ignore_zones.map((zone) => [...zone])
+      if (!zones[index]) {
+        zones[index] = []
+      }
+      zones[index] = [...zones[index], p]
+      return { ...current, ignore_zones: zones }
+    })
+    setDirty(true)
+    setActiveIgnoreZone(index)
+  }
+
+  /**
+   * Завершает текущую зону.
+   *
+   * Незамкнутый полигон (меньше трёх точек) выбрасывается: с двумя точками
+   * зоны не существует, и оставлять её в настройках значило бы хранить
+   * обещание, которое детектор всё равно не выполнит.
+   */
+  const finishIgnoreZone = () => {
+    if (activeIgnoreZone === null) return
+    const zones = form.ignore_zones.filter((zone, index) =>
+      index !== activeIgnoreZone || zone.length >= 3)
+    patch('ignore_zones', zones)
+    setActiveIgnoreZone(null)
+  }
+
+  const removeIgnoreZone = (index: number) => {
+    patch('ignore_zones', form.ignore_zones.filter((_, i) => i !== index))
+    setActiveIgnoreZone(null)
+  }
 
   /**
    * Меняет порог одного класса.
@@ -624,6 +683,110 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl, zoneSnap
           />
         </>
       )}
+
+      {/* Зоны игнорирования.
+          Нужны, когда в кадр попадает то, что не интересует: дорога за
+          забором, ветки перед объективом, соседний участок. Белой зоной
+          такое перекрывать неудобно — чёрные накладываются по одной. */}
+      <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>
+        <Crosshair size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
+        {t('detectionPanel.ignoreZones')}
+      </h4>
+      <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
+        {t('detectionPanel.ignoreZonesHint')}
+      </p>
+
+      {snapshotUrl && (
+        <div
+          onClick={handleIgnoreClick}
+          style={{
+            position: 'relative', marginBottom: 10, borderRadius: 8,
+            overflow: 'hidden', cursor: 'crosshair',
+            border: '1px solid var(--border)', lineHeight: 0,
+          }}
+        >
+          <img
+            ref={ignoreImgRef}
+            src={snapshotUrl}
+            alt={t('detectionPanel.frameAlt')}
+            style={{ width: '100%', display: 'block', userSelect: 'none' }}
+            draggable={false}
+          />
+          <svg
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+          >
+            {form.ignore_zones.map((zone, zi) => (
+              zone.length >= 2 && (
+                <polygon
+                  key={`z-${zi}`}
+                  points={zone.map((p) => `${p.x * 100},${p.y * 100}`).join(' ')}
+                  fill={zone.length >= 3 ? 'rgba(239, 68, 68, 0.28)' : 'none'}
+                  stroke="#ef4444"
+                  strokeWidth="0.6"
+                  vectorEffect="non-scaling-stroke"
+                />
+              )
+            ))}
+            {form.ignore_zones.map((zone, zi) => zone.map((p, i) => (
+              <circle
+                key={`p-${zi}-${i}`}
+                cx={p.x * 100}
+                cy={p.y * 100}
+                r="1.3"
+                fill="#ef4444"
+                stroke="#fff"
+                strokeWidth="0.25"
+                vectorEffect="non-scaling-stroke"
+              />
+            )))}
+          </svg>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+        <button
+          className="btn btn-outline btn-sm"
+          onClick={finishIgnoreZone}
+          disabled={activeIgnoreZone === null}
+          style={{ fontSize: 12, padding: '3px 8px' }}
+        >
+          {t('detectionPanel.ignoreZoneFinish')}
+        </button>
+        {form.ignore_zones.length > 0 && (
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => { patch('ignore_zones', []); setActiveIgnoreZone(null) }}
+            style={{ fontSize: 12, padding: '3px 8px' }}
+          >
+            <Trash2 size={12} /> {t('detectionPanel.ignoreZoneClear')}
+          </button>
+        )}
+        {form.ignore_zones.map((zone, zi) => (
+          <span
+            key={zi}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
+              padding: '2px 8px', borderRadius: 12,
+              border: `1px solid ${zi === activeIgnoreZone ? '#ef4444' : 'var(--border)'}`,
+              color: zi === activeIgnoreZone ? '#ef4444' : 'var(--text-secondary)',
+            }}
+          >
+            {t('detectionPanel.ignoreZoneChip', { index: zi + 1, count: zone.length })}
+            <button
+              onClick={() => removeIgnoreZone(zi)}
+              title={t('detectionPanel.ignoreZoneRemove')}
+              style={{
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: 'inherit', padding: 0, lineHeight: 1, fontSize: 12,
+              }}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
 
       {/* Порог уверенности */}
       <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>{t('detectionPanel.confidence', { value: (form.min_confidence * 100).toFixed(0) })}</h4>

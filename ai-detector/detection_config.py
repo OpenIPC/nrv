@@ -67,6 +67,12 @@ class DetectionConfig:
     face_min_confidence: float = 0.6
     # Требовать ли человека в кадре перед распознаванием лиц.
     face_requires_person: bool = True
+    # Зоны игнорирования: список полигонов, внутри которых объекты не считаются.
+    #
+    # Нужны, когда в кадр попадает то, что не интересует: дорога за забором,
+    # ветки перед объективом, соседний участок. Перекрывать это белой зоной
+    # неудобно — чёрные накладываются по одной.
+    ignore_zones: list[list[dict]] = field(default_factory=list)
     # Порог уверенности отдельно для класса объекта: {"person": 0.5}.
     #
     # Общий порог заставляет выбирать между пропусками и ложными
@@ -197,6 +203,7 @@ class DetectionConfigStore:
                            d.prebuffer_sec, d.postbuffer_sec, d.cooldown_sec,
                            d.plate_zone, d.plate_min_length, d.plate_max_length,
                            d.plate_pattern, d.plate_min_confidence,
+                           COALESCE(d.ignore_zones, '[]'::jsonb) AS ignore_zones,
                            d.min_object_area, d.max_object_area,
                            d.max_aspect_ratio, d.static_seconds,
                            d.face_min_confidence, d.face_requires_person,
@@ -237,6 +244,7 @@ class DetectionConfigStore:
                             row.get("face_requires_person", True)
                         ),
                         class_thresholds=dict(row.get("class_thresholds") or {}),
+                        ignore_zones=list(row.get("ignore_zones") or []),
                         audio_enabled=bool(row.get("audio_enabled")),
                         audio_events=list(row.get("audio_events") or []),
                         audio_threshold=float(row.get("audio_threshold") or 0.5),
@@ -279,9 +287,14 @@ class DetectionConfigStore:
         # дешевле и отсекает основную часть мусора.
         if not self._size_ok(cfg, bbox, frame_w, frame_h):
             return False
-        if cfg.zone:
-            center = bbox_center(bbox, frame_w, frame_h)
-            if not point_in_polygon(center, cfg.zone):
+
+        center = bbox_center(bbox, frame_w, frame_h)
+        # Белая зона: искать только внутри неё.
+        if cfg.zone and not point_in_polygon(center, cfg.zone):
+            return False
+        # Чёрные зоны: попал внутрь любой — объекта для нас нет.
+        for zone in cfg.ignore_zones:
+            if len(zone) >= 3 and point_in_polygon(center, zone):
                 return False
         return True
 

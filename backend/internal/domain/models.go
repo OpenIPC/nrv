@@ -361,6 +361,12 @@ type DetectionSettings struct {
 	DetectTypes []string `json:"detect_types"`
 	// Zone — полигон зоны детекции; пустой = весь кадр
 	Zone []Point `json:"zone"`
+	// IgnoreZones — полигоны, внутри которых объекты не считаются.
+	//
+	// Отдельно от Zone: там «искать только здесь», а здесь «здесь не искать».
+	// Накладывать чёрные зоны по одной проще, чем перерисовывать один
+	// сложный белый полигон при каждом изменении сцены.
+	IgnoreZones [][]Point `json:"ignore_zones"`
 	// Line — линия для подсчёта пересечений (2 точки); пустая = выключено
 	Line          []Point `json:"line"`
 	LineDirection string  `json:"line_direction"` // both, forward, backward
@@ -410,23 +416,26 @@ type DetectionSettings struct {
 // UpdateDetectionSettingsRequest — частичное обновление настроек детекции.
 // Все поля указатели, чтобы отличать «не передано» от «передать false/0».
 type UpdateDetectionSettingsRequest struct {
-	Enabled            *bool    `json:"enabled,omitempty"`
-	ObjectClasses      []string `json:"object_classes,omitempty"`
-	MinConfidence      *float64 `json:"min_confidence,omitempty"`
-	DetectTypes        []string `json:"detect_types,omitempty"`
-	Zone               []Point  `json:"zone,omitempty"`
-	Line               []Point  `json:"line,omitempty"`
-	LineDirection      *string  `json:"line_direction,omitempty"`
-	SaveSnapshots      *bool    `json:"save_snapshots,omitempty"`
-	RecordMode         *string  `json:"record_mode,omitempty"`
-	PrebufferSec       *int     `json:"prebuffer_sec,omitempty"`
-	PostbufferSec      *int     `json:"postbuffer_sec,omitempty"`
-	CooldownSec        *int     `json:"cooldown_sec,omitempty"` // Настройки распознавания номеров
-	PlateZone          []Point  `json:"plate_zone,omitempty"`
-	PlateMinLength     *int     `json:"plate_min_length,omitempty"`
-	PlateMaxLength     *int     `json:"plate_max_length,omitempty"`
-	PlatePattern       *string  `json:"plate_pattern,omitempty"`
-	PlateMinConfidence *float64 `json:"plate_min_confidence,omitempty"`
+	Enabled       *bool    `json:"enabled,omitempty"`
+	ObjectClasses []string `json:"object_classes,omitempty"`
+	MinConfidence *float64 `json:"min_confidence,omitempty"`
+	DetectTypes   []string `json:"detect_types,omitempty"`
+	Zone          []Point  `json:"zone,omitempty"`
+	// IgnoreZones — черные зоны. Без omitempty: пустой массив [] должен
+	// доехать до базы как «очистить», а omitempty его выбросил бы.
+	IgnoreZones        [][]Point `json:"ignore_zones"`
+	Line               []Point   `json:"line,omitempty"`
+	LineDirection      *string   `json:"line_direction,omitempty"`
+	SaveSnapshots      *bool     `json:"save_snapshots,omitempty"`
+	RecordMode         *string   `json:"record_mode,omitempty"`
+	PrebufferSec       *int      `json:"prebuffer_sec,omitempty"`
+	PostbufferSec      *int      `json:"postbuffer_sec,omitempty"`
+	CooldownSec        *int      `json:"cooldown_sec,omitempty"` // Настройки распознавания номеров
+	PlateZone          []Point   `json:"plate_zone,omitempty"`
+	PlateMinLength     *int      `json:"plate_min_length,omitempty"`
+	PlateMaxLength     *int      `json:"plate_max_length,omitempty"`
+	PlatePattern       *string   `json:"plate_pattern,omitempty"`
+	PlateMinConfidence *float64  `json:"plate_min_confidence,omitempty"`
 
 	// Фильтры точности. Указатели: nil означает «не менять значение».
 	MinObjectArea      *float64 `json:"min_object_area,omitempty"`
