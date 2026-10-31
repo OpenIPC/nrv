@@ -75,6 +75,10 @@ type RouterConfig struct {
 	VideoRepo        *miniorepo.VideoRepo
 	StorageSvc       *service.StorageService
 	RetentionSvc     *service.RetentionService
+	// Embedder — модель «текст → вектор» для поиска по архиву по смыслу.
+	// nil означает, что модель недоступна: поиск по картинке выключен,
+	// а остальной архив работает как раньше.
+	Embedder handlers.TextEmbedder
 	// AudioSvc обеспечивает звук с камер (транскодирование G.711 → AAC)
 	AudioSvc *service.AudioService
 	// HealthSvc собирает показатели здоровья камер OpenIPC (Majestic)
@@ -248,6 +252,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	fwH := handlers.NewFirmwareHandler(cfg.FirmwareSvc)
 	recH := handlers.NewRecordingHandler(cfg.DB, cfg.VideoRepo, cfg.StorageSvc)
 	snapH := handlers.NewSnapshotHandler(cfg.DB, cfg.StorageSvc)
+	// Поиск по архиву «по смыслу»: векторы событий плюс модель детектора.
+	archiveH := handlers.NewArchiveSearchHandler(cfg.DB, cfg.Embedder)
 
 	// Проверка доступа к объектам — одна на все обработчики, которые
 	// показывают камеру, её поток, её записи или контроллер СКУД.
@@ -267,6 +273,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	eventH = eventH.WithGuard(accessGuard)
 	recH = recH.WithGuard(accessGuard)
 	snapH = snapH.WithGuard(accessGuard)
+	archiveH = archiveH.WithGuard(accessGuard)
 	// СКУД: контроллеры, двери и журнал проходов.
 	acsH = acsH.WithGuard(accessGuard)
 	acsAccessH = acsAccessH.WithGuard(accessGuard)
@@ -446,10 +453,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/users/{id}/block", userH.Block)
 			r.Post("/users/{id}/unblock", userH.Unblock)
 
-					// Номер SIP в карточке человека. Отдельный маршрут: смена
-					// номера ломает уже настроенный телефон, и сохранять её
-					// вместе с правкой роли нельзя.
-					r.Put("/users/{id}/sip-number", userH.SetSipNumber)
+			// Номер SIP в карточке человека. Отдельный маршрут: смена
+			// номера ломает уже настроенный телефон, и сохранять её
+			// вместе с правкой роли нельзя.
+			r.Put("/users/{id}/sip-number", userH.SetSipNumber)
 			// Права на объекты: какие камеры видны пользователю.
 			//
 			// Те же право `users.manage`, что и у самой карточки пользователя:
@@ -700,6 +707,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// что интерфейсу нужны сводки, а не списки записей.
 			r.Get("/recordings/calendar", recH.Calendar)
 			r.Get("/recordings/timeline", recH.DayTimeline)
+			// Поиск по описанию: «красная машина», «человек с сумкой».
+			// Векторы событий считает детектор, сравнение — здесь.
+			r.Get("/archive/search", archiveH.Search)
 
 			// СКУД
 			r.Get("/acs/controllers", acsH.ListControllers)

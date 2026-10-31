@@ -30,6 +30,8 @@ from recognition import FaceRecognizer, PlateRecognizer
 from plate_format import PlateFormat
 from plate_zone import has_plate_zone, zone_box
 from audio_pipeline import AudioPipeline
+from embeddings import crop_with_padding
+from attributes import dominant_color
 from detection_engines import (
     cuda_info,
     load_engines,
@@ -301,6 +303,47 @@ class DeferredModel:
         return self._loaded
 
 
+def load_embedder(device):
+    """Создаёт и загружает CLIP для поиска по смыслу.
+
+    Отдельная функция — чтобы открыть импорт внутри DeferredModel: без
+    установленной библиотеки контейнер должен подняться и работать без
+    поиска по картинкам, а не падать при старте.
+    """
+    from embeddings import ClipEmbedder
+
+    embedder = ClipEmbedder(device=device)
+    embedder.load()
+    return embedder
+
+
+def start_backfill_when_ready(holder, db_url: str):
+    """Ждёт готовности модели и запускает досчёт векторов по старым событиям.
+
+    Векторы появляются только у новых событий, а архив за прошлые дни
+    остался бы без них — и поиск по смыслу не нашёл бы ничего. Досчёт
+    идёт порциями и завершается сам, когда необработанных событий нет.
+    """
+    deadline = time.time() + 300
+    while time.time() < deadline and holder.get() is None:
+        time.sleep(2)
+
+    embedder = holder.get()
+    if embedder is None or not db_url:
+        return
+
+    from embedding_backfill import run_backfill, run_color_backfill
+
+    try:
+        run_backfill(db_url, embedder, embedder.label,
+                     limit=int(os.getenv("EMBED_BACKFILL_LIMIT", "2000")))
+        # Цвет объектов в старых событиях: без него поиск «красная машина»
+        # не нашёл бы ничего, хотя снимки на диске лежат.
+        run_color_backfill(db_url, limit=int(os.getenv("COLOR_BACKFILL_LIMIT", "2000")))
+    except Exception as e:  # noqa: BLE001 — досчёт не должен ронять детектор
+        logger.warning(f"досчёт не удался: {e}")
+
+
 async def main():
     nats_url = os.getenv("NATS_URL", "nats://localhost:4222")
     db_url = os.getenv("DATABASE_URL", "")
@@ -379,13 +422,35 @@ async def main():
     # DeferredModel — иначе скачивание весов блокировало всю детекцию).
     face_holder = DeferredModel(lambda: FaceRecognizer(device=faces_device)) if enable_faces else None
     plate_holder = DeferredModel(lambda: PlateRecognizer(region=plate_region, device=plates_device)) if enable_plates else None
-    # Веса детектора номеров качаем в фоне: без них детектор работает
+
+    # CLIP для поиска по архиву «по смыслу»: кадр события и текстовый
+    # запрос попадают в одно векторное пространство.
+    #
+    # Модель грузится в фоне и не мешает детекции. Если она не поднялась
+    # (нет библиотеки, нет интернета для весов), события сохраняются как
+    # раньше — без вектора, а поиск по смыслу честно сообщает, что модель
+    # недоступна.
+    enable_embeddings = os.getenv("ENABLE_EMBEDDINGS", "true").strip().lower() \
+        not in ("0", "false", "no", "off")
+    embedder_holder = None
+    if enable_embeddings:
+        embed_device = None if objects_device == "cpu" else objects_device
+        embedder_holder = DeferredModel(lambda: load_embedder(embed_device))    # Веса детектора номеров качаем в фоне: без них детектор работает
     # морфологией, и это не должно задерживать приём кадров.
     if enable_plates:
         threading.Thread(target=ensure_plate_model, daemon=True).start()
-    for holder in (face_holder, plate_holder):
+    for holder in (face_holder, plate_holder, embedder_holder):
         if holder is not None:
             holder.start()
+
+    # Досчёт векторов по событиям, записанным до включения поиска по смыслу.
+    # В отдельном потоке: он читает снимки с диска и считает CLIP, и держать
+    # на этом старт детекции нельзя.
+    if embedder_holder is not None and os.getenv("EMBED_BACKFILL", "true").strip().lower() \
+            not in ("0", "false", "no", "off"):
+        threading.Thread(target=start_backfill_when_ready,
+                         args=(embedder_holder, db_url), daemon=True,
+                         name="embedding-backfill").start()
     # Настройки детекции читаем из БД — без них непонятно, что и где искать.
     config_store = None
     if db_url:
@@ -442,6 +507,47 @@ async def main():
 
     snapshot_sub = await nc.subscribe("cameras.*.snapshot", cb=handle_snapshot)
     logger.info("Subscribed to cameras.*.snapshot")
+
+    # Запросы «дай вектор для текста» от бэкенда.
+    #
+    # Поиск по смыслу разделён по ответственности: текст в вектор переводит
+    # тот, у кого есть модель (детектор), а поиск по базе делает бэкенд —
+    # у него есть права доступа и фильтры камер. Поэтому здесь только
+    # преобразование запроса в вектор.
+    async def handle_embed_text(msg):
+        embedder = embedder_holder.get() if embedder_holder else None
+        if embedder is None:
+            await msg.respond(json.dumps(
+                {"error": "embedding model is not ready"}).encode())
+            return
+
+        try:
+            payload = json.loads(msg.data.decode("utf-8"))
+            text = str(payload.get("text") or "")
+        except Exception:
+            text = msg.data.decode("utf-8", errors="ignore")
+
+        if not text.strip():
+            await msg.respond(json.dumps({"error": "empty query"}).encode())
+            return
+
+        # Счёт в отдельном потоке: на процессоре вектор текста считается
+        # десятки миллисекунд, но цикл кадров на это время стоять не должен.
+        vector = await asyncio.get_running_loop().run_in_executor(
+            None, embedder.embed_text, text)
+        if vector is None:
+            await msg.respond(json.dumps(
+                {"error": "failed to embed query"}).encode())
+            return
+
+        await msg.respond(json.dumps({
+            "model": embedder.label,
+            "dim": len(vector),
+            "vector": vector,
+        }).encode())
+
+    await nc.subscribe("ai.embed.text", cb=handle_embed_text)
+    logger.info("Subscribed to ai.embed.text")
 
     # Сколько событий одновременно ждут снимок. Публикатор отдаёт не больше
     # нескольких снимков сразу, поэтому ждущие задачи ограничиваем: иначе
@@ -714,6 +820,38 @@ async def main():
                         snapshot_b64 = base64.b64encode(jpeg).decode("ascii")
 
             if events:
+                # Векторы кадров для поиска по смыслу. Считаем пакетом:
+                # один проход модели на все объекты кадра дешевле, чем
+                # отдельный вызов на каждый.
+                embedder = embedder_holder.get() if embedder_holder else None
+                if embedder is not None and img is not None:
+                    pairs = []
+                    for ev in events:
+                        crop = crop_with_padding(img, ev.get("bbox"))
+                        if crop is not None:
+                            pairs.append((ev, crop))
+                    if pairs:
+                        vectors = await asyncio.get_running_loop().run_in_executor(
+                            None, embedder.embed_images, [c for _, c in pairs])
+                        for (ev, _), vector in zip(pairs, vectors or []):
+                            if vector:
+                                ev["embedding"] = vector
+                                ev["embedding_model"] = embedder.label
+
+                # Признаки объекта: цвет и доля площади кадра. Считаются по
+                # тому же вырезу, что и вектор, — это доли миллисекунды и
+                # даёт точный фильтр «красная машина» в дополнение к
+                # приблизительному «похоже на машину» от CLIP.
+                if img is not None:
+                    for ev in events:
+                        color, color_hex, area = dominant_color(img, ev.get("bbox"))
+                        if color:
+                            meta = dict(ev.get("metadata") or {})
+                            meta["color"] = color
+                            meta["color_hex"] = color_hex
+                            meta["area"] = area
+                            ev["metadata"] = meta
+
                 for ev in events:
                     if snapshot_b64:
                         ev["snapshot_jpeg"] = snapshot_b64

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  Save, Loader2, Video, Camera as CameraIcon, AlertCircle, Crosshair,
-  CheckCircle2, Minus, Trash2, SlidersHorizontal, ScanFace,
+  Save, Loader2, Video, AlertCircle, Crosshair,
+  CheckCircle2, Trash2, SlidersHorizontal, ScanFace,
 } from 'lucide-react'
 import {
   detectionAPI, OBJECT_CLASSES, DETECT_TYPES, PLATE_PATTERNS, detectPatternKey,
@@ -288,7 +288,12 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl, zoneSnap
   const save = async () => {
     setSaving(true)
     try {
-      const res = await detectionAPI.update(cameraId, form)
+      // Полями записи владеет вкладка «Запись»: здесь мы их не отправляем.
+      // Иначе правка режима в соседней вкладке затиралась бы при
+      // сохранении детекции — форма держит значения, прочитанные при
+      // открытии, и они уже устарели.
+      const { record_mode, save_snapshots, prebuffer_sec, postbuffer_sec, cooldown_sec, ...detectionOnly } = form
+      const res = await detectionAPI.update(cameraId, detectionOnly)
       setForm(toForm(res.data))
       setDirty(false)
       success(t('detectionPanel.detectionSaved'))
@@ -700,98 +705,14 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl, zoneSnap
         </>
       )}
 
-      {/* Что делать с детекцией */}
-      <h4 style={{ fontSize: 14, margin: '0 0 8px' }}>
-        <CameraIcon size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
-        {t('detectionPanel.whatToDo')}
-      </h4>
-
-      <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 14 }}>
-        <input
-          type="checkbox"
-          checked={form.save_snapshots}
-          onChange={(e) => patch('save_snapshots', e.target.checked)}
-          style={{ accentColor: 'var(--accent)' }}
-        />
-        <span style={{ fontSize: 13 }}>{t('detectionPanel.saveSnapshot')}</span>
-      </label>
-
-      <h4 style={{ fontSize: 13, margin: '0 0 6px' }}>{t('detectionPanel.recordMode')}</h4>
-      <div style={{ display: 'grid', gap: 6, marginBottom: 14 }}>
-        {([
-          { v: 'off', label: t('detectionPanel.recOff'), hint: t('detectionPanel.recOffHint') },
-          { v: 'event', label: t('detectionPanel.recEvent'), hint: t('detectionPanel.recEventHint') },
-          { v: 'always', label: t('detectionPanel.recAlways'), hint: t('detectionPanel.recAlwaysHint') },
-        ] as { v: RecordMode; label: string; hint: string }[]).map((r) => (
-          <label key={r.v} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
-            <input
-              type="radio"
-              name="record_mode"
-              checked={form.record_mode === r.v}
-              onChange={() => patch('record_mode', r.v)}
-              style={{ marginTop: 3, accentColor: 'var(--accent)' }}
-            />
-            <span>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>{r.label}</span>
-              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)' }}>{r.hint}</span>
-            </span>
-          </label>
-        ))}
+      {/* Настройки записи живут на отдельной вкладке «Запись»: там же
+          снимки событий, режим (непрерывный или по детекции) и буферы.
+          Здесь их держать было нелогично: запись нужна и там, где детекция
+          не настроена вовсе. */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: 10, borderRadius: 6, background: 'rgba(120,140,255,0.06)', fontSize: 12 }}>
+        <Video size={14} style={{ marginTop: 2, flexShrink: 0, color: 'var(--text-secondary)' }} />
+        <span>{t('detectionPanel.recordingMoved')}</span>
       </div>
-
-      {/* Буферы записи — только для записи по событию */}
-      {form.record_mode === 'event' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14, padding: 10, background: 'rgba(120,140,255,0.06)', borderRadius: 6 }}>
-          <label style={{ fontSize: 12 }}>
-            {t('detectionPanel.prebuffer')}
-            <input
-              type="number" min={0} max={300}
-              className="input"
-              value={form.prebuffer_sec}
-              onChange={(e) => patch('prebuffer_sec', Math.max(0, Math.min(300, parseInt(e.target.value) || 0)))}
-              style={{ width: '100%', marginTop: 4 }}
-            />
-          </label>
-          <label style={{ fontSize: 12 }}>
-            {t('detectionPanel.postbuffer')}
-            <input
-              type="number" min={1} max={3600}
-              className="input"
-              value={form.postbuffer_sec}
-              onChange={(e) => patch('postbuffer_sec', Math.max(1, Math.min(3600, parseInt(e.target.value) || 1)))}
-              style={{ width: '100%', marginTop: 4 }}
-            />
-          </label>
-        </div>
-      )}
-
-      {/* Пауза между событиями */}
-      <label style={{ fontSize: 12, display: 'block' }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Minus size={12} />
-          {t('detectionPanel.cooldown')}
-        </span>
-        <input
-          type="number" min={0} max={3600}
-          className="input"
-          value={form.cooldown_sec}
-          onChange={(e) => patch('cooldown_sec', Math.max(0, Math.min(3600, parseInt(e.target.value) || 0)))}
-          style={{ width: 120, marginTop: 4 }}
-        />
-        <span style={{ display: 'block', color: 'var(--text-secondary)', marginTop: 4 }}>
-          {t('detectionPanel.cooldownHint')}
-        </span>
-      </label>
-
-      {/* Видео-запись — пока настройка, воркер записи появится на этапе 3 */}
-      {form.record_mode !== 'off' && (
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14, padding: 10, borderRadius: 6, background: 'rgba(255,180,80,0.08)', fontSize: 12 }}>
-          <Video size={14} style={{ marginTop: 2, flexShrink: 0, color: 'var(--warning)' }} />
-          <span>
-            {t('detectionPanel.recordPlanned')}
-          </span>
-        </div>
-      )}
     </div>
   )
 }

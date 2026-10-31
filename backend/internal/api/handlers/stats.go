@@ -2,16 +2,44 @@ package handlers
 
 import (
 	"context"
+	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 
 	"github.com/nvr/backend/internal/domain"
 	"github.com/nvr/backend/internal/hostagent"
+	"github.com/nvr/backend/internal/repository/postgres"
 	"github.com/nvr/backend/internal/sysinfo"
 )
+
+// storageKinds — что показываем на главной: вид данных, каталог по
+// умолчанию и откуда взять настройку.
+//
+// Каталоги по умолчанию повторяют те, что использует StorageService: если
+// оператор ещё не сохранял настройки сервера, цифры всё равно должны быть
+// на месте, а не пустые.
+var storageKinds = []struct {
+	kind    string
+	defPath string
+	pick    func(domain.ServerSettings) domain.StorageConfig
+}{
+	{"recordings", "/var/lib/nvr/recordings", func(s domain.ServerSettings) domain.StorageConfig { return s.Storage }},
+	{"snapshots", "/var/lib/nvr/snapshots", func(s domain.ServerSettings) domain.StorageConfig { return s.Snapshots }},
+}
+
+// storageStatsCacheTTL — как часто пересчитываем размер каталогов.
+//
+// Обход каталога архива читает метаданные всех файлов, а страница
+// обновляется каждые 10 секунд. Пересчёт раз в минуту не грузит диск и
+// даёт цифру, которая не успевает отстать от реальности.
+const storageStatsCacheTTL = time.Minute
 
 // systemReader снимает показатели сервера: процессор, память, диск, сеть.
 //
@@ -37,6 +65,13 @@ type StatsHandler struct {
 	sys systemReader
 	hw  hardwareReader
 	sip sipStatusReader
+	// settings даёт пути архива и снимков. nil допустим: тогда показываем
+	// каталоги по умолчанию.
+	settings *postgres.DetectionSettingsRepo
+
+	storageMu    sync.Mutex
+	storageAt    time.Time
+	storageCache []domain.StorageStat
 }
 
 // NewStatsHandler собирает статистику для панели управления.
@@ -57,6 +92,9 @@ func NewStatsHandler(db *pgxpool.Pool, sys *sysinfo.Reader, hw *hostagent.Client
 	}
 	if sip != nil {
 		h.sip = sip
+	}
+	if db != nil {
+		h.settings = postgres.NewDetectionSettingsRepo(db)
 	}
 	return h
 }
@@ -159,5 +197,150 @@ func (h *StatsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Хранилище архива и снимков. Считается отдельно от «диска сервера»:
+	// архив в другой установке лежит на своём разделе, и общая цифра по
+	// корню о нём ничего не говорит.
+	stats.Storage = h.storageStats(ctx)
+
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// storageStats собирает состояние хранилищ архива и снимков.
+//
+// Результат кешируется: обход каталогов — самая дорогая часть ответа, а
+// страница спрашивает его каждые 10 секунд.
+func (h *StatsHandler) storageStats(ctx context.Context) []domain.StorageStat {
+	if h.settings == nil {
+		return nil
+	}
+
+	h.storageMu.Lock()
+	defer h.storageMu.Unlock()
+
+	if !h.storageAt.IsZero() && time.Since(h.storageAt) < storageStatsCacheTTL {
+		return h.storageCache
+	}
+
+	var cfg domain.ServerSettings
+	if got, err := h.settings.GetServerSettings(ctx); err == nil && got != nil {
+		cfg = *got
+	} else if err != nil {
+		// Настройки недоступны — показываем каталоги по умолчанию. Пустой
+		// список здесь хуже: оператор не увидит ни проблемы, ни места.
+		log.Debug().Err(err).Msg("не удалось прочитать настройки хранилища")
+	}
+
+	out := make([]domain.StorageStat, 0, len(storageKinds))
+	for _, kind := range storageKinds {
+		storageCfg := kind.pick(cfg)
+		stat := domain.StorageStat{
+			Kind:          kind.kind,
+			Backend:       storageCfg.Backend,
+			RetentionDays: storageCfg.RetentionDays,
+		}
+		if stat.Backend == "" {
+			stat.Backend = "local"
+		}
+
+		if stat.Backend != "local" {
+			// Для S3 занятое место считает само хранилище. Показывать
+			// вместо него свободное место диска сервера нельзя: цифра
+			// выглядела бы как «архив занимает 40 ГБ», хотя это не так.
+			out = append(out, stat)
+			continue
+		}
+
+		stat.Path = storageCfg.LocalPath
+		if stat.Path == "" {
+			stat.Path = kind.defPath
+		}
+		fillDiskUsage(&stat)
+		fillDirUsage(&stat)
+		out = append(out, stat)
+	}
+
+	h.storageCache = out
+	h.storageAt = time.Now()
+	return out
+}
+
+// fillDiskUsage заполняет занятое и свободное место раздела, на котором
+// лежит каталог хранилища.
+//
+// Если каталога ещё нет (диск не смонтирован, настройка указывает в
+// никуда), считаем раздел ближайшего существующего родителя: оператору
+// нужно знать, есть ли куда писать, даже когда путь уже неверен.
+func fillDiskUsage(stat *domain.StorageStat) {
+	path := stat.Path
+	for {
+		if _, err := os.Stat(path); err == nil {
+			break
+		}
+		parent := filepath.Dir(path)
+		if parent == path || parent == "/" || parent == "." {
+			path = "/"
+			break
+		}
+		path = parent
+	}
+
+	var info syscall.Statfs_t
+	if err := syscall.Statfs(path, &info); err != nil {
+		stat.Error = "не удалось прочитать раздел: " + err.Error()
+		return
+	}
+
+	total := float64(info.Blocks) * float64(info.Bsize)
+	// Bavail, а не Bfree: часть блоков зарезервирована за root, и нам
+	// они недоступны — иначе «свободно» окажется больше реального.
+	free := float64(info.Bavail) * float64(info.Bsize)
+	const gib = float64(1 << 30)
+	stat.TotalGB = total / gib
+	stat.FreeGB = free / gib
+	stat.UsedGB = (total - free) / gib
+	if total > 0 {
+		stat.UsedPercent = (total - free) / total * 100
+	}
+}
+
+// fillDirUsage считает, сколько занимают наши файлы в каталоге хранилища.
+//
+// Отдельно от места на разделе: на диске могут лежать чужие данные, и по
+// свободному месту нельзя судить о размере архива.
+func fillDirUsage(stat *domain.StorageStat) {
+	info, err := os.Stat(stat.Path)
+	if err != nil {
+		// Каталога нет — это не ошибка настройки, а состояние: архив ещё
+		// не начат или диск не подключён. Пишем это словами, потому что
+		// пустой ноль занятого места читается как «архив пуст».
+		stat.Error = "каталог недоступен: " + err.Error()
+		return
+	}
+	if !info.IsDir() {
+		stat.Error = "путь указывает не на каталог"
+		return
+	}
+	stat.Exists = true
+
+	var size int64
+	walkErr := filepath.WalkDir(stat.Path, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			// Один нечитаемый файл не повод не показать размер остальных.
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		fileInfo, infoErr := entry.Info()
+		if infoErr != nil {
+			return nil
+		}
+		size += fileInfo.Size()
+		stat.Files++
+		return nil
+	})
+	if walkErr != nil {
+		stat.Error = "не удалось посчитать файлы: " + walkErr.Error()
+	}
+	stat.DataGB = float64(size) / float64(1<<30)
 }

@@ -76,9 +76,14 @@ func (r *EventRepo) List(ctx context.Context, cameraID *uuid.UUID, cameraIDs []u
 	// Сравнение по шаблону «содержит»: оператор помнит фрагмент номера
 	// («147», «АА47»), а не строку целиком. На десятках тысяч записей это
 	// последовательный просмотр; при росте базы сюда нужен индекс pg_trgm.
+	//
+	// Класс объекта ищется тем же шаблоном: в архиве оператор пишет «машина»
+	// или «person», и это должно находить события, даже если точный фильтр
+	// по классу не задан.
 	if search != "" {
 		pattern := "%" + search + "%"
-		where += " AND (metadata->>'plate_text' ILIKE $" + itoa(argIdx) +
+		where += " AND (object_class ILIKE $" + itoa(argIdx) +
+			" OR metadata->>'plate_text' ILIKE $" + itoa(argIdx) +
 			" OR COALESCE(matched_name, '') ILIKE $" + itoa(argIdx) + ")"
 		args = append(args, pattern)
 		argIdx++

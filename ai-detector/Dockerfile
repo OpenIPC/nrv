@@ -60,6 +60,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# CLIP для поиска по архиву «по смыслу» (см. embeddings.py).
+#
+# Отдельным слоем, а не строкой в requirements.txt: правка requirements
+# заставляет pip пересобирать все зависимости, включая insightface из
+# исходников (несколько минут на каждую правку). Здесь ставится только сам
+# open_clip и его мелкие зависимости; веса (~350 МБ) в образ не запекаются —
+# они лежат в томе clip_models и качаются при первом старте.
+RUN pip install --break-system-packages --no-cache-dir open_clip_torch
+
 # Замена CPU-сборки onnxruntime на GPU-сборку.
 #
 # Почему именно так. insightface и fast-plate-ocr тянут onnxruntime как

@@ -43,6 +43,33 @@ type RecorderService struct {
 	// её поток нечитаем (например, ffmpeg не получил размеры кадра).
 	// Без этого неисправная камера перезапускала ffmpeg по кругу.
 	broken map[string]time.Time
+
+	// archive — непрерывная запись в архив фрагментами.
+	//
+	// Отдельно от streams: буферные сегменты по 2 с нужны пребуферу
+	// событий и живут две минуты, а архив пишется кусками по ChunkSec
+	// и уезжает в хранилище навсегда. Один процесс на оба дела не годится:
+	// у них разная длина сегмента и разный срок жизни файлов.
+	archive map[string]*archiveStream
+	// ArchiveDir — каталог для фрагментов непрерывной записи до отправки
+	// в хранилище. Внутри тома буфера: там достаточно места на несколько
+	// фрагментов, а после отправки файл удаляется.
+	ArchiveDir string
+	// ChunkSec — длина фрагмента непрерывной записи.
+	//
+	// Пять минут — компромисс: при часе в архиве одна запись на камеру за
+	// час, и при обрыве теряется весь час. При минуте записей слишком
+	// много и шкала архива пестрит. Значение можно поменять переменной
+	// RECORD_CHUNK_SEC.
+	ChunkSec int
+}
+
+// archiveStream — один ffmpeg непрерывной записи в архив.
+type archiveStream struct {
+	cameraID uuid.UUID
+	dir      string
+	cmd      *exec.Cmd
+	cancel   context.CancelFunc
 }
 
 // recStream — одна активная ffmpeg-запись камеры.
@@ -63,10 +90,30 @@ func NewRecorderService(bufferDir string, storage *StorageService) *RecorderServ
 		BufferDir:  bufferDir,
 		SegmentSec: 2,
 		RetainSec:  120,
+		ArchiveDir: filepath.Join(bufferDir, "archive"),
+		ChunkSec:   chunkSec(),
 		storage:    storage,
 		streams:    make(map[string]*recStream),
+		archive:    make(map[string]*archiveStream),
 		broken:     make(map[string]time.Time),
 	}
+}
+
+// chunkSec возвращает длину фрагмента непрерывной записи из окружения.
+//
+// Некорректное значение не должно ломать запись: если в переменной мусор,
+// берём пять минут — рабочий вариант по умолчанию.
+func chunkSec() int {
+	const def = 300
+	raw := strings.TrimSpace(os.Getenv("RECORD_CHUNK_SEC"))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 30 {
+		return def
+	}
+	return n
 }
 
 // StartWriting запускает непрерывную сегментную запись камеры.
@@ -272,6 +319,189 @@ func (r *RecorderService) ActiveStreams() []uuid.UUID {
 	return out
 }
 
+// StartArchive запускает непрерывную запись камеры в архив.
+//
+// Пишем сразу в файлы длиной chunkSec с именем clip_<время>.mp4. Имя выбрано
+// не случайно: его разбирает StorageService.SaveClip — оттуда он берёт камеру
+// и время начала. Благодаря этому готовый фрагмент уезжает в хранилище тем же
+// путём, что и клип события, и отдельный код загрузки (в том числе в S3) не
+// нужен.
+func (r *RecorderService) StartArchive(cameraID uuid.UUID, rtspURL string, chunkSec int) error {
+	key := cameraID.String()
+
+	r.mu.Lock()
+	if _, exists := r.archive[key]; exists {
+		r.mu.Unlock()
+		return nil // уже пишем
+	}
+	if until, bad := r.broken[key]; bad && time.Now().Before(until) {
+		// Камера недавно не отдавала поток — не запускаем ffmpeg по кругу.
+		r.mu.Unlock()
+		return nil
+	}
+	r.mu.Unlock()
+
+	if chunkSec < 30 {
+		chunkSec = r.ChunkSec
+	}
+	if chunkSec < 30 {
+		chunkSec = 300
+	}
+
+	dir := filepath.Join(r.ArchiveDir, key)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create archive dir: %w", err)
+	}
+
+	if !StreamReadable(rtspURL) {
+		r.mu.Lock()
+		r.broken[key] = time.Now().Add(5 * time.Minute)
+		r.mu.Unlock()
+		log.Warn().Str("camera_id", key[:8]).
+			Msg("поток камеры нечитаем — непрерывная запись отложена на 5 минут")
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	args := []string{
+		"-rtsp_transport", "tcp",
+		"-i", rtspURL,
+		"-map", "0:v:0",
+		"-map", "0:a:0?",
+		"-c:v", "copy",
+		"-c:a", "aac",
+		"-b:a", "64k",
+		"-f", "segment",
+		"-segment_time", fmt.Sprintf("%d", chunkSec),
+		"-segment_format", "mp4",
+		"-segment_atclocktime", "0",
+		"-reset_timestamps", "1",
+		"-strftime", "1",
+		"-loglevel", "error",
+		filepath.Join(dir, "clip_%Y%m%d_%H%M%S.mp4"),
+	}
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return fmt.Errorf("start ffmpeg archive: %w", err)
+	}
+
+	stream := &archiveStream{cameraID: cameraID, dir: dir, cmd: cmd, cancel: cancel}
+
+	r.mu.Lock()
+	r.archive[key] = stream
+	r.mu.Unlock()
+
+	log.Info().Str("camera_id", key[:8]).Int("chunk_sec", chunkSec).
+		Msg("непрерывная запись в архив запущена")
+
+	// Прибираем за завершившимся ffmpeg: без этого камера считалась бы
+	// пишущей, и перезапуск после сбоя не произошёл бы.
+	go func() {
+		err := cmd.Wait()
+		if err != nil && ctx.Err() == nil {
+			log.Warn().Err(err).Str("camera_id", key[:8]).
+				Msg("непрерывная запись в архив остановилась")
+		}
+		r.mu.Lock()
+		if current, ok := r.archive[key]; ok && current == stream {
+			delete(r.archive, key)
+		}
+		r.mu.Unlock()
+	}()
+
+	return nil
+}
+
+// StopArchive останавливает непрерывную запись камеры.
+// Уже записанные фрагменты остаются на диске: их заберёт и сохранит
+// следующий проход архивации.
+func (r *RecorderService) StopArchive(cameraID uuid.UUID) {
+	key := cameraID.String()
+
+	r.mu.Lock()
+	stream, ok := r.archive[key]
+	if ok {
+		delete(r.archive, key)
+	}
+	r.mu.Unlock()
+
+	if !ok {
+		return
+	}
+	stream.cancel()
+	log.Info().Str("camera_id", key[:8]).Msg("непрерывная запись в архив остановлена")
+}
+
+// IsArchiving сообщает, идёт ли непрерывная запись камеры в архив.
+func (r *RecorderService) IsArchiving(cameraID uuid.UUID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.archive[cameraID.String()]
+	return ok
+}
+
+// ArchiveStreams возвращает камеры, которые сейчас пишутся в архив.
+func (r *RecorderService) ArchiveStreams() []uuid.UUID {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]uuid.UUID, 0, len(r.archive))
+	for _, s := range r.archive {
+		out = append(out, s.cameraID)
+	}
+	return out
+}
+
+// TakeClosedChunks отдаёт готовые фрагменты непрерывной записи.
+//
+// Готовым считаем всё, кроме самого свежего файла: ffmpeg дописывает именно
+// его и закрывает предыдущий в момент перехода к следующему. Дополнительно
+// требуем, чтобы файл не менялся последние пять секунд: сразу после закрытия
+// ffmpeg ещё может дописывать служебные данные MP4.
+func (r *RecorderService) TakeClosedChunks(cameraID uuid.UUID) []string {
+	dir := filepath.Join(r.ArchiveDir, cameraID.String())
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	type chunk struct {
+		name string
+		mod  time.Time
+	}
+	list := make([]chunk, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if !strings.HasPrefix(entry.Name(), "clip_") || !strings.HasSuffix(entry.Name(), ".mp4") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		list = append(list, chunk{name: entry.Name(), mod: info.ModTime()})
+	}
+	if len(list) < 2 {
+		return nil
+	}
+
+	sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
+
+	out := make([]string, 0, len(list)-1)
+	for _, c := range list[:len(list)-1] {
+		if time.Since(c.mod) < 5*time.Second {
+			continue
+		}
+		out = append(out, filepath.Join(dir, c.name))
+	}
+	return out
+}
+
 // PruneBuffer удаляет сегменты старше RetainSec — защита от переполнения диска.
 // Каталоги камер, для которых запись уже не идёт, удаляются целиком.
 func (r *RecorderService) PruneBuffer() {
@@ -292,7 +522,13 @@ func (r *RecorderService) PruneBuffer() {
 		// Даём запас в 30 с: ffmpeg мог только что упасть и перезапускается,
 		// а собранный клип ещё ждёт сегментов «после события».
 		id, err := uuid.Parse(camDir.Name())
-		if err == nil && !r.IsWriting(id) {
+		if err != nil {
+			// Не каталог камеры (например, archive с фрагментами
+			// непрерывной записи): трогать его нельзя — там лежит то, что
+			// ещё не уехало в хранилище.
+			continue
+		}
+		if !r.IsWriting(id) {
 			files, ferr := os.ReadDir(full)
 			fresh := false
 			if ferr == nil {

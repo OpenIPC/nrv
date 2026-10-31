@@ -1319,6 +1319,42 @@ type Stats struct {
 	// факт состояния SIP, а не событие нашей базы.
 	SIPTotal  int `json:"sip_total"`
 	SIPOnline int `json:"sip_online"`
+
+	// Хранилище архива и снимков — по записи на каждый вид данных.
+	//
+	// Отдельные записи, а не одна общая цифра: пути настраиваются раздельно
+	// и в другой установке лежат на разных дисках. «Свободно 40 ГБ» на
+	// общем счётчике тогда означало бы не то место, куда пишется архив.
+	Storage []StorageStat `json:"storage"`
+}
+
+// StorageStat — состояние хранилища одного вида данных: архив записей или
+// снимки событий.
+//
+// TotalGB/UsedGB/FreeGB описывают раздел целиком (его видно и другим
+// программам на этой машине), а DataGB/Files — только наши файлы в
+// настроенном каталоге. Разница важна: занятое место на диске может быть
+// чужим, и по нему нельзя судить, сколько занимает архив.
+type StorageStat struct {
+	// Kind — вид данных: "recordings" или "snapshots".
+	Kind string `json:"kind"`
+	// Backend — куда пишем: "local" (диск) или "minio" (S3).
+	Backend string `json:"backend"`
+	// Path — каталог локального хранилища. Для S3 пустой.
+	Path string `json:"path"`
+	// Exists — каталог существует и доступен. Ложное значение при
+	// локальном хранилище означает, что архив сейчас некуда писать, и это
+	// важнее любых цифр.
+	Exists        bool    `json:"exists"`
+	TotalGB       float64 `json:"total_gb"`
+	UsedGB        float64 `json:"used_gb"`
+	FreeGB        float64 `json:"free_gb"`
+	UsedPercent   float64 `json:"used_percent"`
+	DataGB        float64 `json:"data_gb"`
+	Files         int64   `json:"files"`
+	RetentionDays int     `json:"retention_days"`
+	// Error — почему цифры не получены. Пустое значение означает успех.
+	Error string `json:"error,omitempty"`
 }
 
 // GPUStat — состояние одной видеокарты для панели показателей.

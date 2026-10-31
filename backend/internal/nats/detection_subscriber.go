@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nvr/backend/internal/domain"
 	"github.com/nvr/backend/internal/live"
+	"github.com/nvr/backend/internal/vector"
 	"github.com/rs/zerolog/log"
 )
 
@@ -30,6 +31,12 @@ type DetectionEvent struct {
 	RecognizeFace *FaceProbe `json:"recognize_face,omitempty"`
 	// RecognizePlate — распознанный номер автомобиля.
 	RecognizePlate *PlateProbe `json:"recognize_plate,omitempty"`
+	// Embedding — вектор CLIP по вырезу объекта: основа поиска по смыслу.
+	// Детектор считает его сам (у него есть модель), бэкенд только хранит.
+	Embedding []float32 `json:"embedding,omitempty"`
+	// EmbeddingModel — имя модели, посчитавшей вектор: сравнивать векторы
+	// разных моделей между собой нельзя.
+	EmbeddingModel string `json:"embedding_model,omitempty"`
 }
 
 // FaceProbe — данные лица для сопоставления со справочником.
@@ -367,6 +374,16 @@ func (s *DetectionSubscriber) saveEvent(ctx context.Context, ev *DetectionEvent)
 		return err
 	}
 
+	// Вектор события для поиска по смыслу. Ошибка здесь не должна терять
+	// событие: поиск по картинке — дополнительная возможность, а не
+	// условие сохранения детекции.
+	if len(ev.Embedding) > 0 {
+		if embErr := saveEmbedding(ctx, s.db, eventID, ev.EmbeddingModel, ev.Embedding); embErr != nil {
+			log.Warn().Err(embErr).Str("camera_id", ev.CameraID[:8]).
+				Msg("не удалось сохранить вектор события")
+		}
+	}
+
 	log.Debug().
 		Str("camera_id", ev.CameraID[:8]).
 		Str("class", ev.ObjectClass).
@@ -556,4 +573,26 @@ func (s *DetectionSubscriber) Close() {
 	if s.nc != nil {
 		s.nc.Close()
 	}
+}
+
+// saveEmbedding сохраняет вектор события для поиска по смыслу.
+//
+// Вектор пишется отдельной таблицей: он нужен только поиску по картинке,
+// а события читают списки и шкала — лишние 2 КБ в каждой строке им ни к чему.
+// Конфликт по (event_id, model) игнорируется: повторная доставка того же
+// события не должна падать.
+func saveEmbedding(ctx context.Context, db *pgxpool.Pool, eventID uuid.UUID,
+	model string, vec []float32) error {
+	if model == "" {
+		// Модель не передана — подписываем векторы общим именем, чтобы они
+		// хотя бы не смешивались с будущими именованными.
+		model = "clip"
+	}
+
+	_, err := db.Exec(ctx, `
+		INSERT INTO event_embeddings (event_id, model, dim, vector)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (event_id, model) DO NOTHING
+	`, eventID, model, len(vec), vector.Encode(vec))
+	return err
 }

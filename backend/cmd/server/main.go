@@ -291,11 +291,15 @@ func main() {
 		if _, err := db.Exec(context.Background(), `
 			INSERT INTO recordings (id, camera_id, start_time, end_time, file_path, file_size,
 			                        resolution, codec, event_triggered, trigger_type, trigger_detail)
-			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), true, $9, $10)`,
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), $11, $9, $10)`,
 			recordingID, clip.CameraID,
 			clip.StartTime, clipEnd,
 			clip.Path, clip.Size, clip.Resolution, clip.Codec,
-			triggerTypeOrDefault(clip.TriggerType), clip.TriggerDetail); err != nil {
+			triggerTypeOrDefault(clip.TriggerType), clip.TriggerDetail,
+			// event_triggered — «запись вызвана событием». У фрагмента
+			// непрерывной записи это не так, и архив не должен помечать его
+			// как реакцию на тревогу.
+			clip.TriggerType != domain.TriggerAlways); err != nil {
 			log.Error().Err(err).Str("camera_id", clip.CameraID.String()[:8]).
 				Msg("не удалось сохранить запись в БД")
 			return
@@ -306,7 +310,12 @@ func main() {
 			acsSvc.AttachClipToEvent(clip.CameraID, clip.Path, clip.EventTime, recordingID)
 		}
 		// Клип готов — если его ждало уведомление, отправляем вместе с видео.
-		notifier.AttachClip(clip.CameraID, clip.EventTime, clip.Path)
+		// Фрагменты непрерывной записи к уведомлениям не привязываем: они
+		// пишутся по расписанию, а не по событию, и «клип к тревоге» из
+		// случайного пятиминутного куска был бы обманом.
+		if clip.TriggerType != domain.TriggerAlways {
+			notifier.AttachClip(clip.CameraID, clip.EventTime, clip.Path)
+		}
 	})
 	if detSubscriber != nil {
 		detSubscriber.WithRecording(recordingMgr)
@@ -330,6 +339,10 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			recordingMgr.Sync(context.Background())
+			// Непрерывная запись: запускаем/останавливаем ffmpeg и забираем
+			// готовые фрагменты в архив. Отдельно от Sync: там пребуфер
+			// событий, здесь — архив целиком.
+			recordingMgr.ArchiveContinuous(context.Background())
 			recorderSvc.PruneBuffer()
 		}
 	}()
@@ -582,6 +595,23 @@ func main() {
 	cameraAccessSvc := service.NewCameraAccessService(userAccessRepo)
 	acsUserAccessSvc := service.NewACSUserAccessService(userAccessRepo)
 
+	// Модель поиска по архиву «по смыслу». Живёт в контейнере детектора
+	// (там torch и веса CLIP), поэтому бэкенд обращается к ней по NATS.
+	//
+	// nil — модель недоступна: поиск по описанию выключен, а остальной
+	// архив работает как обычно. Это штатный режим установки без
+	// AI-детектора.
+	var embedder *natspkg.TextEmbedder
+	if cfg.NatsURL != "" {
+		embed, embedErr := natspkg.NewTextEmbedder(cfg.NatsURL, 8*time.Second)
+		if embedErr != nil {
+			log.Warn().Err(embedErr).Msg("поиск по смыслу недоступен: нет связи с NATS")
+		} else {
+			defer embed.Close()
+			embedder = embed
+		}
+	}
+
 	// Инициализация роутера
 	router := api.NewRouter(api.RouterConfig{
 		CameraSvc: cameraSvc,
@@ -608,6 +638,8 @@ func main() {
 		JWTSecret:        cfg.JWTSecret,
 		WGManager:        wgManager,
 		DB:               db,
+		// nil допустим: тогда поиск по описанию отвечает «модель недоступна».
+		Embedder:         embedder,
 		Go2rtcAPI:        cfg.Go2rtcAPI,
 		Go2rtcPublicHost: cfg.Go2rtcPublicHost,
 		Scanner:          scanner,

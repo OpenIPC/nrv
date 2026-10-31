@@ -1,15 +1,16 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
-  eventsAPI, recordingsAPI, camerasAPI,
+  eventsAPI, recordingsAPI, camerasAPI, archiveAPI,
   type CalendarDay, type TimelineItem, type Camera, type DetectionEvent,
-  type TimelineDetectionMark,
+  type TimelineDetectionMark, type TimelineMatch, type TimelineSearchInfo,
+  type SemanticMatch,
 } from '../api/client'
-import ArchiveDetectionOverlay from '../components/ArchiveDetectionOverlay'
+import ArchivePlayer from '../components/ArchivePlayer'
 import { useToast } from '../context/ToastContext'
 import {
   Calendar, ChevronLeft, ChevronRight, Play, Loader2, Film, Clock,
-  Download, X, Video,
+  X, Video, Search, RotateCcw,
 } from 'lucide-react'
 
 /**
@@ -113,6 +114,43 @@ function todayIso(): string {
 }
 
 /**
+ * «ЧЧ:ММ» → минуты от полуночи.
+ *
+ * Возвращает null для пустой или неверной строки: тогда граница окна
+ * не задана и фильтр по времени не применяется. Проверяем формат здесь,
+ * а не полагаемся на сервер: поле ввода времени можно очистить, и пустое
+ * значение должно означать «без ограничения», а не «с полуночи».
+ */
+function clockMinutes(value: string): number | null {
+  const matched = /^(\d{1,2}):(\d{2})$/.exec(value.trim())
+  if (!matched) return null
+  const hours = Number(matched[1])
+  const minutes = Number(matched[2])
+  if (hours > 24 || minutes > 59 || (hours === 24 && minutes !== 0)) return null
+  return hours * 60 + minutes
+}
+
+/**
+ * Подходит ли событие под свободный запрос.
+ *
+ * Повторяет правило сервера (см. backend/…/archive_search.go): запрос
+ * разбирается в классы объектов, а остаток ищется «содержит» по классу,
+ * номеру и имени из справочника. На клиенте это нужно для плеера: события
+ * короткой записи уже загружены, и второй запрос за ними не оправдан.
+ */
+function matchesArchiveQuery(ev: DetectionEvent, query: string, classes: string[]): boolean {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return true
+
+  const objectClass = (ev.object_class || '').toLowerCase()
+  if (classes.includes(objectClass)) return true
+
+  const plate = String(ev.metadata?.plate_text || '').toLowerCase()
+  const name = (ev.matched_name || '').toLowerCase()
+  return objectClass.includes(needle) || plate.includes(needle) || name.includes(needle)
+}
+
+/**
  * Имя файла для сохранения.
  *
  * Включает камеру, дату и время начала: при экспорте нескольких
@@ -142,7 +180,6 @@ interface DayCell {
   hasRecords: boolean
   info?: CalendarDay
 }
-
 export default function RecordingsPage() {
   const toast = useToast()
   const { t, i18n } = useTranslation()
@@ -179,18 +216,68 @@ export default function RecordingsPage() {
   const [selected, setSelected] = useState<string[]>([])
   const [tracks, setTracks] = useState<Track[]>([])
 
+  /**
+   * Режим показа камер: все в одной дорожке или только выбранные.
+   *
+   * Отдельный переключатель, а не «пустой выбор = все»: оператору нужно
+   * видеть, что именно он сейчас смотрит. В режиме «выбранные» пустой
+   * список — это не «все камеры», а «ничего не выбрано», и подменить одно
+   * другим значило бы показать не то, что человек попросил.
+   */
+  const [cameraMode, setCameraMode] = useState<'all' | 'selected'>('all')
+
+  // Окно внутри суток. Пустой период — весь день: поле времени можно
+  // очистить, и это должно означать «без ограничения», а не «с полуночи».
+  const [timeFrom, setTimeFrom] = useState('')
+  const [timeTo, setTimeTo] = useState('')
+
+  // Поиск по объектам — заготовка умного поиска по архиву.
+  //
+  // Поле и применённый запрос — разные состояния: запрос уходит на сервер
+  // по кнопке или Enter. Иначе каждое нажатие клавиши перезапрашивало бы
+  // сутки записей и шкала мигала бы на каждом символе.
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+
+  /**
+   * Режим поиска: по словам или по смыслу.
+   *
+   * «По словам» ищет точные совпадения по классу, номеру и имени из
+   * справочника — быстро и предсказуемо. «По смыслу» сравнивает запрос
+   * с векторами кадров и находит «красную машину», хотя в базе нет такого
+   * текста. Два разных инструмента, и оператор должен видеть, каким
+   * пользуется: результаты у них разные.
+   */
+  const [searchMode, setSearchMode] = useState<'text' | 'semantic'>('text')
+  const [semanticResults, setSemanticResults] = useState<SemanticMatch[]>([])
+  const [semanticLoading, setSemanticLoading] = useState(false)
+  const [semanticError, setSemanticError] = useState('')
+
+  // Границы окна в долях суток (0..1) — приходят с сервера вместе с
+  // записями, по ним шкала затемняет исключённое время.
+  const [timeWindow, setTimeWindow] = useState<{ from: number; to: number }>({ from: 0, to: 1 })
+  // Записи, внутри которых нашлись подходящие события.
+  const [matches, setMatches] = useState<TimelineMatch[]>([])
+  // Как сервер понял свободный запрос: классы и проигнорированные слова.
+  const [searchInfo, setSearchInfo] = useState<TimelineSearchInfo | null>(null)
+
   const [zoom, setZoom] = useState(1)
   const [playing, setPlaying] = useState<{ item: TimelineItem; color: string } | null>(null)
 
   const timelineRef = useRef<HTMLDivElement>(null)
-  // Видео записи: по его позиции считается время кадра для наложения детекций.
-  const videoRef = useRef<HTMLVideoElement>(null)
   // Детекции за время выбранной записи. Запрашиваем один раз: их немного,
   // а по ходу воспроизведения остаётся показать нужные.
   const [archiveEvents, setArchiveEvents] = useState<DetectionEvent[]>([])
   // Какие детекции подсвечивать на шкале: 'none' — не подсвечивать,
   // 'all' — все типы, иначе конкретный тип (plate, face, line, object).
   const [detectionFilter, setDetectionFilter] = useState('all')
+  // Вид записи: все, только по детекции или только постоянные.
+  //
+  // Отдельный фильтр от типа детекции: это разные вопросы. Первый —
+  // «какие записи показывать» (их немного), второй — «где внутри суток
+  // были события» (тысячи отметок). Смешивать их в одном списке значило
+  // бы заставить оператора выбирать между ними.
+  const [recordKind, setRecordKind] = useState<'all' | 'events' | 'always'>('all')
   // Отметки детекций за день: приходят вместе с записями дня.
   const [detectionMarks, setDetectionMarks] = useState<TimelineDetectionMark[]>([])
 
@@ -206,16 +293,21 @@ export default function RecordingsPage() {
   /**
    * Список камер для запроса.
    *
-   * Пустой выбор трактуем как «все камеры в одну дорожку». Строка в
-   * useMemo стабилизирует зависимость эффекта: массив сравнивался бы
-   * по ссылке и перезапускал загрузку на каждом рендере.
+   * В режиме «все камеры» список пуст: сервер вернёт записи всех камер,
+   * а шкала сведёт их в одну дорожку. Строка в useMemo стабилизирует
+   * зависимость эффекта: массив сравнивался бы по ссылке и перезапускал
+   * загрузку на каждом рендере.
    */
   const camerasKey = useMemo(
-    () => (selected.length > 0 ? selected.join(',') : ''),
-    [selected],
+    () => (cameraMode === 'selected' && selected.length > 0 ? selected.join(',') : ''),
+    [cameraMode, selected],
   )
 
   // Дни месяца, в которые есть записи.
+  //
+  // Пересчитываем вместе с фильтрами: календарь — часть того же запроса
+  // к архиву, и подсветка дней должна отвечать на вопрос «где есть
+  // подходящие записи», а не «где есть хоть что-нибудь».
   useEffect(() => {
     let cancelled = false
 
@@ -224,10 +316,13 @@ export default function RecordingsPage() {
       try {
         const res = await recordingsAPI.calendar({
           year, month,
-          // Календарь показывает наличие записей вообще, без привязки
-          // к выбору дорожек — иначе оператор не увидит день, где писали
-          // только снятые с просмотра камеры.
-          camera_id: undefined,
+          cameras: camerasKey || undefined,
+          from_time: timeFrom.trim() || undefined,
+          to_time: timeTo.trim() || undefined,
+          detection_class: detectionFilter === 'all' || detectionFilter === 'none'
+            ? undefined
+            : detectionFilter,
+          q: searchQuery || undefined,
         })
         if (!cancelled) setDays(res.data.days || [])
       } catch {
@@ -239,7 +334,7 @@ export default function RecordingsPage() {
 
     load()
     return () => { cancelled = true }
-  }, [year, month, toast, t])
+  }, [year, month, camerasKey, timeFrom, timeTo, detectionFilter, searchQuery, toast, t])
 
   /**
    * Загрузка записей дня по каждой выбранной камере.
@@ -267,21 +362,52 @@ export default function RecordingsPage() {
       })))
 
       let marks: TimelineDetectionMark[] = []
+      // Найденные записи собираем по всем дорожкам: каждая отвечает за свою
+      // камеру, а оператору нужен один общий список совпадений.
+      const matchMap = new Map<string, TimelineMatch>()
+      let windowInfo: { from: number; to: number } | null = null
+      let info: TimelineSearchInfo | null = null
+
       const results = await Promise.all(ids.map(async (id, idx) => {
         let items: TimelineItem[] = []
         try {
           const res = await recordingsAPI.timeline({
             date: selectedDate,
             camera_id: id || undefined,
+            // Окно внутри суток: «с 08:00 по 12:00». Пустые значения
+            // не передаём — сервер сам возьмёт весь день.
+            from_time: timeFrom.trim() || undefined,
+            to_time: timeTo.trim() || undefined,
             // Подсветка на шкале: без фильтра сервер считает все типы,
             // с фильтром — только выбранный. Считает он, а не браузер:
             // за сутки событий тысячи, и выгружать их ради отметок нельзя.
             detection_class: detectionFilter === 'all' || detectionFilter === 'none'
               ? undefined
               : detectionFilter,
+            // Свободный запрос («машина», «кот», «А123»).
+            q: searchQuery || undefined,
           })
           items = res.data.items || []
           if (!id) marks = res.data.detections || []
+          for (const match of res.data.matches || []) {
+            const known = matchMap.get(match.recording_id)
+            if (!known) {
+              matchMap.set(match.recording_id, match)
+            } else {
+              // Совпадение может прийти из нескольких запросов, если
+              // камеры выбраны по одной: суммируем события, чтобы счётчик
+              // на клипе не зависел от порядка ответов.
+              known.count += match.count
+              known.kinds = Array.from(new Set([...known.kinds, ...match.kinds]))
+              known.object_classes = Array.from(new Set([...known.object_classes, ...match.object_classes]))
+              if (match.first_time < known.first_time) known.first_time = match.first_time
+              if (match.last_time > known.last_time) known.last_time = match.last_time
+            }
+          }
+          if (res.data.window) {
+            windowInfo = { from: res.data.window.from_ratio, to: res.data.window.to_ratio }
+          }
+          if (res.data.search) info = res.data.search
         } catch {
           items = []
         }
@@ -297,6 +423,9 @@ export default function RecordingsPage() {
       if (!cancelled) {
         setTracks(results)
         setDetectionMarks(detectionFilter === 'none' ? [] : marks)
+        setMatches(Array.from(matchMap.values()))
+        setSearchInfo(info)
+        if (windowInfo) setTimeWindow(windowInfo)
       }
     }
 
@@ -305,7 +434,7 @@ export default function RecordingsPage() {
     // Имена камер читаются из замыкания: список нужен только для подписи,
     // и его обновление не должно перезапускать загрузку записей.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate, camerasKey, toast, detectionFilter])
+  }, [selectedDate, camerasKey, timeFrom, timeTo, searchQuery, toast, detectionFilter])
 
   /**
    * Добавить или убрать камеру из дорожек.
@@ -317,6 +446,11 @@ export default function RecordingsPage() {
    */
   const toggleCamera = useCallback((id: string) => {
     let limitHit = false
+
+    // Любое нажатие на чип переводит панель в режим «выбранные»: оператор
+    // явно выбрал камеру, и продолжать показывать все — значит спорить
+    // с его действием.
+    setCameraMode('selected')
 
     setSelected((prev) => {
       if (prev.includes(id)) return prev.filter((x) => x !== id)
@@ -359,7 +493,15 @@ export default function RecordingsPage() {
     for (let d = 1; d <= daysInMonth; d++) {
       const date = `${year}-${pad(month)}-${pad(d)}`
       const info = byDate.get(date)
-      cells.push({ day: d, date, hasRecords: Boolean(info), info })
+      // День считается «с записями», если есть либо клипы, либо события:
+      // при включённой детекции без записи день всё равно важен — в нём
+      // была тревога, даже если клип за неё не создан.
+      cells.push({
+        day: d,
+        date,
+        hasRecords: Boolean(info && (info.count > 0 || (info.events || 0) > 0)),
+        info,
+      })
     }
 
     return cells
@@ -408,6 +550,195 @@ export default function RecordingsPage() {
     return sum + (e - s) / 1000
   }, 0)
 
+  /**
+   * Активен ли отбор событий.
+   *
+   * От этого зависит, приглушать ли несовпавшие клипы: без фильтра
+   * «совпадением» считается всё, и приглушать было бы нечего.
+   */
+  const filtering = searchQuery.trim() !== '' ||
+    (detectionFilter !== 'all' && detectionFilter !== 'none') ||
+    semanticResults.length > 0
+
+  const matchByRecording = useMemo(
+    () => new Map(matches.map((m) => [m.recording_id, m])),
+    [matches],
+  )
+
+  /** Записи, внутри которых нашлись подходящие события. */
+  const matchedClips = useMemo(
+    () => allItems.filter((item) => matchByRecording.has(item.id)).sort(
+      (a, b) => a.start_time.localeCompare(b.start_time),
+    ),
+    [allItems, matchByRecording],
+  )
+
+  /** Записи, в которых лежат найденные по смыслу события. */
+  const semanticClipIds = useMemo(
+    () => new Set(semanticResults.map((r) => r.recording_id).filter((id): id is string => Boolean(id))),
+    [semanticResults],
+  )
+
+  /**
+   * Готовые окна времени внутри суток.
+   *
+   * Части суток — самый частый запрос («что было ночью»), а вводить
+   * 00:00 и 06:00 каждый раз долго. Границы — те же, что в отчётах.
+   */
+  const timePresets = useMemo(() => ([
+    { key: 'allDay', from: '', to: '' },
+    { key: 'night', from: '00:00', to: '06:00' },
+    { key: 'morning', from: '06:00', to: '12:00' },
+    { key: 'day', from: '12:00', to: '18:00' },
+    { key: 'evening', from: '18:00', to: '' },
+  ]), [])
+
+  /** Подпись выбранного окна для заголовка шкалы. */
+  const activeWindowLabel = useMemo(() => {
+    if (!timeFrom && !timeTo) return ''
+    return `${timeFrom || '00:00'} — ${timeTo || '24:00'}`
+  }, [timeFrom, timeTo])
+
+  /**
+   * Окно задано неверно (конец не позже начала).
+   *
+   * Проверяем на клиенте, чтобы предупредить до запроса: сервер в этом
+   * случае вернёт ошибку, а шкала покажет «нет записей» — выглядит так,
+   * будто их правда нет.
+   */
+  const windowInvalid = useMemo(() => {
+    const from = clockMinutes(timeFrom)
+    const to = clockMinutes(timeTo)
+    if (from === null || to === null) return false
+    return to <= from
+  }, [timeFrom, timeTo])
+
+  /**
+   * Запуск поиска в выбранном режиме.
+   *
+   * «По словам» — мгновенно: шкала сама перезапрашивает записи по
+   * изменившемуся запросу. «По смыслу» — отдельный запрос: сервер просит
+   * у модели вектор, сравнивает его с векторами кадров и возвращает
+   * список событий со снимками.
+   */
+  const runSearch = useCallback(async () => {
+    const text = searchInput.trim()
+    setSemanticError('')
+
+    if (searchMode === 'text') {
+      setSemanticResults([])
+      setSearchQuery(text)
+      return
+    }
+
+    if (!text) {
+      setSemanticResults([])
+      return
+    }
+
+    setSemanticLoading(true)
+    try {
+      const res = await archiveAPI.semanticSearch({
+        q: text,
+        date: selectedDate,
+        from_time: timeFrom || undefined,
+        to_time: timeTo || undefined,
+        cameras: camerasKey || undefined,
+      })
+      setSemanticResults(res.data.results || [])
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      setSemanticResults([])
+      // 503 — модель ещё грузится или детектор выключен. Это не поломка
+      // архива, и сообщение должно говорить разное о разных случаях.
+      setSemanticError(status === 503
+        ? t('recordingsPage.semanticUnavailable')
+        : t('recordingsPage.semanticFailed'))
+    } finally {
+      setSemanticLoading(false)
+    }
+  }, [searchInput, searchMode, selectedDate, timeFrom, timeTo, camerasKey, t])
+
+  /**
+   * Поиск событий, похожих на найденное.
+   *
+   * Вектором запроса становится вектор самого события, поэтому модель
+   * не участвует: ответ приходит быстро и работает даже когда модель
+   * занята загрузкой.
+   */
+  const runSimilar = useCallback(async (match: SemanticMatch) => {
+    setSemanticLoading(true)
+    setSemanticError('')
+    try {
+      const res = await archiveAPI.semanticSearch({
+        similar_to: match.event_id,
+        date: selectedDate,
+        from_time: timeFrom || undefined,
+        to_time: timeTo || undefined,
+        cameras: camerasKey || undefined,
+      })
+      // Само событие-образец в выдаче не нужно: оператор уже видел его.
+      setSemanticResults((res.data.results || []).filter((item) => item.event_id !== match.event_id))
+      setSearchInput(`${match.object_class}${match.color ? ` · ${match.color}` : ''}`)
+    } catch {
+      setSemanticResults([])
+      setSemanticError(t('recordingsPage.semanticFailed'))
+    } finally {
+      setSemanticLoading(false)
+    }
+  }, [selectedDate, timeFrom, timeTo, camerasKey, t])
+
+  /** Сброс всех фильтров к состоянию «весь день, все камеры, без поиска». */
+  const resetFilters = useCallback(() => {
+    setTimeFrom('')
+    setTimeTo('')
+    setSearchInput('')
+    setSearchQuery('')
+    setDetectionFilter('all')
+    setRecordKind('all')
+    setCameraMode('all')
+    setSelected([])
+    setPlaying(null)
+    setSemanticResults([])
+    setSemanticError('')
+  }, [])
+
+  /**
+   * Открывает запись, в которой лежит найденное событие.
+   *
+   * Запись уже загружена в дорожки, если попадает в выбранный день и окно
+   * времени; если нет — сообщаем об этом, а не открываем пустой плеер.
+   */
+  const openSemanticMatch = useCallback((match: SemanticMatch) => {
+    const item = match.recording_id
+      ? allItems.find((candidate) => candidate.id === match.recording_id)
+      : undefined
+    if (!item) {
+      toast.error(t('recordingsPage.matchNotLoaded'))
+      return
+    }
+    const track = tracks.find((tr) => tr.cameraID === item.camera_id)
+    setPlaying({ item, color: track?.color || TRACK_COLORS[0] })
+  }, [allItems, tracks, toast, t])
+
+  /**
+   * Выбор даты из поля ввода.
+   *
+   * Заодно перелистываем календарь к нужному месяцу: иначе выбранный день
+   * оказался бы вне сетки, и левая колонка показывала бы другой месяц,
+   * чем тот, за который построена шкала.
+   */
+  const pickDate = useCallback((value: string) => {
+    if (!value) return
+    setSelectedDate(value)
+    const [pickedYear, pickedMonth] = value.split('-').map(Number)
+    if (pickedYear && pickedMonth) {
+      setYear(pickedYear)
+      setMonth(pickedMonth)
+    }
+    setPlaying(null)
+  }, [])
+
   /** Экспорт одного клипа. */
   const exportClip = useCallback((item: TimelineItem) => {
     if (!item.file_path) {
@@ -436,10 +767,52 @@ export default function RecordingsPage() {
       to: playing.item.end_time,
       page_size: 100,
     })
-      .then((res) => { if (!cancelled) setArchiveEvents(res.data.events || []) })
+      .then((res) => {
+        if (cancelled) return
+        // Отбираем события по тому же правилу, что и шкала: иначе в плеере
+        // окажутся метки, которых нет в результатах поиска.
+        const events = (res.data.events || []).filter((ev) =>
+          matchesArchiveQuery(ev, searchQuery, searchInfo?.classes || []))
+        setArchiveEvents(events)
+      })
       .catch(() => { if (!cancelled) setArchiveEvents([]) })
     return () => { cancelled = true }
-  }, [playing])
+  }, [playing, searchQuery, searchInfo])
+
+  /**
+   * Записи дорожки с учётом фильтра вида записи.
+   *
+   * Фильтруем на отрисовке, а не запросом: записи дня уже загружены, их
+   * десятки, и переключение между «всеми» и «только постоянными» должно
+   * быть мгновенным, без обращения к серверу и мигания шкалы.
+   */
+  const visibleItems = useCallback(
+    (track: Track) =>
+      track.items.filter((item) => {
+        if (recordKind === 'all') return true
+        const isAlways = item.trigger_type === 'always'
+        return recordKind === 'always' ? isAlways : !isAlways
+      }),
+    [recordKind],
+  )
+
+  /**
+   * Переход к соседней записи той же камеры.
+   *
+   * Возвращает undefined, если соседей нет: пусть кнопки в плеере не будет,
+   * чем кнопка, которая ничего не делает. Порядок — по времени начала, а не
+   * по порядку в ответе сервера: шкала у нас временная.
+   */
+  const adjacentClip = (delta: number) => {
+    if (!playing) return undefined
+    const track = tracks.find((tr) => tr.cameraID === playing.item.camera_id)
+    if (!track) return undefined
+    const ordered = [...visibleItems(track)].sort((a, b) => a.start_time.localeCompare(b.start_time))
+    const index = ordered.findIndex((item) => item.id === playing.item.id)
+    const next = index >= 0 ? ordered[index + delta] : undefined
+    if (!next) return undefined
+    return () => setPlaying({ item: next, color: track.color })
+  }
 
   return (
     <div>
@@ -450,11 +823,92 @@ export default function RecordingsPage() {
         </div>
       </div>
 
-      {/* Выбор камер для одновременного просмотра */}
-      <div className="card" style={{ marginBottom: 16, padding: '10px 14px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      {/*
+        Панель поиска по архиву.
+
+        Дата, окно времени, камеры, вид записи, тип детекции и свободный
+        запрос стоят рядом и читаются сверху вниз: оператор строит запрос
+        как предложение («за сегодня, с 18 до 24, с этой камеры, где была
+        машина») и сразу видит результат на шкале под панелью.
+      */}
+      <div className="card" style={{ marginBottom: 16, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Дата и окно времени внутри суток */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <Calendar size={16} style={{ color: 'var(--accent)' }} />
+          <input
+            type="date"
+            className="input"
+            value={selectedDate}
+            max={todayIso()}
+            onChange={(e) => pickDate(e.target.value)}
+            title={t('recordingsPage.pickDate')}
+            style={{ fontSize: 13, padding: '4px 8px', width: 'auto' }}
+          />
+
+          <Clock size={16} style={{ color: 'var(--accent)', marginLeft: 6 }} />
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            {t('recordingsPage.timeRange')}
+          </span>
+          <input
+            type="time"
+            className="input"
+            value={timeFrom}
+            placeholder="00:00"
+            onChange={(e) => setTimeFrom(e.target.value)}
+            title={t('recordingsPage.timeFrom')}
+            style={{ fontSize: 13, padding: '4px 8px', width: 'auto' }}
+          />
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>—</span>
+          <input
+            type="time"
+            className="input"
+            value={timeTo}
+            // Пустое поле — «до конца суток»: браузер не принимает 24:00,
+            // поэтому конец дня задаётся отсутствием значения.
+            placeholder="24:00"
+            onChange={(e) => setTimeTo(e.target.value)}
+            title={t('recordingsPage.timeTo')}
+            style={{ fontSize: 13, padding: '4px 8px', width: 'auto' }}
+          />
+
+          {/* Части суток: самый частый запрос в один щелчок */}
+          {timePresets.map((preset) => {
+            const active = timeFrom === preset.from && timeTo === preset.to
+            return (
+              <button
+                key={preset.key}
+                className={`btn ${active ? 'btn-primary' : 'btn-outline'} btn-sm`}
+                onClick={() => { setTimeFrom(preset.from); setTimeTo(preset.to) }}
+              >
+                {t(`recordingsPage.timePreset_${preset.key}`)}
+              </button>
+            )
+          })}
+
+          {windowInvalid && (
+            <span style={{ fontSize: 12, color: 'var(--danger, #ff453a)' }}>
+              {t('recordingsPage.timeRangeInvalid')}
+            </span>
+          )}
+        </div>
+
+        {/* Камеры: все в одной дорожке или только выбранные */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <Video size={16} style={{ color: 'var(--accent)' }} />
-          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+          <button
+            className={`btn ${cameraMode === 'all' ? 'btn-primary' : 'btn-outline'} btn-sm`}
+            onClick={() => { setCameraMode('all'); setSelected([]); setPlaying(null) }}
+          >
+            {t('recordingsPage.cameraModeAll')}
+          </button>
+          <button
+            className={`btn ${cameraMode === 'selected' ? 'btn-primary' : 'btn-outline'} btn-sm`}
+            onClick={() => setCameraMode('selected')}
+          >
+            {t('recordingsPage.cameraModeSelected', { count: selected.length, max: MAX_TRACKS })}
+          </button>
+
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 6 }}>
             {t('recordingsPage.tracks', { selected: selected.length, max: MAX_TRACKS })}
           </span>
 
@@ -491,29 +945,245 @@ export default function RecordingsPage() {
               </button>
             )
           })}
+        </div>
 
-          {selected.length > 0 && (
+        {/* Вид записи, тип детекции и свободный запрос */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {([
+              { v: 'all', label: t('recordingsPage.kindAll') },
+              { v: 'events', label: t('recordingsPage.kindEvents') },
+              { v: 'always', label: t('recordingsPage.kindAlways') },
+            ] as const).map((k) => (
+              <button
+                key={k.v}
+                className={`btn ${recordKind === k.v ? 'btn-primary' : 'btn-outline'} btn-sm`}
+                onClick={() => setRecordKind(k.v)}
+              >
+                {k.label}
+              </button>
+            ))}
+          </div>
+
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            {t('recordingsPage.detectionFilter')}
+          </span>
+          <select
+            className="input"
+            value={detectionFilter}
+            onChange={(e) => setDetectionFilter(e.target.value)}
+            style={{ fontSize: 12, padding: '3px 8px', width: 'auto' }}
+          >
+            <option value="all">{t('recordingsPage.detectAll')}</option>
+            <option value="plate">{t('recordingsPage.detectPlate')}</option>
+            <option value="face">{t('recordingsPage.detectFace')}</option>
+            <option value="line">{t('recordingsPage.detectLine')}</option>
+            <option value="object">{t('recordingsPage.detectObject')}</option>
+            <option value="none">{t('recordingsPage.detectNone')}</option>
+          </select>
+
+          <Search size={16} style={{ color: 'var(--accent)', marginLeft: 6 }} />
+          {/* Режим поиска. Разные инструменты — разные результаты:
+              по словам ищет точные вхождения, по смыслу — похожие кадры. */}
+          <select
+            className="input"
+            value={searchMode}
+            onChange={(e) => {
+              const mode = e.target.value as 'text' | 'semantic'
+              setSearchMode(mode)
+              // Результаты другого режима не должны остаться на экране:
+              // они отвечают на другой вопрос.
+              setSemanticResults([])
+              setSemanticError('')
+              setSearchQuery('')
+            }}
+            title={t('recordingsPage.searchModeHint')}
+            style={{ fontSize: 12, padding: '3px 8px', width: 'auto' }}
+          >
+            <option value="text">{t('recordingsPage.searchModeText')}</option>
+            <option value="semantic">{t('recordingsPage.searchModeSemantic')}</option>
+          </select>
+          <input
+            className="input"
+            value={searchInput}
+            placeholder={searchMode === 'semantic'
+              ? t('recordingsPage.searchSemanticPlaceholder')
+              : t('recordingsPage.searchPlaceholder')}
+            onChange={(e) => setSearchInput(e.target.value)}
+            // Enter — самый ожидаемый способ запустить поиск; запрос
+            // уходит только по нему или по кнопке, а не на каждый символ.
+            onKeyDown={(e) => { if (e.key === 'Enter') void runSearch() }}
+            style={{ fontSize: 13, padding: '4px 8px', minWidth: 240, flex: '0 1 320px' }}
+          />
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => void runSearch()}
+            disabled={semanticLoading}
+          >
+            {semanticLoading ? <Loader2 size={12} className="spin" /> : null} {t('recordingsPage.searchGo')}
+          </button>
+
+          {searchQuery !== '' && searchMode === 'text' && (
             <button
               className="btn btn-outline btn-sm"
-              onClick={() => { setSelected([]); setPlaying(null) }}
-              style={{ marginLeft: 'auto' }}
+              onClick={() => { setSearchInput(''); setSearchQuery('') }}
             >
-              <X size={12} /> {t('recordingsPage.allCameras')}
+              <X size={12} /> {t('recordingsPage.searchClear')}
             </button>
           )}
 
-          <span style={{
-            marginLeft: selected.length > 0 ? 0 : 'auto',
-            fontSize: 13, color: 'var(--text-secondary)',
-          }}>
-            <Trans
-              i18nKey="recordingsPage.forDay"
-              values={{ count: allItems.length, duration: fmtDuration(totalDuration) }}
-              components={{ 1: <strong style={{ color: 'var(--text-primary)' }} /> }}
-            />
-          </span>
+          {matchedClips.length > 0 && (
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => {
+                const first = matchedClips[0]
+                const track = tracks.find((tr) => tr.cameraID === first.camera_id)
+                setPlaying({ item: first, color: track?.color || TRACK_COLORS[0] })
+              }}
+              title={t('recordingsPage.gotoFirstMatchHint')}
+            >
+              <Film size={12} /> {t('recordingsPage.gotoFirstMatch')}
+            </button>
+          )}
+
+          <button className="btn btn-outline btn-sm" onClick={resetFilters} style={{ marginLeft: 'auto' }}>
+            <RotateCcw size={12} /> {t('recordingsPage.resetFilters')}
+          </button>
+        </div>
+
+        {/* Итог отбора: сколько записей и событий попало в выборку */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-secondary)' }}>
+          <Trans
+            i18nKey="recordingsPage.forDay"
+            values={{ count: allItems.length, duration: fmtDuration(totalDuration) }}
+            components={{ 1: <strong style={{ color: 'var(--text-primary)' }} /> }}
+          />
+
+          {filtering && (
+            <span>
+              {t('recordingsPage.foundClips', { count: matchedClips.length })}
+              {searchInfo ? ` · ${t('recordingsPage.foundEvents', { count: searchInfo.events })}` : ''}
+            </span>
+          )}
+
+          {/* Что сервер понял из запроса: иначе «красная машина» молча
+              превращается в «машина», и оператор не понимает, почему
+              находятся не только красные. */}
+          {searchQuery !== '' && searchInfo && searchInfo.classes.length > 0 && (
+            <span>
+              {t('recordingsPage.searchClasses', { classes: searchInfo.classes.join(', ') })}
+            </span>
+          )}
+          {searchQuery !== '' && searchInfo && searchInfo.ignored.length > 0 && (
+            <span style={{ color: 'var(--warning, #ff9f0a)' }}>
+              {t('recordingsPage.searchIgnored', { words: searchInfo.ignored.join(', ') })}
+            </span>
+          )}
         </div>
       </div>
+
+      {/*
+        Результаты поиска по смыслу — отдельной лентой кадров.
+
+        Почему не только отметки на шкале: событие может оказаться вне
+        выбранной дорожки, а снимок — единственное, по чему оператор сразу
+        поймёт, то это или не то. Название класса и доля сходства стоят
+        рядом, чтобы не приходилось верить одному числу.
+      */}
+      {searchMode === 'semantic' && (semanticResults.length > 0 || semanticError !== '') && (
+        <div className="card" style={{ marginBottom: 16, padding: '12px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <Film size={15} style={{ color: 'var(--accent)' }} />
+            <span style={{ fontWeight: 600 }}>{t('recordingsPage.semanticTitle')}</span>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              {t('recordingsPage.foundEvents', { count: semanticResults.length })}
+            </span>
+          </div>
+
+          {semanticError !== '' && (
+            <div style={{ fontSize: 13, color: 'var(--danger, #ff453a)' }}>{semanticError}</div>
+          )}
+
+          {semanticResults.length === 0 && semanticError === '' && (
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+              {t('recordingsPage.semanticEmpty')}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {semanticResults.map((match) => (
+              // Карточка — не <button>, а div с обработчиком: внутри есть
+              // ещё одна кнопка («Похожие»), а вложенные кнопки — неверная
+              // разметка и ломают клавиатурную навигацию.
+              <div
+                key={match.event_id}
+                role="button"
+                tabIndex={0}
+                onClick={() => openSemanticMatch(match)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openSemanticMatch(match) }}
+                title={`${match.camera_name} · ${fmtTime(match.timestamp)}\n${
+                  t('recordingsPage.semanticScore', { score: Math.round(match.score * 100) })
+                }`}
+                style={{
+                  width: 148, padding: 0,
+                  border: '1px solid var(--border)', borderRadius: 8,
+                  background: 'transparent', cursor: 'pointer',
+                  overflow: 'hidden', textAlign: 'left',
+                }}
+              >
+                <img
+                  src={archiveAPI.snapshotUrl(match.event_id)}
+                  alt=""
+                  style={{
+                    width: '100%', height: 84, objectFit: 'cover',
+                    display: 'block', background: '#000',
+                  }}
+                />
+                <div style={{ padding: '6px 8px', fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.35 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {match.color && (
+                      <span
+                        title={match.color}
+                        style={{
+                          width: 8, height: 8, borderRadius: '50%',
+                          background: match.color,
+                          border: '1px solid rgba(255,255,255,0.4)',
+                          flex: '0 0 auto',
+                        }}
+                      />
+                    )}
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
+                      {fmtTime(match.timestamp)}
+                    </span>
+                    {match.lexical && (
+                      <span title={t('recordingsPage.semanticLexicalHint')} style={{ fontSize: 10 }}>
+                        ✓
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {match.camera_name}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                    <span>{match.object_class}{match.score > 0 ? ` · ${Math.round(match.score * 100)}%` : ''}</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); void runSimilar(match) }}
+                      title={t('recordingsPage.semanticSimilarHint')}
+                      style={{
+                        fontSize: 10, padding: '1px 5px', borderRadius: 4,
+                        border: '1px solid var(--border)', background: 'transparent',
+                        color: 'var(--text-secondary)', cursor: 'pointer',
+                      }}
+                    >
+                      {t('recordingsPage.semanticSimilar')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16 }}>
         {/* Календарь */}
@@ -563,12 +1233,13 @@ export default function RecordingsPage() {
               return (
                 <button
                   key={cell.date}
-                  onClick={() => { setSelectedDate(cell.date); setPlaying(null) }}
+                  onClick={() => pickDate(cell.date)}
                   title={cell.info
                     ? t('recordingsPage.dayTooltip', {
                         count: cell.info.count,
                         duration: fmtDuration(cell.info.duration),
-                        events: cell.info.triggers.map((tr) => triggerLabel(tr)).join(', '),
+                        events: cell.info.events || 0,
+                        triggers: cell.info.triggers.map((tr) => triggerLabel(tr)).join(', '),
                       })
                     : t('recordingsPage.noRecords')}
                   style={{
@@ -594,12 +1265,23 @@ export default function RecordingsPage() {
                   }}
                 >
                   {cell.day}
-                  {/* Точка внизу: показывает, что записи в дне есть */}
+                  {/* Счётчик в ячейке: сколько записей и было ли событие.
+                      Без числа оператор видит только «день не пустой» и всё
+                      равно открывает его, чтобы понять объём. */}
                   {cell.hasRecords && (
                     <span style={{
-                      width: 4, height: 4, borderRadius: '50%',
-                      background: 'var(--success)',
-                    }} />
+                      display: 'flex', alignItems: 'center', gap: 3,
+                      fontSize: 9, lineHeight: 1, fontWeight: 500,
+                      color: 'var(--text-secondary)',
+                    }}>
+                      {cell.info && cell.info.count > 0 ? cell.info.count : ''}
+                      {(cell.info?.events || 0) > 0 && (
+                        <span style={{
+                          width: 4, height: 4, borderRadius: '50%',
+                          background: 'var(--success)',
+                        }} />
+                      )}
+                    </span>
                   )}
                 </button>
               )
@@ -616,6 +1298,9 @@ export default function RecordingsPage() {
                 <Clock size={12} style={{ verticalAlign: -2 }} /> {selectedDate}
               </div>
               <div>{t('recordingsPage.entries', { count: selectedDayInfo.count })}, {fmtDuration(selectedDayInfo.duration)}</div>
+              {(selectedDayInfo.events || 0) > 0 && (
+                <div>{t('recordingsPage.dayEvents', { count: selectedDayInfo.events })}</div>
+              )}
               <div style={{ marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 {selectedDayInfo.triggers.map((tr) => (
                   <span key={tr} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -633,59 +1318,34 @@ export default function RecordingsPage() {
 
         {/* Дорожки и плеер */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Плеер: показывается при выборе записи */}
+          {/* Плеер: показывается при выборе записи.
+
+              Свой компонент, а не <video controls>: на шкале плеера видны
+              отметки детекций внутри записи. У непрерывной записи это
+              единственный способ найти нужный момент — она длинная, и без
+              отметок оператор перематывает наугад. */}
           {playing && (
-            <div className="card" style={{ padding: 14 }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
-                flexWrap: 'wrap',
-              }}>
-                <span style={{
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: playing.color,
-                }} />
-                <span style={{ fontWeight: 600 }}>{playing.item.camera_name}</span>
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {fmtTime(playing.item.start_time)} — {fmtTime(playing.item.end_time)}
-                  {playing.item.trigger_type && ` · ${triggerLabel(playing.item.trigger_type)}`}
-                </span>
-
-                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                  <button
-                    className="btn btn-outline btn-sm"
-                    onClick={() => exportClip(playing.item)}
-                    title={t('recordingsPage.downloadHint')}
-                  >
-                    <Download size={12} /> {t('recordingsPage.download')}
-                  </button>
-                  <button className="btn btn-outline btn-sm" onClick={() => setPlaying(null)}>
-                    <X size={12} />
-                  </button>
-                </div>
-              </div>
-
-              {/* Обёртка нужна для наложения: рамки позиционируются в
-                  процентах от того же прямоугольника, что и картинка. */}
-              <div style={{ position: 'relative' }}>
-              <video
+            <div className="card" style={{ padding: 10 }}>
+              <ArchivePlayer
                 key={playing.item.id}
-                ref={videoRef}
-                controls
-                autoPlay
-                style={{
-                  width: '100%', maxHeight: 420, background: '#000',
-                  borderRadius: 'var(--radius)',
-                }}
                 src={recordingsAPI.fileUrl(playing.item.file_path || '')}
+                startTime={playing.item.start_time}
+                durationSec={Math.max(
+                  0,
+                  (new Date(playing.item.end_time).getTime() -
+                    new Date(playing.item.start_time).getTime()) / 1000,
+                )}
+                events={archiveEvents}
+                title={`${playing.item.camera_name} · ${fmtTime(playing.item.start_time)} — ${fmtTime(playing.item.end_time)}${
+                  playing.item.trigger_type ? ` · ${triggerLabel(playing.item.trigger_type)}` : ''
+                }`}
+                color={playing.color}
+                detectionFilter={detectionFilter}
+                onClose={() => setPlaying(null)}
+                onPrev={adjacentClip(-1)}
+                onNext={adjacentClip(1)}
+                onDownload={() => exportClip(playing.item)}
               />
-              {archiveEvents.length > 0 && (
-                <ArchiveDetectionOverlay
-                  startTime={playing.item.start_time}
-                  events={archiveEvents}
-                  videoRef={videoRef}
-                />
-              )}
-              </div>
             </div>
           )}
 
@@ -698,25 +1358,10 @@ export default function RecordingsPage() {
               <span style={{ fontWeight: 600 }}>{t('recordingsPage.timeline')}</span>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                 {selectedDate}
+                {activeWindowLabel && ` · ${activeWindowLabel}`}
               </span>
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
                 {tracks.some((t) => t.loading) && <Loader2 size={14} className="spin" />}
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {t('recordingsPage.detectionFilter')}
-                </span>
-                <select
-                  className="input"
-                  value={detectionFilter}
-                  onChange={(e) => setDetectionFilter(e.target.value)}
-                  style={{ fontSize: 12, padding: '3px 8px', width: 'auto' }}
-                >
-                  <option value="all">{t('recordingsPage.detectAll')}</option>
-                  <option value="plate">{t('recordingsPage.detectPlate')}</option>
-                  <option value="face">{t('recordingsPage.detectFace')}</option>
-                  <option value="line">{t('recordingsPage.detectLine')}</option>
-                  <option value="object">{t('recordingsPage.detectObject')}</option>
-                  <option value="none">{t('recordingsPage.detectNone')}</option>
-                </select>
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('recordingsPage.scale')}</span>
                 <button className="btn btn-outline btn-sm" onClick={() => setZoom((z) => Math.max(ZOOM_MIN, z / 1.5))}>−</button>
                 <span style={{ fontSize: 12, minWidth: 40, textAlign: 'center' }}>
@@ -755,6 +1400,7 @@ export default function RecordingsPage() {
                 </div>
 
                 {/* Дорожки камер */}
+                <div style={{ position: 'relative' }}>
                 {tracks.map((track, tIdx) => (
                   <div
                     key={track.cameraID || `all-${tIdx}`}
@@ -808,19 +1454,34 @@ export default function RecordingsPage() {
                         />
                       ))}
 
-                    {track.items.map((item) => {
+                    {visibleItems(track).map((item) => {
                       const left = `${item.start_ratio * 100}%`
                       // Минимальная ширина: клип в 25 секунд при масштабе 1
                       // занимает доли процента и был бы невидим.
                       const width = `${Math.max(0.15, (item.end_ratio - item.start_ratio) * 100)}%`
                       const isPlaying = playing?.item.id === item.id
+                      // Совпадение с поиском: такие клипы подсвечиваем, а
+                      // остальные приглушаем — на сутках из сотни полос
+                      // иначе не найти нужную. Совпадением считаем и
+                      // найденное по смыслу: оба режима должны подсвечивать
+                      // результат одинаково.
+                      const matchInfo = matchByRecording.get(item.id)
+                      const matched = Boolean(matchInfo) || semanticClipIds.has(item.id)
+                      const dimmed = filtering && !matched
 
                       return (
                         <button
                           key={item.id}
                           onClick={() => setPlaying({ item, color: track.color })}
                           onDoubleClick={() => exportClip(item)}
-                          title={`${item.camera_name}\n${fmtTime(item.start_time)} — ${fmtTime(item.end_time)}${item.trigger_type ? `\n${triggerLabel(item.trigger_type)}` : ''}\n\n${t('recordingsPage.clipTooltip')}`}
+                          title={`${item.camera_name}\n${fmtTime(item.start_time)} — ${fmtTime(item.end_time)}${item.trigger_type ? `\n${triggerLabel(item.trigger_type)}` : ''}${
+                            matchInfo
+                              ? `\n${t('recordingsPage.matchTooltip', {
+                                  count: matchInfo.count,
+                                  classes: matchInfo.object_classes.join(', ') || '—',
+                                })}`
+                              : ''
+                          }\n\n${t('recordingsPage.clipTooltip')}`}
                           style={{
                             position: 'absolute',
                             left, width,
@@ -835,13 +1496,65 @@ export default function RecordingsPage() {
                             borderRadius: 3,
                             cursor: 'pointer',
                             padding: 0,
-                            opacity: playing && !isPlaying ? 0.5 : 1,
+                            opacity: dimmed ? 0.2 : (playing && !isPlaying ? 0.5 : 1),
+                            // Совпадение обведено, чтобы его было видно и
+                            // при сильном уменьшении шкалы.
+                            boxShadow: matched ? '0 0 0 2px #fff, 0 0 8px #fff' : undefined,
+                            zIndex: matched ? 2 : 1,
+                            // Отметки внутри клипа не должны вылезать за его
+                            // границы: у коротких записей ширина — доли
+                            // процента.
+                            overflow: 'hidden',
                           }}
-                        />
+                        >
+                          {/* Отметки детекций внутри самой записи. Для
+                              непрерывной записи это единственный способ
+                              увидеть, что в ней было событие, не открывая
+                              плеер: клип длиной в пять минут на шкале суток
+                              всё равно выглядит одинаково.
+
+                              Ограничение в 40 отметок на клип: больше не
+                              поместится в 20 пикселей высоты, а тысяч
+                              элементов браузер не отрисует. */}
+                          {detectionFilter !== 'none' &&
+                            detectionMarks
+                              .filter(
+                                (m) =>
+                                  m.camera_id === item.camera_id &&
+                                  m.end_ratio >= item.start_ratio &&
+                                  m.start_ratio <= item.end_ratio &&
+                                  (detectionFilter === 'all' || m.kind === detectionFilter),
+                              )
+                              .slice(0, 40)
+                              .map((m, mi) => {
+                                const span = item.end_ratio - item.start_ratio
+                                if (span <= 0) return null
+                                const offset = Math.max(
+                                  0,
+                                  Math.min(span, Math.max(m.start_ratio, item.start_ratio) - item.start_ratio),
+                                )
+                                return (
+                                  <span
+                                    key={mi}
+                                    style={{
+                                      position: 'absolute',
+                                      left: `${(offset / span) * 100}%`,
+                                      bottom: 1,
+                                      width: 2,
+                                      height: 7,
+                                      borderRadius: 1,
+                                      background: MARK_COLORS[m.kind] || '#fff',
+                                      opacity: 0.95,
+                                      pointerEvents: 'none',
+                                    }}
+                                  />
+                                )
+                              })}
+                        </button>
                       )
                     })}
 
-                    {track.items.length === 0 && !track.loading && (
+                    {visibleItems(track).length === 0 && !track.loading && (
                       <div style={{
                         position: 'absolute', inset: 0,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -852,6 +1565,25 @@ export default function RecordingsPage() {
                     )}
                   </div>
                 ))}
+
+                {/* Затемнение времени, которое оператор исключил окном.
+                    Сутки на шкале остаются целыми — так видно, где
+                    находится выбранный участок относительно дня. */}
+                {(timeWindow.from > 0.0001 || timeWindow.to < 0.9999) && (
+                  <>
+                    <div style={{
+                      position: 'absolute', top: 0, bottom: 0, left: 0,
+                      width: `${timeWindow.from * 100}%`,
+                      background: 'rgba(0,0,0,0.45)', pointerEvents: 'none',
+                    }} />
+                    <div style={{
+                      position: 'absolute', top: 0, bottom: 0,
+                      left: `${timeWindow.to * 100}%`, right: 0,
+                      background: 'rgba(0,0,0,0.45)', pointerEvents: 'none',
+                    }} />
+                  </>
+                )}
+                </div>
 
                 {/* Легенда */}
                 <div style={{

@@ -1169,6 +1169,33 @@ export interface Stats {
   cpu_temp: number | null
   sip_total: number
   sip_online: number
+  // storage — состояние хранилищ архива и снимков. Пустой массив означает,
+  // что сервер не смог их прочитать (например, нет настроек), а не то, что
+  // хранилищ нет.
+  storage: StorageStat[]
+}
+
+/**
+ * Состояние одного хранилища: архив записей или снимки событий.
+ *
+ * total_gb/used_gb/free_gb относятся к разделу целиком — на нём могут
+ * лежать и чужие данные. data_gb/files считают только наши файлы в
+ * настроенном каталоге, и путать эти два объёма нельзя.
+ */
+export interface StorageStat {
+  kind: 'recordings' | 'snapshots'
+  /** local — диск сервера, minio — внешнее S3-хранилище. */
+  backend: 'local' | 'minio' | string
+  path: string
+  exists: boolean
+  total_gb: number
+  used_gb: number
+  free_gb: number
+  used_percent: number
+  data_gb: number
+  files: number
+  retention_days: number
+  error?: string
 }
 
 export interface GPUStat {
@@ -2072,14 +2099,38 @@ export const recordingsAPI = {
    *
    * Отдельный запрос, а не разбор списка записей: календарю нужна
    * сводка за месяц, и получать ради неё все записи было бы расточительно.
+   *
+   * Фильтры те же, что у шкалы дня: календарь должен считать по тем же
+   * правилам, иначе число в ячейке не сойдётся с тем, что видно ниже.
    */
-  calendar: (params: { year: number; month: number; camera_id?: string }) =>
+  calendar: (params: {
+    year: number
+    month: number
+    camera_id?: string
+    cameras?: string
+    from_time?: string
+    to_time?: string
+    detection_class?: string
+    q?: string
+  }) =>
     api.get<CalendarData>('/recordings/calendar', { params }),
 
   /** Раскладка записей одного дня по времени суток. */
   // Отметки детекций на шкале приходят вместе с записями дня: так шкала
   // рисуется одним запросом, а не двумя согласованными.
-  timeline: (params: { date: string; camera_id?: string; detection_class?: string }) =>
+  //
+  // from_time/to_time ограничивают окно внутри суток, q — свободный запрос
+  // по объектам («машина», «А123»). Оба фильтра считает сервер: по ним же
+  // он возвращает список найденных записей.
+  timeline: (params: {
+    date: string
+    camera_id?: string
+    cameras?: string
+    from_time?: string
+    to_time?: string
+    detection_class?: string
+    q?: string
+  }) =>
     api.get<TimelineData>('/recordings/timeline', { params }),
 
   /**
@@ -2115,6 +2166,59 @@ export const recordingsAPI = {
   },
 }
 
+/** Одно найденное событие при поиске по описанию. */
+export interface SemanticMatch {
+  event_id: string
+  camera_id: string
+  camera_name: string
+  /** Запись, в которой лежит событие. Пусто, если клипа за событие нет. */
+  recording_id?: string
+  timestamp: string
+  object_class: string
+  /** Цвет объекта, посчитанный детектором (red, blue, grey…). */
+  color?: string
+  /** Косинусное сходство с запросом. 0 — событие найдено по словам. */
+  score: number
+  /** Совпало по точным признакам: класс, цвет, номер, имя. */
+  lexical?: boolean
+  snapshot_path?: string
+}
+
+export interface SemanticSearchData {
+  query: string
+  /** Модель, которая считала вектор: её же название лежит в векторах событий. */
+  model?: string
+  total: number
+  results: SemanticMatch[]
+}
+
+export const archiveAPI = {
+  /**
+   * Поиск по архиву «по смыслу».
+   *
+   * В отличие от текстового поиска по классу («car»), здесь запрос
+   * сравнивается с векторами кадров: «красная машина у калитки» находит
+   * красный автомобиль, даже если таких слов в базе нет.
+   */
+  semanticSearch: (params: {
+    q?: string
+    /** Поиск «похожих»: вектор берётся у указанного события. */
+    similar_to?: string
+    date?: string
+    from_time?: string
+    to_time?: string
+    camera_id?: string
+    cameras?: string
+    limit?: number
+  }) => api.get<SemanticSearchData>('/archive/search', { params }),
+
+  /** Ссылка на снимок найденного события (для превью в результатах). */
+  snapshotUrl: (eventId: string) => {
+    const token = authToken()
+    return `/api/v1/events/${eventId}/snapshot${token ? `?jwt=${encodeURIComponent(token)}` : ''}`
+  },
+}
+
 /** Один день с записями — для календаря. */
 export interface CalendarDay {
   date: string
@@ -2122,6 +2226,8 @@ export interface CalendarDay {
   /** Суммарная длительность записей за день, в секундах. */
   duration: number
   triggers: string[]
+  /** Сколько событий детекции попало в день с учётом фильтров. */
+  events?: number
 }
 
 export interface CalendarData {
@@ -2151,11 +2257,45 @@ export interface TimelineData {
   // Отметки детекций: где на сутках были события. Сгруппированы по минутам,
   // иначе на дне с тысячами событий браузер не отрисовал бы столько элементов.
   detections?: TimelineDetectionMark[]
+  /** Границы выбранного окна внутри суток — по ним шкала затемняет остальное. */
+  window?: { from_ratio: number; to_ratio: number }
+  /** Записи, внутри которых нашлись подходящие события (результат поиска). */
+  matches?: TimelineMatch[]
+  /** Как сервер понял свободный запрос оператора. */
+  search?: TimelineSearchInfo
+}
+
+/** Запись, в которой есть события, подходящие под фильтр или запрос. */
+export interface TimelineMatch {
+  recording_id: string
+  camera_id: string
+  /** Сколько подходящих событий внутри записи. */
+  count: number
+  /** Типы детекций, которые сработали. */
+  kinds: string[]
+  /** Классы объектов, которые нашлись (car, person, cat…). */
+  object_classes: string[]
+  first_time: string
+  last_time: string
+}
+
+/**
+ * Разбор свободного запроса на стороне сервера.
+ *
+ * Нужен, чтобы интерфейс показал оператору, что именно он ищет: «машина»
+ * превращается в класс car, а «красная» попадает в ignored — детектор цвет
+ * не сохраняет, и молчать об этом нельзя.
+ */
+export interface TimelineSearchInfo {
+  query: string
+  classes: string[]
+  ignored: string[]
+  /** Общее число найденных событий. */
+  events: number
 }
 
 /** Участок суток, на котором были события детекции. */
-export interface TimelineDetectionMark {
-  camera_id: string
+export interface TimelineDetectionMark {  camera_id: string
   /**
    * Тип события: plate, face, line или object.
    *

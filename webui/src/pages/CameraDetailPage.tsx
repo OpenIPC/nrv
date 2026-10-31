@@ -10,6 +10,7 @@ import LivePlayer from '../components/LivePlayer'
 import EditCameraModal from '../components/EditCameraModal'
 import PTZPanel from '../components/PTZPanel'
 import DetectionSettingsPanel from '../components/DetectionSettingsPanel'
+import RecordingSettingsPanel from '../components/RecordingSettingsPanel'
 import DetectionOverlay from '../components/DetectionOverlay'
 import AudioSettingsPanel from '../components/AudioSettingsPanel'
 import CameraSettingsPanel from '../components/CameraSettingsPanel'
@@ -22,7 +23,7 @@ import CameraDeviceCard from '../components/CameraDeviceCard'
 import {
   ArrowLeft, RefreshCw, Wifi, WifiOff, Radio, Info,
   Eye, Settings, AlertTriangle, Pencil, RotateCw, Power, PowerOff, Loader2, Crosshair, Volume2, Sliders,
-  Clock, ScrollText, Activity, Layers,
+  Clock, ScrollText, Activity, Layers, Video,
 } from 'lucide-react'
 
 /**
@@ -49,7 +50,7 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
   // Вкладки показываем по правам: настройки камеры, детекция и звук —
   // разные права, и у диспетчера из них есть только просмотр.
   const { can } = usePermissions()
-  const [tab, setTab] = useState<'live' | 'events' | 'detection' | 'audio' | 'settings' | 'advanced'>('live')
+  const [tab, setTab] = useState<'live' | 'events' | 'detection' | 'recording' | 'audio' | 'settings' | 'advanced'>('live')
   // Команда разговора от оболочки настольного приложения. undefined —
   // обычный браузер, где панель разговора живёт сама по себе.
   const [talkWanted, setTalkWanted] = useState<boolean | undefined>(undefined)
@@ -521,6 +522,17 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
                 <Crosshair size={14} />
                 {t('cameraPage.tabDetection')}
               </button>
+              {/* Запись отдельной вкладкой: раньше режим записи лежал внутри
+                  детекции, хотя нужен и там, где детекция не настроена
+                  вовсе — например при непрерывной записи. */}
+              <button
+                className={`btn ${tab === 'recording' ? 'btn-primary' : 'btn-outline'} btn-sm`}
+                onClick={() => setTab('recording')}
+                hidden={!can('detection.manage')}
+              >
+                <Video size={14} />
+                {t('cameraPage.tabRecording')}
+              </button>
               <button
                 className={`btn ${tab === 'audio' ? 'btn-primary' : 'btn-outline'} btn-sm`}
                 onClick={() => setTab('audio')}
@@ -651,6 +663,8 @@ export default function CameraDetailPage() {  const { id } = useParams<{ id: str
                 </div>
               </div>
             )}
+
+            {tab === 'recording' && <RecordingSettingsPanel cameraId={camera.id} />}
 
             {tab === 'audio' && (
               <AudioSettingsPanel cameraId={camera.id} talkWanted={talkWanted} />

@@ -150,6 +150,69 @@ export default function DashboardPage() {
         ))}
       </div>
 
+      {/* Хранилище архива и снимков. Отдельный блок, а не карточка «занято
+          на диске»: путь архива настраивается отдельно и в другой установке
+          лежит на своём разделе. Общая цифра по корню о нём ничего не
+          говорит, а оператору нужно знать, куда пишется и сколько осталось
+          именно там. */}
+      {(s.storage?.length ?? 0) > 0 && (
+        <div style={{ marginTop: 32 }}>
+          <h2 style={{ marginBottom: 16, fontSize: 18 }}>{t('dashboardPage.storage')}</h2>
+          <div className="grid grid-2">
+            {s.storage.map((st) => (
+              <div key={st.kind} className="card">
+                <h3 style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <HardDrive size={18} style={{ color: 'var(--text-secondary)' }} />
+                  {st.kind === 'recordings'
+                    ? t('dashboardPage.storageRecordings')
+                    : t('dashboardPage.storageSnapshots')}
+                </h3>
+
+                {st.backend === 'local' ? (
+                  <>
+                    {/* Путь показываем целиком: по нему сверяют настройку с
+                        реальным диском, когда место вдруг кончилось. */}
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                      <code>{st.path}</code>
+                    </div>
+                    <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+                      {t('dashboardPage.storageDisk', {
+                        used: num(st.used_gb, 1),
+                        total: num(st.total_gb, 1),
+                        free: num(st.free_gb, 1),
+                      })}
+                      <br />
+                      {t('dashboardPage.storageData', {
+                        data: num(st.data_gb, 2),
+                        files: st.files,
+                      })}
+                      <br />
+                      {st.retention_days > 0
+                        ? t('dashboardPage.storageRetention', { days: st.retention_days })
+                        : t('dashboardPage.storageNoRetention')}
+                    </div>
+                    <LoadBar percent={st.used_percent} />
+                    {st.error && (
+                      <div style={{ marginTop: 8, fontSize: 13, color: 'var(--warning)' }}>{st.error}</div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+                    {t('dashboardPage.storageS3')}
+                    {st.retention_days > 0 && (
+                      <>
+                        <br />
+                        {t('dashboardPage.storageRetention', { days: st.retention_days })}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Быстрые действия */}
       <div style={{ marginTop: 32 }}>
         <h2 style={{ marginBottom: 16, fontSize: 18 }}>{t('dashboardPage.systemState')}</h2>

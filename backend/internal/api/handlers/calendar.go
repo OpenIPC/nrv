@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +30,13 @@ type CalendarDay struct {
 	// Типы событий, из-за которых велась запись. Показываются в интерфейсе,
 	// чтобы можно было понять, что искать: движение, номер или тревогу.
 	Triggers []string `json:"triggers"`
+
+	// Сколько событий детекции попало в этот день с учётом фильтров.
+	//
+	// Отдельно от Count: клипов может быть много, а событий в них — ни
+	// одного (постоянная запись), и наоборот. Оператору, который ищет
+	// «где была машина», нужно второе число.
+	Events int `json:"events"`
 }
 
 // CalendarResponse — ответ со списком дней за месяц.
@@ -85,16 +94,78 @@ func (h *RecordingHandler) Calendar(w http.ResponseWriter, r *http.Request) {
 		WHERE r.start_time >= $1 AND r.start_time < $2`
 
 	args := []any{start, end, localZoneName()}
+	// Третий параметр (часовой пояс) уже занят, следующие — по порядку.
+	argIdx := 4
 
-	// Фильтр по камере: календарь показывает дни, когда писала эта камера.
-	if raw := r.URL.Query().Get("camera_id"); raw != "" {
-		id, parseErr := uuid.Parse(raw)
-		if parseErr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid camera_id"})
+	cameraIDs, camerasOK := parseCameraFilter(r)
+	if !camerasOK {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid camera_id"})
+		return
+	}
+	if len(cameraIDs) > 0 {
+		query += ` AND r.camera_id = ANY($` + strconv.Itoa(argIdx) + `::uuid[])`
+		args = append(args, cameraIDs)
+		argIdx++
+	}
+
+	// Окно внутри суток: календарь должен считать по тем же правилам,
+	// что и шкала дня, иначе число в ячейке не сойдётся с числом записей
+	// на шкале, и оператор перестанет верить обоим.
+	fromMinutes, toMinutes := 0, 24*60
+	if raw := strings.TrimSpace(r.URL.Query().Get("from_time")); raw != "" {
+		minutes, parsed := parseClockParam(raw)
+		if !parsed {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid from_time"})
 			return
 		}
-		query += ` AND r.camera_id = $4`
-		args = append(args, id)
+		fromMinutes = minutes
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("to_time")); raw != "" {
+		minutes, parsed := parseClockParam(raw)
+		if !parsed {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid to_time"})
+			return
+		}
+		toMinutes = minutes
+	}
+	if toMinutes <= fromMinutes {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty time range"})
+		return
+	}
+	// Сравниваем время окончания и начала записи с границами окна:
+	// клип 07:40–08:30 относится и к окну «с 8 до 12».
+	if fromMinutes > 0 {
+		query += ` AND (r.end_time AT TIME ZONE $3)::time > $` + strconv.Itoa(argIdx) + `::time`
+		args = append(args, clockText(fromMinutes))
+		argIdx++
+	}
+	if toMinutes < 24*60 {
+		query += ` AND (r.start_time AT TIME ZONE $3)::time < $` + strconv.Itoa(argIdx) + `::time`
+		args = append(args, clockText(toMinutes))
+		argIdx++
+	}
+
+	// Фильтры по событиям: день подходит, если внутри хотя бы одной его
+	// записи есть событие нужного типа или с нужным объектом.
+	search := parseArchiveSearch(r.URL.Query().Get("q"))
+	classes := parseDetectionClasses(r)
+	if search.Query != "" || len(classes) > 0 {
+		condition := `EXISTS (
+			SELECT 1 FROM detection_events e
+			WHERE e.camera_id = r.camera_id
+			  AND e.timestamp >= r.start_time AND e.timestamp < r.end_time`
+		if len(classes) > 0 {
+			condition += ` AND ` + detectionKindExpr("e.") + ` = ANY($` + strconv.Itoa(argIdx) + `)`
+			args = append(args, classes)
+			argIdx++
+		}
+		if searchCondition, searchArgs := search.where("e.", argIdx); searchCondition != "" {
+			condition += searchCondition
+			args = append(args, searchArgs...)
+			argIdx += len(searchArgs)
+		}
+		condition += `)`
+		query += ` AND ` + condition
 	}
 
 	query += ` GROUP BY day ORDER BY day`
@@ -126,6 +197,34 @@ func (h *RecordingHandler) Calendar(w http.ResponseWriter, r *http.Request) {
 		log.Error().Err(err).Msg("ошибка чтения дней календаря")
 	}
 
+	// События по дням — отдельным запросом и с теми же фильтрами.
+	//
+	// В основном запросе их считать нельзя: соединение записей с событиями
+	// размножило бы строки, и сумма длительности клипа посчиталась бы
+	// столько раз, сколько в нём событий.
+	eventsByDay, eventsErr := h.eventsByDay(r, start, end, cameraIDs, fromMinutes, toMinutes, classes, search)
+	if eventsErr != nil {
+		// Ошибка счётчика событий не должна убирать календарь: дни с
+		// записями всё равно нужны.
+		log.Error().Err(eventsErr).Msg("не удалось посчитать события по дням")
+	}
+
+	dayIndex := make(map[string]int, len(days))
+	for i := range days {
+		days[i].Events = eventsByDay[days[i].Date]
+		dayIndex[days[i].Date] = i
+	}
+	// Дни, где есть только события без записей, тоже показываем: при
+	// включённой детекции без записи оператору важно знать, что событие
+	// было, даже если клипа за него нет.
+	for day, count := range eventsByDay {
+		if _, known := dayIndex[day]; known {
+			continue
+		}
+		days = append(days, CalendarDay{Date: day, Count: 0, Duration: 0, Triggers: []string{}, Events: count})
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
+
 	writeJSON(w, http.StatusOK, CalendarResponse{
 		Year:  year,
 		Month: month,
@@ -133,11 +232,149 @@ func (h *RecordingHandler) Calendar(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// eventsByDay считает события детекции по дням месяца с учётом фильтров.
+func (h *RecordingHandler) eventsByDay(
+	r *http.Request, start, end time.Time, cameraIDs []uuid.UUID,
+	fromMinutes, toMinutes int, classes []string, search archiveSearch,
+) (map[string]int, error) {
+	query := `
+		SELECT to_char(date_trunc('day', e.timestamp AT TIME ZONE $3), 'YYYY-MM-DD') AS day,
+		       count(*)
+		FROM detection_events e
+		WHERE e.timestamp >= $1 AND e.timestamp < $2`
+	args := []any{start, end, localZoneName()}
+	argIdx := 4
+
+	if len(cameraIDs) > 0 {
+		query += ` AND e.camera_id = ANY($` + strconv.Itoa(argIdx) + `::uuid[])`
+		args = append(args, cameraIDs)
+		argIdx++
+	}
+	if fromMinutes > 0 {
+		query += ` AND (e.timestamp AT TIME ZONE $3)::time >= $` + strconv.Itoa(argIdx) + `::time`
+		args = append(args, clockText(fromMinutes))
+		argIdx++
+	}
+	if toMinutes < 24*60 {
+		query += ` AND (e.timestamp AT TIME ZONE $3)::time < $` + strconv.Itoa(argIdx) + `::time`
+		args = append(args, clockText(toMinutes))
+		argIdx++
+	}
+	if len(classes) > 0 {
+		query += ` AND ` + detectionKindExpr("e.") + ` = ANY($` + strconv.Itoa(argIdx) + `)`
+		args = append(args, classes)
+		argIdx++
+	}
+	if condition, searchArgs := search.where("e.", argIdx); condition != "" {
+		query += condition
+		args = append(args, searchArgs...)
+		argIdx += len(searchArgs)
+	}
+	query += ` GROUP BY day`
+
+	rows, err := h.db.Query(r.Context(), query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := map[string]int{}
+	for rows.Next() {
+		var day string
+		var count int
+		if scanErr := rows.Scan(&day, &count); scanErr != nil {
+			log.Warn().Err(scanErr).Msg("не удалось прочитать счётчик событий дня")
+			continue
+		}
+		counts[day] = count
+	}
+	return counts, rows.Err()
+}
+
+// parseCameraFilter собирает список камер из параметров camera_id и cameras.
+//
+// Оба варианта нужны: шкала по дорожкам ходит по одной камере (camera_id),
+// а поиск и календарь — сразу по списку (cameras через запятую). Второй
+// аргумент false означает неверный UUID — это ошибка запроса, а не
+// «камер не выбрано».
+func parseCameraFilter(r *http.Request) ([]uuid.UUID, bool) {
+	ids := make([]uuid.UUID, 0, 4)
+
+	appendID := func(raw string) bool {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return true
+		}
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			return false
+		}
+		ids = append(ids, id)
+		return true
+	}
+
+	if !appendID(r.URL.Query().Get("camera_id")) {
+		return nil, false
+	}
+	for _, part := range strings.Split(r.URL.Query().Get("cameras"), ",") {
+		if !appendID(part) {
+			return nil, false
+		}
+	}
+	// Пустой список — это nil, а не пустой срез: выше по коду nil означает
+	// «без ограничений», иначе поиск решил бы, что камер не выбрано ни одной.
+	if len(ids) == 0 {
+		return nil, true
+	}
+	return ids, true
+}
+
+// parseDetectionClasses разбирает список типов детекций из detection_class.
+func parseDetectionClasses(r *http.Request) []string {
+	classes := make([]string, 0, 4)
+	for _, part := range strings.Split(r.URL.Query().Get("detection_class"), ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			classes = append(classes, part)
+		}
+	}
+	return classes
+}
+
+// clockText переводит минуты от полуночи в «ЧЧ:ММ:СС» для SQL-параметра.
+func clockText(minutes int) string {
+	return fmt.Sprintf("%02d:%02d:00", minutes/60, minutes%60)
+}
+
+// detectionKindExpr возвращает SQL-выражение типа детекции.
+//
+// Тип события (plate, face, line, object) в базе не хранится: он выводится
+// из класса объекта и метаданных. Держим выражение в одном месте, чтобы
+// отметки на шкале, найденные записи и счётчики календаря считали одинаково.
+// alias — префикс колонок («e.» или пусто).
+func detectionKindExpr(alias string) string {
+	return `
+		CASE
+			WHEN ` + alias + `object_class = 'plate' THEN 'plate'
+			WHEN ` + alias + `object_class = 'face' THEN 'face'
+			WHEN ` + alias + `metadata ? 'crossing' THEN 'line'
+			ELSE 'object'
+		END`
+}
+
 // DayTimeline отдаёт записи за конкретный день по времени.
 //
 // Отличается от обычного списка тем, что отдаёт только то, что нужно
 // для отрисовки шкалы: начало, конец и тип. Ссылки на файлы и прочие
 // поля не запрашиваются — на дне с сотнями клипов это лишние данные.
+//
+// Параметры запроса:
+//
+//	date             — день, выбранный оператором (YYYY-MM-DD)
+//	camera_id        — одна камера
+//	cameras          — несколько камер через запятую
+//	from_time,to_time — окно внутри суток (HH:MM); пусто — весь день
+//	detection_class  — типы детекций через запятую (plate,face,line,object)
+//	q                — свободный запрос для поиска по объектам («машина», «А123»)
 func (h *RecordingHandler) DayTimeline(w http.ResponseWriter, r *http.Request) {
 	dateStr := r.URL.Query().Get("date")
 	if dateStr == "" {
@@ -157,6 +394,45 @@ func (h *RecordingHandler) DayTimeline(w http.ResponseWriter, r *http.Request) {
 	startLocal := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, localZone())
 	endLocal := startLocal.AddDate(0, 0, 1)
 
+	// Окно внутри суток: оператор ищет «с 8 до 12», а не весь день.
+	//
+	// Окно — это не фильтр по началу записи, а пересечение с ней: клип,
+	// начавшийся в 07:40 и идущий до 08:30, тоже относится к утру, и
+	// выкидывать его нельзя.
+	windowStart, windowEnd := startLocal, endLocal
+	if raw := strings.TrimSpace(r.URL.Query().Get("from_time")); raw != "" {
+		minutes, ok := parseClockParam(raw)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid from_time"})
+			return
+		}
+		windowStart = startLocal.Add(time.Duration(minutes) * time.Minute)
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("to_time")); raw != "" {
+		minutes, ok := parseClockParam(raw)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid to_time"})
+			return
+		}
+		if minutes >= 24*60 {
+			windowEnd = endLocal
+		} else {
+			windowEnd = startLocal.Add(time.Duration(minutes) * time.Minute)
+		}
+	}
+	if !windowEnd.After(windowStart) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty time range"})
+		return
+	}
+
+	// Камеры для фильтра: одиночный camera_id (так ходит шкала по дорожкам)
+	// и список cameras — так ходит поиск по архиву.
+	cameraIDs, camerasOK := parseCameraFilter(r)
+	if !camerasOK {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid camera_id"})
+		return
+	}
+
 	// file_path нужен, чтобы шкала могла сразу воспроизвести клип:
 	// обработчик File принимает именно путь, а не id записи.
 	query := `
@@ -166,18 +442,12 @@ func (h *RecordingHandler) DayTimeline(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(r.file_path, '') AS file_path
 		FROM recordings r
 		LEFT JOIN cameras c ON c.id = r.camera_id
-		WHERE r.start_time >= $1 AND r.start_time < $2`
+		WHERE r.end_time > $1 AND r.start_time < $2`
 
-	args := []any{startLocal.UTC(), endLocal.UTC()}
-
-	if raw := r.URL.Query().Get("camera_id"); raw != "" {
-		id, parseErr := uuid.Parse(raw)
-		if parseErr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid camera_id"})
-			return
-		}
-		query += ` AND r.camera_id = $3`
-		args = append(args, id)
+	args := []any{windowStart.UTC(), windowEnd.UTC()}
+	if len(cameraIDs) > 0 {
+		query += ` AND r.camera_id = ANY($3::uuid[])`
+		args = append(args, cameraIDs)
 	}
 
 	query += ` ORDER BY r.start_time`
@@ -224,8 +494,21 @@ func (h *RecordingHandler) DayTimeline(w http.ResponseWriter, r *http.Request) {
 
 		// Доли считаем от местной полуночи: на шкале сутки идут от 00:00
 		// по времени оператора.
-		startRatio := startTime.In(localZone()).Sub(startLocal).Seconds() / daySeconds
-		endRatio := endTime.In(localZone()).Sub(startLocal).Seconds() / daySeconds
+		//
+		// Клип обрезаем по выбранному окну: при фильтре «с 8 до 12»
+		// полоса не должна вылезать за подсвеченный участок шкалы, иначе
+		// непонятно, что именно попало в выборку.
+		clipStart := startTime.In(localZone())
+		if clipStart.Before(windowStart) {
+			clipStart = windowStart
+		}
+		clipEnd := endTime.In(localZone())
+		if clipEnd.After(windowEnd) {
+			clipEnd = windowEnd
+		}
+
+		startRatio := clipStart.Sub(startLocal).Seconds() / daySeconds
+		endRatio := clipEnd.Sub(startLocal).Seconds() / daySeconds
 
 		// Ограничиваем отрезком суток: клип, начавшийся до полуночи,
 		// иначе ушёл бы за левый край шкалы.
@@ -267,14 +550,7 @@ func (h *RecordingHandler) DayTimeline(w http.ResponseWriter, r *http.Request) {
 	bucketSeconds := 60.0
 	// Фильтр по типам: оператору часто нужны только номера или только лица,
 	// и подсветка по всем событиям сразу мешает.
-	var classFilter []string
-	if raw := r.URL.Query().Get("detection_class"); raw != "" {
-		for _, c := range strings.Split(raw, ",") {
-			if c = strings.TrimSpace(c); c != "" {
-				classFilter = append(classFilter, c)
-			}
-		}
-	}
+	classFilter := parseDetectionClasses(r)
 
 	// Тип события считаем здесь, а не отдаём класс объекта.
 	//
@@ -283,28 +559,42 @@ func (h *RecordingHandler) DayTimeline(w http.ResponseWriter, r *http.Request) {
 	// метаданных. Интерфейсу нужен именно тип: по классу «только пересечения»
 	// не отфильтровать — у пересечения класс остаётся классовым, а признак
 	// лежит в metadata.crossing.
-	kindExpr := `
-		CASE
-			WHEN object_class = 'plate' THEN 'plate'
-			WHEN object_class = 'face' THEN 'face'
-			WHEN metadata ? 'crossing' THEN 'line'
-			ELSE 'object'
-		END`
+	kindExpr := detectionKindExpr("")
+
+	// Свободный запрос оператора («машина», «кот», «А123») разбирается в
+	// archive_search.go. Одно и то же условие применяется и к отметкам,
+	// и к списку найденных записей: иначе подсветка на шкале показывала бы
+	// не то, что нашлось.
+	search := parseArchiveSearch(r.URL.Query().Get("q"))
 
 	markQuery := `
 		SELECT camera_id, kind,
 		       floor(extract(epoch FROM (timestamp - $1)) / $3)::int AS bucket,
 		       count(*)
 		FROM (
-			SELECT camera_id, ` + kindExpr + ` AS kind, timestamp
+			SELECT camera_id, ` + kindExpr + ` AS kind, timestamp,
+			       object_class, COALESCE(matched_name, '') AS matched_name, metadata
 			FROM detection_events
-			WHERE timestamp >= $1 AND timestamp < $2
+			WHERE timestamp >= $1 AND timestamp < $2`
+	markArgs := []any{windowStart.UTC(), windowEnd.UTC(), bucketSeconds}
+	markArgIdx := 4
+	if len(cameraIDs) > 0 {
+		markQuery += ` AND camera_id = ANY($` + strconv.Itoa(markArgIdx) + `::uuid[])`
+		markArgs = append(markArgs, cameraIDs)
+		markArgIdx++
+	}
+	markQuery += `
 		) AS day_events
 		WHERE TRUE`
-	markArgs := []any{startLocal.UTC(), endLocal.UTC(), bucketSeconds}
 	if len(classFilter) > 0 {
-		markQuery += ` AND kind = ANY($4)`
+		markQuery += ` AND kind = ANY($` + strconv.Itoa(markArgIdx) + `)`
 		markArgs = append(markArgs, classFilter)
+		markArgIdx++
+	}
+	if condition, searchArgs := search.where("", markArgIdx); condition != "" {
+		markQuery += condition
+		markArgs = append(markArgs, searchArgs...)
+		markArgIdx += len(searchArgs)
 	}
 	markQuery += ` GROUP BY 1, 2, 3 ORDER BY 3 LIMIT 4000`
 
@@ -340,9 +630,143 @@ func (h *RecordingHandler) DayTimeline(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Записи, внутри которых есть подходящие события, — это и есть
+	// результат поиска по архиву.
+	//
+	// Считаем только при заданном запросе или фильтре типов: без фильтров
+	// «подходит» любая запись с событиями, и список ничего не сообщает
+	// оператору, зато требует соединения двух таблиц за сутки.
+	type ArchiveMatch struct {
+		RecordingID   string   `json:"recording_id"`
+		CameraID      string   `json:"camera_id"`
+		Count         int      `json:"count"`
+		Kinds         []string `json:"kinds"`
+		ObjectClasses []string `json:"object_classes"`
+		FirstTime     string   `json:"first_time"`
+		LastTime      string   `json:"last_time"`
+	}
+
+	matches := make([]ArchiveMatch, 0, 32)
+	totalMatches := 0
+
+	if search.Query != "" || len(classFilter) > 0 {
+		matchQuery := `
+			SELECT r.id, e.camera_id, count(*) AS cnt,
+			       array_agg(DISTINCT e.kind) AS kinds,
+			       array_agg(DISTINCT e.object_class) AS classes,
+			       min(e.timestamp) AS first_ts, max(e.timestamp) AS last_ts
+			FROM (
+				SELECT camera_id, ` + kindExpr + ` AS kind, timestamp,
+				       object_class, COALESCE(matched_name, '') AS matched_name, metadata
+				FROM detection_events
+				WHERE timestamp >= $1 AND timestamp < $2`
+		matchArgs := []any{windowStart.UTC(), windowEnd.UTC()}
+		matchArgIdx := 3
+		if len(cameraIDs) > 0 {
+			matchQuery += ` AND camera_id = ANY($` + strconv.Itoa(matchArgIdx) + `::uuid[])`
+			matchArgs = append(matchArgs, cameraIDs)
+			matchArgIdx++
+		}
+		matchQuery += `
+			) e
+			JOIN recordings r ON r.camera_id = e.camera_id
+			     AND e.timestamp >= r.start_time AND e.timestamp < r.end_time
+			WHERE TRUE`
+		if len(classFilter) > 0 {
+			matchQuery += ` AND e.kind = ANY($` + strconv.Itoa(matchArgIdx) + `)`
+			matchArgs = append(matchArgs, classFilter)
+			matchArgIdx++
+		}
+		if condition, searchArgs := search.where("e.", matchArgIdx); condition != "" {
+			matchQuery += condition
+			matchArgs = append(matchArgs, searchArgs...)
+			matchArgIdx += len(searchArgs)
+		}
+		matchQuery += ` GROUP BY r.id, e.camera_id ORDER BY min(e.timestamp) LIMIT 500`
+
+		matchRows, matchErr := h.db.Query(r.Context(), matchQuery, matchArgs...)
+		if matchErr != nil {
+			// Ошибка поиска не должна ломать шкалу: записи дня всё равно
+			// нужны, а сообщение об ошибке покажет интерфейс.
+			log.Error().Err(matchErr).Msg("не удалось выполнить поиск по архиву")
+		} else {
+			defer matchRows.Close()
+			for matchRows.Next() {
+				var (
+					match      ArchiveMatch
+					firstTS    time.Time
+					lastTS     time.Time
+					kinds      []string
+					classes    []string
+					matchCount int
+				)
+				if scanErr := matchRows.Scan(
+					&match.RecordingID, &match.CameraID, &matchCount,
+					&kinds, &classes, &firstTS, &lastTS,
+				); scanErr != nil {
+					log.Warn().Err(scanErr).Msg("не удалось прочитать результат поиска")
+					continue
+				}
+				match.Count = matchCount
+				match.Kinds = kinds
+				match.ObjectClasses = classes
+				match.FirstTime = firstTS.In(localZone()).Format(time.RFC3339)
+				match.LastTime = lastTS.In(localZone()).Format(time.RFC3339)
+				matches = append(matches, match)
+				totalMatches += matchCount
+			}
+		}
+	}
+
+	// Границы окна в долях суток: по ним шкала затемняет время, которое
+	// оператор исключил фильтром.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"date":       dateStr,
-		"items":      items,
+		"date":  dateStr,
+		"items": items,
+		"window": map[string]any{
+			"from_ratio": windowStart.Sub(startLocal).Seconds() / daySeconds,
+			"to_ratio":   windowEnd.Sub(startLocal).Seconds() / daySeconds,
+		},
 		"detections": marks,
+		"matches":    matches,
+		"search": map[string]any{
+			"query":   search.Query,
+			"classes": search.Classes,
+			"ignored": search.Ignored,
+			"events":  totalMatches,
+		},
 	})
+}
+
+// parseClockParam разбирает время суток в минуты от полуночи.
+//
+// Принимает «ЧЧ:ММ», «Ч:ММ» и «ЧЧ:ММ:СС»: форматы приходят из разных мест
+// (поле ввода, закладка в адресе) и различаются мелочами, из-за которых
+// фильтр молча переставал бы работать. «24:00» разрешено — это удобная
+// запись конца суток.
+func parseClockParam(raw string) (int, bool) {
+	parts := strings.Split(raw, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, false
+	}
+
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil || hour < 0 || hour > 24 {
+		return 0, false
+	}
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil || minute < 0 || minute > 59 {
+		return 0, false
+	}
+	if hour == 24 && minute != 0 {
+		return 0, false
+	}
+	if len(parts) == 3 {
+		second, secErr := strconv.Atoi(parts[2])
+		if secErr != nil || second < 0 || second > 59 {
+			return 0, false
+		}
+	}
+
+	return hour*60 + minute, true
 }

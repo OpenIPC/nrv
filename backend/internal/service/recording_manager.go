@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -185,6 +186,113 @@ func (m *RecordingManager) Sync(ctx context.Context) {
 		m.writing[key] = true
 		m.mu.Unlock()
 	}
+}
+
+// ArchiveContinuous запускает непрерывную запись в архив и отправляет в
+// хранилище готовые фрагменты. Вызывается из фонового цикла.
+//
+// Отдельный проход, а не «пусть ffmpeg сам пишет в архив»: ffmpeg ничего не
+// знает ни про хранилище (это может быть S3), ни про таблицу recordings. Он
+// умеет только резать поток на файлы — дальше их забирает этот проход.
+//
+// Раньше непрерывная запись на этом и заканчивалась: сегменты копились в
+// буфере и через две минуты удалялись. В архиве не появлялось ни одной
+// записи, хотя ffmpeg работал и диск заполнялся.
+func (m *RecordingManager) ArchiveContinuous(ctx context.Context) {
+	configs, err := m.settings.ListEnabled(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("не удалось получить настройки непрерывной записи")
+		return
+	}
+
+	wanted := make(map[string]domain.DetectionSettings)
+	for _, cfg := range configs {
+		if cfg.RecordMode == "always" {
+			wanted[cfg.CameraID.String()] = cfg
+		}
+	}
+
+	// Останавливаем запись там, где режим сменили или камеру выключили.
+	for _, id := range m.recorder.ArchiveStreams() {
+		if _, ok := wanted[id.String()]; !ok {
+			m.recorder.StopArchive(id)
+		}
+	}
+
+	for key, cfg := range wanted {
+		if !m.recorder.IsArchiving(cfg.CameraID) {
+			url, err := m.cameras.StreamURLForRecord(ctx, cfg.CameraID)
+			if err != nil || url == "" {
+				log.Warn().Err(err).Str("camera_id", key[:8]).
+					Msg("нет RTSP-адреса для непрерывной записи")
+				continue
+			}
+			if err := m.recorder.StartArchive(cfg.CameraID, url, m.recorder.ChunkSec); err != nil {
+				log.Warn().Err(err).Str("camera_id", key[:8]).
+					Msg("не удалось начать непрерывную запись")
+				continue
+			}
+		}
+
+		for _, chunk := range m.recorder.TakeClosedChunks(cfg.CameraID) {
+			m.saveArchiveChunk(ctx, cfg.CameraID, chunk)
+		}
+	}
+}
+
+// saveArchiveChunk отправляет готовый фрагмент непрерывной записи в архив.
+func (m *RecordingManager) saveArchiveChunk(ctx context.Context, cameraID uuid.UUID, path string) {
+	key := cameraID.String()
+	start := archiveChunkStart(path)
+
+	// Разрешение, кодек и длительность узнаём до сохранения: локальное
+	// хранилище переносит файл, и после этого читать его будет нечего.
+	resolution, codec, duration := ProbeVideo(path)
+
+	stored, size, err := m.recorder.SaveRecording(ctx, path)
+	if err != nil {
+		log.Warn().Err(err).Str("camera_id", key[:8]).Str("chunk", filepath.Base(path)).
+			Msg("не удалось сохранить фрагмент непрерывной записи")
+		return
+	}
+	// Для S3 файл остаётся на диске после выгрузки — убираем его сами.
+	removeFile(path)
+
+	if duration <= 0 {
+		duration = float64(m.recorder.ChunkSec)
+	}
+	if m.onSaved != nil {
+		m.onSaved(SavedClip{
+			CameraID:    cameraID,
+			EventTime:   start,
+			StartTime:   start,
+			Path:        stored,
+			Size:        size,
+			DurationSec: int(duration + 0.5),
+			Resolution:  resolution,
+			Codec:       codec,
+			TriggerType: domain.TriggerAlways,
+		})
+	}
+
+	log.Info().Str("camera_id", key[:8]).Str("chunk", filepath.Base(path)).
+		Int64("size", size).Msg("фрагмент непрерывной записи сохранён в архив")
+}
+
+// archiveChunkStart достаёт время начала фрагмента из его имени.
+//
+// Имя собирает ffmpeg по шаблону clip_<дата>_<время>.mp4. Если файл успели
+// переименовать, берём время изменения — запись с нулевой датой сломала бы
+// шкалу времени в архиве.
+func archiveChunkStart(path string) time.Time {
+	name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "clip_"), ".mp4")
+	if parsed, err := time.ParseInLocation("20060102_150405", name, time.Local); err == nil {
+		return parsed
+	}
+	if info, err := os.Stat(path); err == nil {
+		return info.ModTime()
+	}
+	return time.Now()
 }
 
 // stopOrphans останавливает записи, для которых больше нет включённых настроек.
