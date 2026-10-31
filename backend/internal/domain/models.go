@@ -399,6 +399,12 @@ type DetectionSettings struct {
 	// FaceRequiresPerson — запускать распознавание лиц только при уверенном
 	// человеке в кадре. Без этого модель находит «лица» в текстурах.
 	FaceRequiresPerson bool `json:"face_requires_person"`
+	// ClassThresholds — порог уверенности отдельно для класса объекта.
+	//
+	// Один общий порог заставляет выбирать между пропусками и ложными
+	// срабатываниями: у кошки и у человека они при одном числе разные.
+	// Класс без своей записи считается по MinConfidence.
+	ClassThresholds map[string]float64 `json:"class_thresholds"`
 }
 
 // UpdateDetectionSettingsRequest — частичное обновление настроек детекции.
@@ -429,6 +435,12 @@ type UpdateDetectionSettingsRequest struct {
 	StaticSeconds      *float64 `json:"static_seconds,omitempty"`
 	FaceMinConfidence  *float64 `json:"face_min_confidence,omitempty"`
 	FaceRequiresPerson *bool    `json:"face_requires_person,omitempty"`
+	// ClassThresholds заменяет пороги по классам целиком (не сливает):
+	// иначе снять класс из списка было бы невозможно.
+	//
+	// Без omitempty намеренно: пустой объект {} должен доехать до базы как
+	// «очистить пороги», а omitempty выбросил бы его из запроса.
+	ClassThresholds map[string]float64 `json:"class_thresholds"`
 }
 
 // StorageConfig — куда складывать записи и снимки.

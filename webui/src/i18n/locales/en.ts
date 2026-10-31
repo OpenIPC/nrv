@@ -1207,6 +1207,9 @@ export default {
     confidence: 'Confidence threshold: {{value}}%',
     confidenceHint:
       'Objects below the threshold are ignored. Lower means more finds but also more false ones. On real cameras most objects have a confidence of 40–60%: with a threshold above 60% there will be almost no finds.',
+    classThresholds: 'Per-class thresholds, %',
+    classThresholdsHint:
+      'A separate threshold for one class. Empty field — the global threshold ({{value}}%). Note: a class threshold can only raise the bar, not lower it.',
     filters: 'Accuracy filters',
     filtersHint:
       'They cut off false boxes: fine noise, glare, shadows and pieces of furniture. They help reduce the number of triggers without raising the confidence threshold.',

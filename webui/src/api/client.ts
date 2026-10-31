@@ -2696,6 +2696,9 @@ export interface DetectionSettings {
   static_seconds: number
   // face_min_confidence — порог уверенности человека для запуска поиска лиц.
   face_min_confidence: number
+  // class_thresholds — порог уверенности по классам: {"person": 0.6}.
+  // Класс без записи считается по min_confidence.
+  class_thresholds?: Record<string, number>
   // face_requires_person — искать лица только при человеке в кадре.
   face_requires_person: boolean
   updated_at: string

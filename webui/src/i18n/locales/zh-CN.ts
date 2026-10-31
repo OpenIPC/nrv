@@ -1065,6 +1065,9 @@ export default {
     confidence: '置信度阈值：{{value}}%',
     confidenceHint:
       '低于阈值的目标会被忽略。调低能找到更多，但误报也更多。在真实摄像头上，大多数目标的置信度在 40–60%：阈值高于 60% 时几乎找不到东西。',
+    classThresholds: '按类别阈值，%',
+    classThresholdsHint:
+      '为某个类别单独设置阈值。留空则使用全局阈值（{{value}}%）。注意：类别阈值只能提高门槛。',
     filters: '精度过滤',
     filtersHint: '用于滤掉错误的框：细小噪点、反光、阴影和家具。可以在不提高置信度阈值的情况下减少误报。',
     minArea: '目标最小尺寸：画面的 {{value}}%',

@@ -88,6 +88,8 @@ function toForm(s: DetectionSettings) {
     static_seconds: s.static_seconds ?? 0,
     face_min_confidence: s.face_min_confidence ?? 0.5,
     face_requires_person: s.face_requires_person ?? true,
+    // Пороги по классам: пусто — все классы считаются по общему порогу.
+    class_thresholds: (s.class_thresholds || {}) as Record<string, number>,
   }
 }
 
@@ -284,6 +286,25 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl, zoneSnap
     }
   }
 
+
+  /**
+   * Меняет порог одного класса.
+   *
+   * Пустое поле удаляет класс из списка — так возвращаются к общему порогу.
+   * Значение храним долей (0..1), а вводим процентами: оператор думает
+   * процентами, а API и детектор — долями.
+   */
+  const setClassThreshold = (cls: string, raw: string) => {
+    const next: Record<string, number> = { ...(form.class_thresholds || {}) }
+    if (raw.trim() === '') {
+      delete next[cls]
+    } else {
+      const percent = Number(raw)
+      if (!Number.isFinite(percent)) return
+      next[cls] = Math.min(0.99, Math.max(0.01, percent / 100))
+    }
+    patch('class_thresholds', next)
+  }
 
   const save = async () => {
     setSaving(true)
@@ -615,6 +636,41 @@ export default function DetectionSettingsPanel({ cameraId, snapshotUrl, zoneSnap
         onChange={(e) => patch('min_confidence', parseFloat(e.target.value))}
         style={{ width: '100%', marginBottom: 18, accentColor: 'var(--accent)' }}
       />
+
+      {/* Пороги по классам.
+          Один общий порог заставляет выбирать между пропусками и ложными
+          срабатываниями: у кошки и у человека при одном числе ошибки
+          разные. Пустое поле — класс считается по общему порогу. */}
+      {form.object_classes.length > 0 && (
+        <>
+          <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>{t('detectionPanel.classThresholds')}</h4>
+          <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
+            {t('detectionPanel.classThresholdsHint', {
+              value: (form.min_confidence * 100).toFixed(0),
+            })}
+          </p>
+          <div style={{
+            display: 'grid', gap: 6, marginBottom: 18,
+            gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))',
+          }}>
+            {form.object_classes.map((cls: string) => (
+              <label key={cls} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                <span style={{ flex: 1, color: 'var(--text-secondary)' }}>{cls}</span>
+                <input
+                  type="number"
+                  min={5} max={95} step={1}
+                  className="input"
+                  value={form.class_thresholds[cls] !== undefined
+                    ? Math.round(form.class_thresholds[cls] * 100)
+                    : ''}
+                  onChange={(e) => setClassThreshold(cls, e.target.value)}
+                  style={{ width: 62, fontSize: 12, padding: '2px 6px' }}
+                />
+              </label>
+            ))}
+          </div>
+        </>
+      )}
 
       {/* Фильтры точности: отсекают ложные срабатывания по форме объекта */}
       <h4 style={{ fontSize: 14, margin: '0 0 4px' }}>

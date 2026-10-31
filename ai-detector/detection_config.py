@@ -67,6 +67,12 @@ class DetectionConfig:
     face_min_confidence: float = 0.6
     # Требовать ли человека в кадре перед распознаванием лиц.
     face_requires_person: bool = True
+    # Порог уверенности отдельно для класса объекта: {"person": 0.5}.
+    #
+    # Общий порог заставляет выбирать между пропусками и ложными
+    # срабатываниями, а у разных классов ошибки при одном числе разные.
+    # Класс без записи считается по min_confidence.
+    class_thresholds: dict[str, float] = field(default_factory=dict)
 
     # --- Звук ---
     # Анализ звука ведёт отдельный конвейер (см. audio_detection.py):
@@ -99,6 +105,16 @@ class DetectionConfig:
     def wants_plates(self) -> bool:
         """Нужно ли распознавать автомобильные номера."""
         return "plate" in self.detect_types
+
+    def threshold_for(self, obj_class: str) -> float:
+        """Порог уверенности для класса: свой, если задан, иначе общий.
+
+        Важно: порог может только поднять планку. Объекты слабее общего
+        порога YOLO отбрасываются ещё до фильтров, поэтому задать классу
+        значение ниже общего нельзя — и это честно: иначе обещание
+        «этот класс ищем слабее» не выполнялось бы.
+        """
+        return float(self.class_thresholds.get(obj_class, self.min_confidence))
 
 
 class DetectionConfigStore:
@@ -184,6 +200,7 @@ class DetectionConfigStore:
                            d.min_object_area, d.max_object_area,
                            d.max_aspect_ratio, d.static_seconds,
                            d.face_min_confidence, d.face_requires_person,
+                           COALESCE(d.class_thresholds, '{}'::jsonb) AS class_thresholds,
                            COALESCE(a.enabled AND a.detect_audio, false) AS audio_enabled,
                            COALESCE(a.audio_events, ARRAY[]::text[]) AS audio_events,
                            COALESCE(a.audio_threshold, 0.5) AS audio_threshold
@@ -219,6 +236,7 @@ class DetectionConfigStore:
                         face_requires_person=bool(
                             row.get("face_requires_person", True)
                         ),
+                        class_thresholds=dict(row.get("class_thresholds") or {}),
                         audio_enabled=bool(row.get("audio_enabled")),
                         audio_events=list(row.get("audio_events") or []),
                         audio_threshold=float(row.get("audio_threshold") or 0.5),
@@ -249,7 +267,9 @@ class DetectionConfigStore:
         уверенности, размер, форма и зона. Пересечение мусорного пятна
         событием не является.
         """
-        if confidence < cfg.min_confidence:
+        # Порог берём по классу, если он задан: у кошки и у человека
+        # одинаковое число даёт разное качество.
+        if confidence < cfg.threshold_for(obj_class):
             return False
         # Пустой список классов означает «ничего не искать» — так пользователь
         # явно отключает обнаружение объектов, оставляя другие типы детекции.

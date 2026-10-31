@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -247,6 +248,17 @@ func validateDetectionSettings(req *domain.UpdateDetectionSettingsRequest) error
 	if req.FaceMinConfidence != nil &&
 		(*req.FaceMinConfidence < 0 || *req.FaceMinConfidence > 1) {
 		return errStr("face_min_confidence must be between 0 and 1")
+	}
+
+	// Пороги по классам: уверенность всегда доля от единицы, а имя класса
+	// не должно быть пустым — иначе настройка молча не применится.
+	for class, threshold := range req.ClassThresholds {
+		if strings.TrimSpace(class) == "" {
+			return errStr("class_thresholds: empty class name")
+		}
+		if threshold < 0 || threshold > 1 {
+			return errStr("class_thresholds: values must be between 0 and 1")
+		}
 	}
 	return nil
 }
