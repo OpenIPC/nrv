@@ -267,9 +267,14 @@ export default function RecordingsPage() {
   const [searchInfo, setSearchInfo] = useState<TimelineSearchInfo | null>(null)
 
   const [zoom, setZoom] = useState(1)
-  const [playing, setPlaying] = useState<{ item: TimelineItem; color: string } | null>(null)
+  // Плеер: запись, цвет дорожки и — при переходе из уведомления — секунда,
+  // с которой начать просмотр.
+  const [playing, setPlaying] = useState<{ item: TimelineItem; color: string; startAt?: number } | null>(null)
 
   const timelineRef = useRef<HTMLDivElement>(null)
+  // Блок плеера: при переходе из уведомления его надо показать оператору,
+  // иначе автозапуск случится ниже экрана и останется незамеченным.
+  const playerRef = useRef<HTMLDivElement | null>(null)
   // Детекции за время выбранной записи. Запрашиваем один раз: их немного,
   // а по ходу воспроизведения остаётся показать нужные.
   const [archiveEvents, setArchiveEvents] = useState<DetectionEvent[]>([])
@@ -290,7 +295,7 @@ export default function RecordingsPage() {
    * Переход из уведомления.
    *
    * В сообщении о событии есть ссылка вида
-   * `/recordings?date=2026-10-31&cameras=<id>,<id>&from_time=14:02&to_time=14:05`.
+   * `/recordings?date=2026-10-31&cameras=<id>,<id>&from_time=14:02&to_time=14:05&t=14:03:20`.
    * Оператор нажимает её из мессенджера и должен сразу увидеть нужную
    * минуту архива, а не искать её руками. Параметры читаем один раз при
    * открытии: дальше страницей управляет сам оператор, и перезаписывать
@@ -298,6 +303,15 @@ export default function RecordingsPage() {
    */
   const [searchParams, setSearchParams] = useSearchParams()
   const deepLinkApplied = useRef(false)
+
+  /**
+   * Секунда события из ссылки — от полуночи выбранных суток.
+   *
+   * Отдельное состояние, а не сразу открытие плеера: записи дня ещё не
+   * загружены, и открывать пока нечего. Когда дорожки придут, по этой
+   * секунде найдётся запись и плеер откроется сам.
+   */
+  const [deepTarget, setDeepTarget] = useState<number | null>(null)
 
   useEffect(() => {
     if (deepLinkApplied.current) return
@@ -331,6 +345,15 @@ export default function RecordingsPage() {
     }
     if (from && /^\d{2}:\d{2}$/.test(from)) setTimeFrom(from)
     if (to && /^\d{2}:\d{2}$/.test(to)) setTimeTo(to)
+
+    // Точный момент события. Если его нет (старые ссылки), берём начало
+    // окна — лучше открыть запись с его начала, чем не открыть вовсе.
+    const at = searchParams.get('t')
+    const stamp = at && /^\d{2}:\d{2}(:\d{2})?$/.test(at) ? at : (from || '')
+    if (/^\d{2}:\d{2}(:\d{2})?$/.test(stamp)) {
+      const [hh, mm, ss] = stamp.split(':').map(Number)
+      setDeepTarget(hh * 3600 + mm * 60 + (ss || 0))
+    }
 
     // Адрес чистим: обновление страницы не должно возвращать оператора
     // к тому же окну и затирать то, что оператор выбрал после.
@@ -491,6 +514,51 @@ export default function RecordingsPage() {
     // и его обновление не должно перезапускать загрузку записей.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate, camerasKey, timeFrom, timeTo, searchQuery, toast, detectionFilter])
+
+  /**
+   * Открытие записи в момент события из уведомления.
+   *
+   * Суженного окна мало: за три минуты в архиве может лежать несколько
+   * записей, и оператор всё равно щёлкал бы по шкале. Ищем запись, внутрь
+   * которой попадает момент события, и открываем её сразу на нужной
+   * секунде — ссылка из мессенджера должна приводить к самому кадру.
+   *
+   * Ждём, пока все дорожки загрузятся: иначе запись нашлась бы не всегда,
+   * а зависело бы от того, какая камера ответила первой.
+   */
+  useEffect(() => {
+    if (deepTarget == null) return
+    if (tracks.length === 0 || tracks.some((tr) => tr.loading)) return
+
+    const dayStart = new Date(selectedDate + 'T00:00:00').getTime()
+    if (Number.isNaN(dayStart)) {
+      setDeepTarget(null)
+      return
+    }
+    const target = dayStart + deepTarget * 1000
+
+    for (const track of tracks) {
+      for (const item of track.items) {
+        const start = new Date(item.start_time).getTime()
+        const end = new Date(item.end_time).getTime()
+        if (target >= start && target <= end) {
+          setPlaying({ item, color: track.color, startAt: (target - start) / 1000 })
+          setDeepTarget(null)
+          // Даём React отрисовать плеер и подводим его к экрану: на телефоне
+          // блок иначе остаётся под календарём, и кажется, что ничего
+          // не открылось.
+          setTimeout(() => {
+            playerRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+          }, 300)
+          return
+        }
+      }
+    }
+
+    // Записи в этот момент нет — возможно, камера не писала в архив.
+    // Окно и камеру страница уже показала; повторять поиск бессмысленно.
+    setDeepTarget(null)
+  }, [deepTarget, tracks, selectedDate])
 
   /**
    * Добавить или убрать камеру из дорожек.
@@ -1530,7 +1598,7 @@ export default function RecordingsPage() {
               единственный способ найти нужный момент — она длинная, и без
               отметок оператор перематывает наугад. */}
           {playing && (
-            <div className="card" style={{ padding: 10 }}>
+            <div className="card" ref={playerRef} style={{ padding: 10 }}>
               <ArchivePlayer
                 key={playing.item.id}
                 src={recordingsAPI.fileUrl(playing.item.file_path || '')}
@@ -1546,6 +1614,7 @@ export default function RecordingsPage() {
                 }`}
                 color={playing.color}
                 detectionFilter={detectionFilter}
+                startAtSec={playing.startAt ?? 0}
                 onClose={() => setPlaying(null)}
                 onPrev={adjacentClip(-1)}
                 onNext={adjacentClip(1)}

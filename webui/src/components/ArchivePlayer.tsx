@@ -35,6 +35,13 @@ interface Props {
   color?: string
   /** Какие типы детекций показывать. 'all' — все, 'none' — ни одной. */
   detectionFilter?: string
+  /**
+   * Секунда внутри записи, с которой начать просмотр.
+   *
+   * Нужна для перехода из уведомления: оператор приходит по ссылке и должен
+   * увидеть сам момент события, а не начало записи, которая может длиться час.
+   */
+  startAtSec?: number
   onClose: () => void
   onPrev?: () => void
   onNext?: () => void
@@ -92,6 +99,7 @@ export default function ArchivePlayer({
   title,
   color,
   detectionFilter = 'all',
+  startAtSec = 0,
   onClose,
   onPrev,
   onNext,
@@ -288,6 +296,15 @@ export default function ArchivePlayer({
         onLoadedMetadata={(e) => {
           const d = e.currentTarget.duration
           if (Number.isFinite(d) && d > 0) setDuration(d)
+
+          // Перематываемся на момент события. Делаем это здесь, а не в
+          // обработчике времени: до загрузки метаданных файл не знает своей
+          // длительности, и присвоение currentTime теряется.
+          if (startAtSec > 0) {
+            const limit = Number.isFinite(d) && d > 0 ? d : startAtSec
+            e.currentTarget.currentTime = Math.min(startAtSec, Math.max(0, limit - 0.5))
+            setCurrent(e.currentTarget.currentTime)
+          }
         }}
         onEnded={() => {
           setPlaying(false)
