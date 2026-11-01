@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useApi'
 import { usePermissions } from '../context/PermissionsContext'
 import { authAPI } from '../api/client'
@@ -15,6 +15,18 @@ export default function LoginPage() {
   const { login } = useAuth()
   const { refresh } = usePermissions()
   const navigate = useNavigate()
+  const location = useLocation()
+
+  /**
+   * Куда вернуть человека после входа.
+   *
+   * Переход по ссылке из уведомления возможен и на разлогиненном
+   * устройстве: ProtectedRoute отправляет на вход, сохраняя полный адрес
+   * в state. Если его проигнорировать, оператор после входа попадёт на
+   * главную и ссылка «открыть в архиве» пропадёт — а он шёл именно за ней.
+   */
+  const from = (location.state as { from?: { pathname: string; search: string } } | null)?.from
+  const target = from ? `${from.pathname}${from.search || ''}` : '/'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -26,7 +38,7 @@ export default function LoginPage() {
       // Права подтягиваем сразу: сервер отдаёт их вместе с сессией, и
       // меню должно построиться по ним, а не после перезагрузки страницы.
       await refresh()
-      navigate('/')
+      navigate(target, { replace: true })
     } catch (err: any) {
       setError(err.response?.data?.error || t('loginPage.failed'))
     } finally {

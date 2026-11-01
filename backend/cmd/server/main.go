@@ -241,7 +241,10 @@ func main() {
 	// Уведомления о событиях (Telegram). Журнал отправок ведёт свой репозиторий:
 	// по нему видно, дошло ли сообщение, и по нему же отсекаются повторы.
 	notificationRepo := postgres.NewNotificationRepo(db)
-	notifier := notify.NewService(detectionSettingsRepo, storageSvc, notificationRepo)
+	// Внешний адрес нужен для ссылки «открыть в архиве»: из мессенджера
+	// оператор приходит браузером, и локальный адрес ему не поможет.
+	notifier := notify.NewService(detectionSettingsRepo, storageSvc, notificationRepo).
+		WithPublicURL(cfg.PublicURL)
 
 	// Push в мобильное приложение. Ключ Firebase читается из файла, путь
 	// задаётся переменной FCM_CREDENTIALS_FILE; файла нет — канал просто

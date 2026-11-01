@@ -61,6 +61,11 @@ type Service struct {
 	// установка работает и без приложения, и это штатное состояние.
 	fcm     *FCM
 	devices PushDevices
+
+	// publicURL — внешний адрес интерфейса. Из него строится ссылка
+	// «открыть в архиве». Пусто — ссылки в сообщениях не будет: адрес
+	// localhost бесполезен получателю уведомления.
+	publicURL string
 }
 
 // pendingEvent — событие, ждущее клип.
@@ -93,6 +98,12 @@ func NewService(settings SettingsSource, files FileReader, logger Logger) *Servi
 // Notify отправляет уведомление о событии, не блокируя вызывающего.
 func (s *Service) Notify(ctx context.Context, ev Event) {
 	go s.send(context.Background(), ev)
+}
+
+// WithPublicURL задаёт внешний адрес интерфейса для ссылок в сообщениях.
+func (s *Service) WithPublicURL(url string) *Service {
+	s.publicURL = strings.TrimRight(strings.TrimSpace(url), "/")
+	return s
 }
 
 // WithPush подключает push-уведомления в мобильное приложение.
@@ -230,29 +241,24 @@ func (s *Service) NotifyWaitingClip(ctx context.Context, ev Event) {
 // Ключ ищется по камере и времени: точного совпадения достаточно, потому
 // что менеджер записи отдаёт то же время события, что пришло в уведомление.
 func (s *Service) AttachClip(cameraID uuid.UUID, eventTime time.Time, clipPath string) {
+	// Клип один, а уведомлений на это событие может быть несколько: обычное
+	// по правилам камеры и, например, сохранённый поиск. Ждать клип могли
+	// оба — значит, отдать его надо всем, иначе второе уведомление уйдёт
+	// без видео или не уйдёт вовсе.
 	s.pendingMu.Lock()
-	var (
-		found pendingEvent
-		key   string
-		ok    bool
-	)
+	var matched []pendingEvent
 	for k, p := range s.pending {
 		if p.event.CameraID == cameraID && p.event.Time.Equal(eventTime) {
-			found, key, ok = p, k, true
-			break
+			matched = append(matched, p)
+			delete(s.pending, k)
 		}
-	}
-	if ok {
-		delete(s.pending, key)
 	}
 	s.pendingMu.Unlock()
 
-	if !ok {
-		return
+	for _, p := range matched {
+		p.event.ClipPath = clipPath
+		go s.send(context.Background(), p.event)
 	}
-
-	found.event.ClipPath = clipPath
-	go s.send(context.Background(), found.event)
 }
 
 // send выполняет всю работу по одному событию.
@@ -298,6 +304,10 @@ func (s *Service) send(ctx context.Context, ev Event) {
 	}
 
 	key := DedupKey(ev)
+
+	// Ссылка на архив считается здесь, а не в каналах: адрес сервера один,
+	// и дублировать сборку URL в каждом канале незачем.
+	ev.ArchiveURL = s.archiveLink(ev)
 
 	// Один и тот же клип нужен обоим каналам: читаем его из хранилища
 	// один раз, а не по разу на канал.
@@ -590,6 +600,31 @@ func maskProxy(raw string) string {
 // Без ссылки на архив: сервер обычно доступен только в локальной сети,
 // и ссылка в Telegram оказалась бы нерабочей. Оператор откроет запись
 // по камере и времени.
+// archiveLink собирает ссылку на это событие в архиве.
+//
+// Окно вокруг события — одна минута до и две после: клип длиной в минуту
+// начинается чуть раньше события, и без запаса ссылка открывала бы соседнюю
+// запись. Если публичный адрес не задан, ссылки нет.
+func (s *Service) archiveLink(ev Event) string {
+	if s.publicURL == "" || ev.CameraID == uuid.Nil {
+		return ""
+	}
+
+	from := ev.Time.Add(-time.Minute)
+	to := ev.Time.Add(2 * time.Minute)
+
+	params := []string{
+		"date=" + ev.Time.Format("2006-01-02"),
+		// Имя параметра совпадает с тем, что читает страница архива.
+		"cameras=" + ev.CameraID.String(),
+		"from_time=" + from.Format("15:04"),
+		"to_time=" + to.Format("15:04"),
+	}
+	// Адрес может прийти со слешем на конце — склеиваем аккуратно, чтобы
+	// в ссылке не оказалось двойного слеша.
+	return strings.TrimRight(s.publicURL, "/") + "/recordings?" + strings.Join(params, "&")
+}
+
 func buildMessage(ev Event) string {
 	var b strings.Builder
 
@@ -632,6 +667,12 @@ func buildMessage(ev Event) string {
 	}
 
 	b.WriteString("Время: " + ev.Time.Format("02.01.2006 15:04:05"))
+
+	// Ссылка текстом, помимо кнопки: кнопку видно только в клиенте, а
+	// пересланное сообщение её теряет — текст же остаётся.
+	if ev.ArchiveURL != "" {
+		b.WriteString("\n\n<a href=\"" + html.EscapeString(ev.ArchiveURL) + "\">Открыть в архиве</a>")
+	}
 
 	return b.String()
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router-dom'
 import {
   eventsAPI, recordingsAPI, camerasAPI, archiveAPI, savedSearchAPI,
   type CalendarDay, type TimelineItem, type Camera, type DetectionEvent,
@@ -284,6 +285,57 @@ export default function RecordingsPage() {
   const [recordKind, setRecordKind] = useState<'all' | 'events' | 'always'>('all')
   // Отметки детекций за день: приходят вместе с записями дня.
   const [detectionMarks, setDetectionMarks] = useState<TimelineDetectionMark[]>([])
+
+  /**
+   * Переход из уведомления.
+   *
+   * В сообщении о событии есть ссылка вида
+   * `/recordings?date=2026-10-31&cameras=<id>,<id>&from_time=14:02&to_time=14:05`.
+   * Оператор нажимает её из мессенджера и должен сразу увидеть нужную
+   * минуту архива, а не искать её руками. Параметры читаем один раз при
+   * открытии: дальше страницей управляет сам оператор, и перезаписывать
+   * его выбор из адреса было бы неверно.
+   */
+  const [searchParams, setSearchParams] = useSearchParams()
+  const deepLinkApplied = useRef(false)
+
+  useEffect(() => {
+    if (deepLinkApplied.current) return
+    deepLinkApplied.current = true
+
+    const date = searchParams.get('date')
+    const cams = searchParams.get('cameras')
+    const from = searchParams.get('from_time')
+    const to = searchParams.get('to_time')
+    if (!date && !cams && !from && !to) return
+
+    // Дату берём только в формате ГГГГ-ММ-ДД: остальное — мусор в адресе,
+    // и подставлять его в запрос к архиву нельзя.
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setSelectedDate(date)
+      const d = new Date(date + 'T00:00:00')
+      if (!Number.isNaN(d.getTime())) {
+        setYear(d.getFullYear())
+        setMonth(d.getMonth() + 1)
+      }
+      // Открытый плеер принадлежит прошлой дате — закрываем, иначе он
+      // останется играть над новым днём.
+      setPlaying(null)
+    }
+    if (cams) {
+      const ids = cams.split(',').map((s) => s.trim()).filter(Boolean).slice(0, MAX_TRACKS)
+      if (ids.length > 0) {
+        setSelected(ids)
+        setCameraMode('selected')
+      }
+    }
+    if (from && /^\d{2}:\d{2}$/.test(from)) setTimeFrom(from)
+    if (to && /^\d{2}:\d{2}$/.test(to)) setTimeTo(to)
+
+    // Адрес чистим: обновление страницы не должно возвращать оператора
+    // к тому же окну и затирать то, что оператор выбрал после.
+    setSearchParams({}, { replace: true })
+  }, [searchParams, setSearchParams])
 
   // Справочник камер для панели выбора.
   useEffect(() => {

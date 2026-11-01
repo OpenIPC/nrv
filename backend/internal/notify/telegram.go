@@ -116,8 +116,36 @@ func socksDialer(raw string) (proxy.Dialer, error) {
 	return proxy.SOCKS5("tcp", hostPart, auth, proxy.Direct)
 }
 
+// LinkButton — кнопка-ссылка под сообщением.
+//
+// Telegram не даёт открыть ссылку иначе, кроме как текстом или кнопкой.
+// Кнопка лучше: длинный адрес с параметрами занимает пол-сообщения и
+// выглядит как мусор, а кнопка называется «Открыть в архиве».
+type LinkButton struct {
+	Text string
+	URL  string
+}
+
+// linkMarkup собирает reply_markup для кнопки. Пустая строка — кнопки нет.
+func linkMarkup(btn *LinkButton) string {
+	if btn == nil || btn.URL == "" || btn.Text == "" {
+		return ""
+	}
+	// Отдельные кнопки в JSON собираем вручную: единственное поле, которое
+	// здесь экранируется, — кавычки, и делать ради этого структуры с тегами
+	// было бы длиннее, чем сам результат.
+	text := strings.ReplaceAll(btn.Text, `"`, `\"`)
+	url := strings.ReplaceAll(btn.URL, `"`, `\"`)
+	return `{"inline_keyboard":[[{"text":"` + text + `","url":"` + url + `"}]]}`
+}
+
 // SendMessage отправляет текстовое сообщение.
 func (t *Telegram) SendMessage(ctx context.Context, token, chatID, text string) error {
+	return t.SendMessageWithButton(ctx, token, chatID, text, nil)
+}
+
+// SendMessageWithButton отправляет текст с кнопкой-ссылкой (кнопка необязательна).
+func (t *Telegram) SendMessageWithButton(ctx context.Context, token, chatID, text string, btn *LinkButton) error {
 	form := url.Values{}
 	form.Set("chat_id", chatID)
 	form.Set("text", text)
@@ -125,16 +153,32 @@ func (t *Telegram) SendMessage(ctx context.Context, token, chatID, text string) 
 	// слишком много символов, требующих экранирования.
 	form.Set("parse_mode", "HTML")
 	form.Set("disable_web_page_preview", "true")
+	if markup := linkMarkup(btn); markup != "" {
+		form.Set("reply_markup", markup)
+	}
 
 	return t.call(ctx, token, "sendMessage", strings.NewReader(form.Encode()), "application/x-www-form-urlencoded")
 }
 
 // SendPhoto отправляет снимок события с подписью.
 func (t *Telegram) SendPhoto(ctx context.Context, token, chatID string, photo []byte, caption string) error {
-	body, contentType, err := multipartBody("photo", "snapshot.jpg", photo, map[string]string{
+	return t.SendPhotoWithButton(ctx, token, chatID, photo, caption, nil)
+}
+
+// SendPhotoWithButton отправляет снимок с подписью и кнопкой (кнопка необязательна).
+func (t *Telegram) SendPhotoWithButton(ctx context.Context, token, chatID string, photo []byte, caption string, btn *LinkButton) error {
+	fields := map[string]string{
 		"chat_id": chatID,
 		"caption": caption,
-	})
+	}
+	// parse_mode нужен, чтобы в подписи работала разметка (жирный, ссылка),
+	// иначе Telegram покажет её теги как текст.
+	fields["parse_mode"] = "HTML"
+	if markup := linkMarkup(btn); markup != "" {
+		fields["reply_markup"] = markup
+	}
+
+	body, contentType, err := multipartBody("photo", "snapshot.jpg", photo, fields)
 	if err != nil {
 		return err
 	}
@@ -146,11 +190,22 @@ func (t *Telegram) SendPhoto(ctx context.Context, token, chatID string, photo []
 // supports_streaming показывает видео как воспроизводимое, а не как файл:
 // оператор видит происходящее прямо в переписке.
 func (t *Telegram) SendVideo(ctx context.Context, token, chatID string, video []byte, caption string) error {
-	body, contentType, err := multipartBody("video", "clip.mp4", video, map[string]string{
+	return t.SendVideoWithButton(ctx, token, chatID, video, caption, nil)
+}
+
+// SendVideoWithButton отправляет клип с подписью и кнопкой (кнопка необязательна).
+func (t *Telegram) SendVideoWithButton(ctx context.Context, token, chatID string, video []byte, caption string, btn *LinkButton) error {
+	fields := map[string]string{
 		"chat_id":            chatID,
 		"caption":            caption,
 		"supports_streaming": "true",
-	})
+		"parse_mode":         "HTML",
+	}
+	if markup := linkMarkup(btn); markup != "" {
+		fields["reply_markup"] = markup
+	}
+
+	body, contentType, err := multipartBody("video", "clip.mp4", video, fields)
 	if err != nil {
 		return err
 	}

@@ -26,6 +26,18 @@ type channelSender interface {
 }
 
 // telegramChannel — доставка в Telegram.
+// archiveButton — кнопка «Открыть в архиве» для события.
+//
+// nil означает «ссылки нет»: сервер может быть не настроен на внешний
+// адрес (установка в локальной сети без домена), и тогда кнопка вела бы
+// в никуда.
+func archiveButton(ev Event) *LinkButton {
+	if ev.ArchiveURL == "" {
+		return nil
+	}
+	return &LinkButton{Text: "Открыть в архиве", URL: ev.ArchiveURL}
+}
+
 type telegramChannel struct {
 	client *Telegram
 	token  string
@@ -36,9 +48,14 @@ type telegramChannel struct {
 func (c telegramChannel) send(ctx context.Context, ev Event, text string, clipData []byte, clipMB int) error {
 	var sentMedia bool
 
+	// Кнопка «открыть в архиве»: ссылка на нужную минуту архива. Одна и та же
+	// для снимка, клипа и текста — оператору не важно, чем именно отправлено
+	// событие, важно попасть в него.
+	button := archiveButton(ev)
+
 	// 1. Снимок — самое информативное вложение, поэтому первым.
 	if c.rule.SendSnapshot && len(ev.Snapshot) > 0 {
-		if err := c.client.SendPhoto(ctx, c.token, c.chatID, ev.Snapshot, text); err != nil {
+		if err := c.client.SendPhotoWithButton(ctx, c.token, c.chatID, ev.Snapshot, text, button); err != nil {
 			log.Warn().Err(err).Msg("не удалось отправить снимок в Telegram")
 		} else {
 			sentMedia = true
@@ -47,7 +64,7 @@ func (c telegramChannel) send(ctx context.Context, ev Event, text string, clipDa
 
 	// 2. Клип.
 	if c.rule.SendClip && len(clipData) > 0 {
-		if err := c.client.SendVideo(ctx, c.token, c.chatID, clipData, text); err != nil {
+		if err := c.client.SendVideoWithButton(ctx, c.token, c.chatID, clipData, text, button); err != nil {
 			// Как video Telegram перекодирует и ограничивает сильнее,
 			// поэтому пробуем документом: он проходит чаще.
 			name := fmt.Sprintf("%s_%s.mp4", ev.CameraName, ev.Time.Format("2006-01-02_15-04-05"))
@@ -62,9 +79,10 @@ func (c telegramChannel) send(ctx context.Context, ev Event, text string, clipDa
 	}
 
 	// 3. Текст — если ни одно вложение не ушло. Иначе оператор не узнал бы
-	// о событии вовсе.
+	// о событии вовсе. Кнопку оставляем и здесь: она ведёт в архив, а не
+	// привязана к вложению.
 	if !sentMedia {
-		return c.client.SendMessage(ctx, c.token, c.chatID, text)
+		return c.client.SendMessageWithButton(ctx, c.token, c.chatID, text, button)
 	}
 	return nil
 }
@@ -256,5 +274,10 @@ func buildMaxMessage(ev Event) string {
 	}
 
 	b.WriteString("Время: " + ev.Time.Format("02.01.2006 15:04:05"))
+
+	// В MAX нет inline-кнопок, поэтому ссылку даём обычным адресом.
+	if ev.ArchiveURL != "" {
+		b.WriteString("\n\nОткрыть в архиве: " + ev.ArchiveURL)
+	}
 	return b.String()
 }
